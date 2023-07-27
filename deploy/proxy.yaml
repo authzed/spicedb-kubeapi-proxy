@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: kube-rebac-proxy
+    app.kubernetes.io/instance: kube-rebac-proxy
+  name: kube-rebac-proxy
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-rebac-proxy
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: kube-rebac-proxy
+        app.kubernetes.io/instance:  kube-rebac-proxy
+    spec:
+      containers:
+        - args:
+          - --secure-port=8443
+          - --backend-kubeconfig
+          - /opt/proxy/kubeconfig
+          - --cert-dir
+          - /opt/proxy/certs
+          - --client-ca-file
+          - /opt/proxy/clientcerts/ca.crt
+          - --requestheader-client-ca-file
+          - /opt/proxy/clientcerts/ca.crt
+          - --requestheader-allowed-names
+          - rakis
+          - --requestheader-extra-headers-prefix
+          - X-Remote-Extra-
+          - --requestheader-group-headers
+          - X-Remote-Group
+          - --requestheader-username-headers
+          - X-Remote-User
+          image: authzed/kube-rebac-proxy:dev
+          name: kube-rebac-proxy
+          ports:
+          - containerPort: 8443
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: livez
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 45
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 10
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: readyz
+              port: 8443
+              scheme: HTTPS
+          terminationMessagePolicy: FallbackToLogsOnError
+          volumeMounts:
+            - mountPath: /opt/proxy
+              name: kubeconfig
+            - mountPath: /opt/proxy/certs
+              name: certs
+            - mountPath: /opt/proxy/clientcerts
+              name: client-ca
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: rebac-proxy-kubeconfig
+        - name: certs
+          secret:
+            secretName: rebac-proxy-tls
+        - name: client-ca
+          secret:
+            secretName: rebac-proxy-request-client-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rebac-proxy
+  namespace: kube-system
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      nodePort: 30443
+      port: 8443
+  selector:
+    app: kube-rebac-proxy
