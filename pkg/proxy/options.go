@@ -1,10 +1,12 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/authzed/spicedb/pkg/cmd/server"
 	"github.com/spf13/pflag"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/client-go/rest"
@@ -14,6 +16,8 @@ import (
 	logsv1 "k8s.io/component-base/logs/api/v1"
 
 	apiserveroptions "k8s.io/apiserver/pkg/server/options"
+
+	"github.com/authzed/kube-rebac-proxy/pkg/spicedb"
 )
 
 type Options struct {
@@ -29,6 +33,9 @@ type Options struct {
 	AuthenticationInfo    genericapiserver.AuthenticationInfo
 	ServingInfo           *genericapiserver.SecureServingInfo
 	AdditionalAuthEnabled bool
+
+	SpicedbServer server.RunnableServer
+	SpiceDBClient any
 }
 
 func NewOptions() *Options {
@@ -50,7 +57,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.BackendKubeconfigPath, "backend-kubeconfig", o.BackendKubeconfigPath, "The path to the kubeconfig to proxy connections to. It should authenticate the user with cluster-admin permission.")
 }
 
-func (o *Options) Complete() error {
+func (o *Options) Complete(ctx context.Context) error {
 	if err := logsv1.ValidateAndApply(o.Logs, DefaultFeatureGate); err != nil {
 		return err
 	}
@@ -85,6 +92,11 @@ func (o *Options) Complete() error {
 	}
 
 	o.AdditionalAuthEnabled = o.Authentication.AdditionalAuthEnabled()
+
+	o.SpicedbServer, err = spicedb.NewServer(ctx)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

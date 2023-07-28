@@ -14,6 +14,7 @@ import (
 	_ "embed"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -91,7 +92,24 @@ func updateKustomizationImageTags() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tag := xxhash.Sum64String(cmdHash + pkgHash)
+	goSumFile, err := os.Open("go.sum")
+	if err != nil {
+		return "", err
+	}
+	contentHash := xxhash.New()
+	_, err = io.Copy(contentHash, goSumFile)
+	if err != nil {
+		return "", err
+	}
+	_, err = contentHash.WriteString(cmdHash)
+	if err != nil {
+		return "", err
+	}
+	_, err = contentHash.WriteString(pkgHash)
+	if err != nil {
+		return "", err
+	}
+	tag := contentHash.Sum64()
 
 	kustomizeFile, err := os.Open("deploy/kustomization.yaml")
 	if err != nil {
