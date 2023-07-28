@@ -1,0 +1,9 @@
+schema: |-
+  definition cluster {}
+  definition user {}
+  definition namespace {
+    relation viewer: user
+  }
+
+relationships: |
+  namespace:kube-system#viewer@user:rakis

@@ -35,7 +35,7 @@ func NewProxyCommand(ctx context.Context) *cobra.Command {
 requests with SpiceDB and keeps relationship data up to date. The proxy handles
 TLS termination and authentication with a backend kube apiserver.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := options.Complete(); err != nil {
+			if err := options.Complete(ctx); err != nil {
 				return err
 			}
 			if errs := options.Validate(); errs != nil {
@@ -46,6 +46,7 @@ TLS termination and authentication with a backend kube apiserver.`,
 			if err != nil {
 				return err
 			}
+
 			return server.Run(ctx)
 		},
 	}
