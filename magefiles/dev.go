@@ -43,9 +43,9 @@ const proxyNodePort = 30443
 func (Dev) Bootstrap(ctx context.Context) error {
 	clusterName := "rebac-proxy-dev"
 
-	var kubeconfigPath string
+	kubeconfigPath := clusterName + ".kubeconfig"
 	var proxyHostPort int32
-	if _, err := os.Stat(clusterName + ".kubeconfig"); err != nil {
+	if _, err := os.Stat(kubeconfigPath); err != nil {
 		proxyHostPort, err = GetFreePort("localhost")
 		if err != nil {
 			return err
@@ -75,6 +75,7 @@ func (Dev) Bootstrap(ctx context.Context) error {
 	}
 
 	if _, err := os.Stat("rebac-proxy.kubeconfig"); err != nil {
+		fmt.Println("no proxy kubeconfig found, generating")
 		if err := generateCertsAndKubeConfig(ctx, kubeconfigPath, proxyHostPort); err != nil {
 			return err
 		}
@@ -134,6 +135,7 @@ func updateKustomizationImageTags() (string, error) {
 }
 
 func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, proxyHostPort int32) error {
+	fmt.Println("generating certs")
 	// use the current context in kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
@@ -365,6 +367,19 @@ func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, prox
 	kubeCtx.AuthInfo = "rebac-proxy"
 	proxyConfig.Contexts["rebac-proxy"] = kubeCtx
 	proxyConfig.CurrentContext = "rebac-proxy"
+
+	// add admin config to the same kubeconfig (easier to switch)
+	adminConfig, err := clientcmd.LoadFromFile(kubeconfigPath)
+	if err != nil {
+		return err
+	}
+	proxyConfig.Clusters["rebac-proxy-admin"] = adminConfig.Clusters["kind-rebac-proxy-dev"]
+	proxyConfig.AuthInfos["rebac-proxy-admin"] = adminConfig.AuthInfos["kind-rebac-proxy-dev"]
+	adminCtx := clientcmdapi.NewContext()
+	adminCtx.Cluster = "rebac-proxy-admin"
+	adminCtx.AuthInfo = "rebac-proxy-admin"
+	proxyConfig.Contexts["rebac-proxy-admin"] = adminCtx
+
 	if err := clientcmd.WriteToFile(*proxyConfig, "rebac-proxy.kubeconfig"); err != nil {
 		return err
 	}

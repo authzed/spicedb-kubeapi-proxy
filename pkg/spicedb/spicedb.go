@@ -3,6 +3,7 @@ package spicedb
 import (
 	"context"
 	_ "embed"
+	"time"
 
 	"github.com/authzed/spicedb/pkg/cmd/datastore"
 	"github.com/authzed/spicedb/pkg/cmd/server"
@@ -42,6 +43,7 @@ func NewServer(ctx context.Context) (server.RunnableServer, error) {
 				datastore.WithEngine(datastore.MemoryEngine),
 				datastore.SetBootstrapFileContents(map[string][]byte{"schema": bootstrap}),
 				datastore.WithRequestHedgingEnabled(false),
+				datastore.WithGCWindow(24*time.Hour),
 			)),
 		server.WithGRPCAuthFunc(func(ctx context.Context) (context.Context, error) { return ctx, nil }),
 	).Complete(ctx)

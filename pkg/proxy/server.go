@@ -1,12 +1,10 @@
 package proxy
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httputil"
 	"strings"
@@ -41,6 +39,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 		return nil, err
 	}
 	spicedbClient := v1.NewPermissionsServiceClient(conn)
+	watchClient := v1.NewWatchServiceClient(conn)
 
 	mux := http.NewServeMux()
 
@@ -59,11 +58,19 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 		return nil, fmt.Errorf("failed to create transport: %w", err)
 	}
 	clusterProxy := &httputil.ReverseProxy{
-		ErrorLog: nil, // TODO
+		ErrorLog:      nil, // TODO
+		FlushInterval: -1,
 		Director: func(req *http.Request) {
 			// TODO: default to the kube svc env vars
 			req.URL.Host = "kubernetes.default:443"
 			req.URL.Scheme = "https"
+		},
+		ModifyResponse: func(response *http.Response) error {
+			authzData, ok := AuthzDataFrom(response.Request.Context())
+			if !ok {
+				return fmt.Errorf("no authz data")
+			}
+			return authzData.FilterResp(response)
 		},
 		Transport: transport,
 	}
@@ -83,7 +90,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	codecs := serializer.NewCodecFactory(scheme)
 	failHandler := genericapifilters.Unauthorized(codecs)
 
-	handler := withAuthorization(clusterProxy, failHandler, spicedbClient)
+	handler := withAuthorization(clusterProxy, failHandler, spicedbClient, watchClient)
 	handler = withAuthentication(handler, failHandler, s.AuthenticationInfo.Authenticator)
 	handler = genericapifilters.WithRequestInfo(handler, requestInfoResolver)
 	handler = genericfilters.WithHTTPLogging(handler)
@@ -148,45 +155,4 @@ func withAuthentication(handler, failed http.Handler, auth authenticator.Request
 		req = req.WithContext(request.WithUser(req.Context(), resp.User))
 		handler.ServeHTTP(w, req)
 	})
-}
-
-func withAuthorization(handler, failed http.Handler, spicedbClient v1.PermissionsServiceClient) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		resp, err := spicedbClient.CheckPermission(ctx, &v1.CheckPermissionRequest{})
-		if err != nil {
-			fmt.Println(err)
-			// TODO: need a better fail handler
-			failed.ServeHTTP(w, req)
-		}
-		fmt.Println(resp)
-		if req.Body != nil {
-			bodyBytes, _ := io.ReadAll(req.Body)
-			req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-			fmt.Println("request body", string(bodyBytes))
-		}
-
-		fmt.Println("request url", req.URL.String())
-		fmt.Println("request header", req.Header)
-		user, ok := request.UserFrom(req.Context())
-		fmt.Println("request user", user, ok)
-		requestInfo, ok := request.RequestInfoFrom(req.Context())
-		fmt.Println(requestInfo)
-
-		handler.ServeHTTP(&ObjectFilterWriter{ResponseWriter: w}, req)
-	})
-}
-
-type ObjectFilterWriter struct {
-	http.ResponseWriter
-	allowedNames       []string
-	allowedNamespaces  []string
-	allowAllNamespaces bool
-}
-
-func (o *ObjectFilterWriter) Write(resp []byte) (int, error) {
-	fmt.Println(string(resp))
-	// TODO: filter objects
-	return o.ResponseWriter.Write(resp)
 }
