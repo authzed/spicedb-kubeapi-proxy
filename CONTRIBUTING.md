@@ -56,15 +56,10 @@ If you do decide to try and contribute something, please submit an issue first s
 
 ## Legal requirements
 
-In order to protect both you and ourselves, all commits will require an explicit sign-off that acknowledges the [DCO].
+In order to protect the project, all contributors are required to sign our [Contributor License Agreement][cla] before their contribution is accepted.
 
-Sign-off commits end with the following line:
+The signing process has been automated by [CLA Assistant][cla-assistant] during the Pull Request review process and only requires responding with a comment acknowledging the agreement.
 
-```git
-Signed-off-by: Random J Developer <random@developer.example.org>
-```
 
-This can be done by using the `--signoff` (or `-s` for short) git flag to append this automatically to your commit message.
-If you have already authored a commit that is missing the signed-off, you can amend or rebase your commits and force push them to GitHub.
-
-[DCO]: /DCO
+[cla]: https://github.com/authzed/cla/blob/main/v1/icla.md
+[cla-assistant]: https://github.com/cla-assistant/cla-assistant
