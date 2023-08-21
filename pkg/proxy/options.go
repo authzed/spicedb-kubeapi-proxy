@@ -9,6 +9,7 @@ import (
 	"github.com/authzed/spicedb/pkg/cmd/server"
 	"github.com/spf13/pflag"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -17,7 +18,7 @@ import (
 
 	apiserveroptions "k8s.io/apiserver/pkg/server/options"
 
-	"github.com/authzed/kube-rebac-proxy/pkg/spicedb"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/spicedb"
 )
 
 type Options struct {
@@ -58,7 +59,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 }
 
 func (o *Options) Complete(ctx context.Context) error {
-	if err := logsv1.ValidateAndApply(o.Logs, DefaultFeatureGate); err != nil {
+	if err := logsv1.ValidateAndApply(o.Logs, utilfeature.DefaultFeatureGate); err != nil {
 		return err
 	}
 	if !filepath.IsAbs(o.BackendKubeconfigPath) {

@@ -1,4 +1,4 @@
-# kube-rebac-proxy
+# spicedb-kubeapi-proxy
 
 Runs a proxy in front of kube-apiserver that can authorize requests and filter
 responses.
