@@ -30,7 +30,6 @@ func NewServer(ctx context.Context) (server.RunnableServer, error) {
 		server.WithMaxRelationshipContextSize(1000000),
 		server.WithSchemaPrefixesRequired(false),
 		server.WithHTTPGateway(util.HTTPServerConfig{HTTPEnabled: false}),
-		server.WithDashboardAPI(util.HTTPServerConfig{HTTPEnabled: false}),
 		server.WithMetricsAPI(util.HTTPServerConfig{HTTPEnabled: false}),
 		server.WithSilentlyDisableTelemetry(true),
 		server.WithDispatchClusterMetricsEnabled(false),

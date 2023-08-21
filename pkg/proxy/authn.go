@@ -26,7 +26,7 @@ func NewAuthentication() *Authentication {
 			WithRequestHeader(),
 	}
 	// TODO: ServiceAccounts
-	// auth.BuiltInOptions.ServiceAccounts.Issuers = []string{"https://kube-rebac-proxy.default.svc"}
+	// auth.BuiltInOptions.ServiceAccounts.Issuers = []string{"https://spicedb-kubeapi-proxy.default.svc"}
 	return auth
 }
 

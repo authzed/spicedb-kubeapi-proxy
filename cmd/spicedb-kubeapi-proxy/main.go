@@ -14,7 +14,7 @@ import (
 	_ "k8s.io/component-base/logs/json/register"
 	"k8s.io/component-base/version"
 
-	"github.com/authzed/kube-rebac-proxy/pkg/proxy"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy"
 )
 
 func main() {
@@ -29,9 +29,9 @@ func main() {
 func NewProxyCommand(ctx context.Context) *cobra.Command {
 	options := proxy.NewOptions()
 	cmd := &cobra.Command{
-		Use:   "kube-rebac-proxy",
+		Use:   "spicedb-kubeapi-proxy",
 		Short: "Authorizes Kube api requests with SpiceDB.",
-		Long: `kube-rebac-proxy is a reverse proxy that authorizes Kube api 
+		Long: `spicedb-kubeapi-proxy is a reverse proxy that authorizes Kube api 
 requests with SpiceDB and keeps relationship data up to date. The proxy handles
 TLS termination and authentication with a backend kube apiserver.`,
 		RunE: func(cmd *cobra.Command, args []string) error {

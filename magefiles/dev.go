@@ -131,7 +131,7 @@ func updateKustomizationImageTags() (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf("authzed/kube-rebac-proxy:%x", tag), os.WriteFile("deploy/kustomization.yaml", kustomizationBytes, 0o600)
+	return fmt.Sprintf("authzed/spicedb-kubeapi-proxy:%x", tag), os.WriteFile("deploy/kustomization.yaml", kustomizationBytes, 0o600)
 }
 
 func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, proxyHostPort int32) error {
