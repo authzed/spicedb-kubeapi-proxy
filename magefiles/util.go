@@ -4,15 +4,19 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"runtime"
 	"time"
 
+	kocmd "github.com/google/ko/pkg/commands"
+	koopts "github.com/google/ko/pkg/commands/options"
+	kopublish "github.com/google/ko/pkg/publish"
 	"github.com/magefile/mage/sh"
 	"github.com/onsi/gomega/gexec"
 	"golang.org/x/exp/slices"
@@ -37,10 +41,6 @@ func checkBinary(name, reason, install string, args []string) error {
 		return nil
 	}
 	return err
-}
-
-func checkDockerCompose() error {
-	return checkBinary("docker-compose", "build images", "", nil)
 }
 
 func checkDocker() error {
@@ -175,26 +175,6 @@ func provisionKind(name string, images []string, archives []string, config *v1al
 	return kubeconfig, deprovision, exportLogs, nil
 }
 
-// run a command in a directory
-func runDirV(dir string, cmd string, args ...string) error {
-	c := exec.Command(cmd, args...)
-	c.Dir = dir
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return c.Run()
-}
-
-// run a command in a directory and outputs to a string
-func outputDir(dir string, cmd string, args ...string) (string, error) {
-	var b bytes.Buffer
-	c := exec.Command(cmd, args...)
-	c.Dir = dir
-	c.Stdout = &b
-	c.Stderr = os.Stderr
-	err := c.Run()
-	return strings.TrimSpace(b.String()), err
-}
-
 // GetFreePort is a helper used to get a free TCP port on the host
 func GetFreePort(listenAddr string) (int32, error) {
 	dummyListener, err := net.Listen("tcp", net.JoinHostPort(listenAddr, "0"))
@@ -204,4 +184,52 @@ func GetFreePort(listenAddr string) (int32, error) {
 	defer dummyListener.Close()
 	port := dummyListener.Addr().(*net.TCPAddr).Port
 	return int32(port), nil
+}
+
+// overrideEnv gets the current env value, overrides it, and returns a function that can
+// set it back to the original value.
+func overrideEnv(varName string, value string) func() {
+	old := os.Getenv(varName)
+	os.Setenv(varName, value)
+	return func() {
+		os.Setenv(varName, old)
+	}
+}
+
+// makeGoKindImage builds an image for a Go binary and loads it into kind
+func makeGoKindImage(ctx context.Context, clusterName string, imageName string, workingDir string, buildPath string) (string, error) {
+	defer overrideEnv("KIND_CLUSTER_NAME", clusterName)()
+	defer overrideEnv("GOOS", "linux")()
+	defer overrideEnv("GOARCH", runtime.GOARCH)()
+	log.SetOutput(os.Stdout)
+	opts := koopts.BuildOptions{}
+	if err := opts.LoadConfig(); err != nil {
+		return "", err
+	}
+	opts.Platforms = []string{}
+	opts.WorkingDirectory = workingDir
+	opts.ConcurrentBuilds = runtime.NumCPU()
+	builder, err := kocmd.NewBuilder(ctx, &opts)
+	if err != nil {
+		return "", err
+	}
+	result, err := builder.Build(ctx, buildPath)
+	if err != nil {
+		return "", err
+	}
+
+	namer := koopts.MakeNamer(&koopts.PublishOptions{
+		DockerRepo:      kopublish.KindDomain,
+		BaseImportPaths: true,
+	})
+	publisher, err := kopublish.NewCaching(kopublish.NewKindPublisher(namer, nil))
+	if err != nil {
+		return "", err
+	}
+
+	name, err := publisher.Publish(ctx, result, imageName)
+	if err != nil {
+		return "", err
+	}
+	return name.String(), nil
 }

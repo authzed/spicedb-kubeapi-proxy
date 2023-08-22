@@ -14,124 +14,105 @@ import (
 	_ "embed"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"os"
+	"strings"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
-	"golang.org/x/mod/sumdb/dirhash"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	applycorev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	kind "sigs.k8s.io/kind/pkg/cluster"
 	"sigs.k8s.io/kind/pkg/cmd"
-	dockerimageload "sigs.k8s.io/kind/pkg/cmd/kind/load/docker-image"
 	"sigs.k8s.io/kustomize/api/types"
 	"sigs.k8s.io/yaml"
 )
 
 type Dev mg.Namespace
 
-const proxyNodePort = 30443
+const (
+	proxyNodePort           = 30443
+	clusterName             = "spicedb-kubeapi-proxy"
+	kubeCfgClusterName      = "kind-" + clusterName
+	kubeconfigPath          = clusterName + ".kubeconfig"
+	generatedKubeConfigPath = "proxy.kubeconfig"
+)
 
 func (Dev) Bootstrap(ctx context.Context) error {
-	clusterName := "rebac-proxy-dev"
-
-	kubeconfigPath := clusterName + ".kubeconfig"
 	var proxyHostPort int32
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		proxyHostPort, err = GetFreePort("localhost")
 		if err != nil {
 			return err
 		}
-
-		kubeconfigPath, _, _, err = provisionKind(clusterName, nil, nil, kindConfig(map[int32]int32{proxyHostPort: proxyNodePort}))
+		_, _, _, err = provisionKind(clusterName, nil, nil, kindConfig(map[int32]int32{proxyHostPort: proxyNodePort}))
 		if err != nil {
 			return err
 		}
-
 		fmt.Println(kubeconfigPath)
 	}
-
-	imageName, err := updateKustomizationImageTags()
+	imageName, err := makeGoKindImage(ctx, clusterName, "spicedb-kubeapi-proxy", ".", "./cmd/spicedb-kubeapi-proxy")
 	if err != nil {
 		return err
 	}
-	if err := sh.RunV("docker", "build", "-t", imageName, "."); err != nil {
-		return err
-	}
-	loadCmd := dockerimageload.NewCommand(cmd.NewLogger(), cmd.StandardIOStreams())
-	if err := loadCmd.Flags().Set("name", clusterName); err != nil {
-		return err
-	}
-	if err := loadCmd.RunE(loadCmd, []string{imageName}); err != nil {
+	if err := updateKustomizationImageTags(imageName); err != nil {
 		return err
 	}
 
-	if _, err := os.Stat("rebac-proxy.kubeconfig"); err != nil {
+	if _, err := os.Stat(generatedKubeConfigPath); err != nil {
 		fmt.Println("no proxy kubeconfig found, generating")
 		if err := generateCertsAndKubeConfig(ctx, kubeconfigPath, proxyHostPort); err != nil {
 			return err
 		}
 	}
 
-	return sh.RunV("kustomizer", "apply", "inventory", "rebac", "-k", "./deploy", "--prune", "--wait")
+	return sh.RunV("kustomizer", "apply", "inventory", "spicedb-kubeapi-proxy", "-k", "./deploy", "--prune", "--wait")
 }
 
-func updateKustomizationImageTags() (string, error) {
-	cmdHash, err := dirhash.HashDir("cmd", "devcmd", dirhash.DefaultHash)
-	if err != nil {
-		return "", err
+// Clean deletes the dev stack cluster
+func (d Dev) Clean() error {
+	provider := kind.NewProvider(
+		kind.ProviderWithLogger(cmd.NewLogger()),
+	)
+	if err := provider.Delete(clusterName, ""); err != nil {
+		return err
 	}
-	pkgHash, err := dirhash.HashDir("pkg", "devpkg", dirhash.DefaultHash)
-	if err != nil {
-		return "", err
-	}
-	goSumFile, err := os.Open("go.sum")
-	if err != nil {
-		return "", err
-	}
-	contentHash := xxhash.New()
-	_, err = io.Copy(contentHash, goSumFile)
-	if err != nil {
-		return "", err
-	}
-	_, err = contentHash.WriteString(cmdHash)
-	if err != nil {
-		return "", err
-	}
-	_, err = contentHash.WriteString(pkgHash)
-	if err != nil {
-		return "", err
-	}
-	tag := contentHash.Sum64()
+	_ = os.Remove(kubeconfigPath)
+	return nil
+}
 
+func updateKustomizationImageTags(image string) error {
 	kustomizeFile, err := os.Open("deploy/kustomization.yaml")
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	decoder := utilyaml.NewYAMLOrJSONDecoder(kustomizeFile, 100)
 	var kustomization types.Kustomization
 	if err := decoder.Decode(&kustomization); err != nil {
-		return "", err
+		return err
 	}
 	if err := kustomizeFile.Close(); err != nil {
-		return "", err
+		return err
 	}
-	kustomization.Images[0].NewTag = fmt.Sprintf("%x", tag)
+	newName, newTag, ok := strings.Cut(image, ":")
+	if !ok {
+		return fmt.Errorf("error splitting image name: %s", image)
+	}
+	kustomization.Images[0].NewTag = newTag
+	kustomization.Images[0].NewName = newName
 	kustomizationBytes, err := yaml.Marshal(kustomization)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	return fmt.Sprintf("authzed/spicedb-kubeapi-proxy:%x", tag), os.WriteFile("deploy/kustomization.yaml", kustomizationBytes, 0o600)
+	return os.WriteFile("deploy/kustomization.yaml", kustomizationBytes, 0o600)
 }
 
 func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, proxyHostPort int32) error {
@@ -353,151 +334,39 @@ func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, prox
 		return err
 	}
 
+	const (
+		proxyCtxName = "proxy"
+		adminCtxName = "admin"
+	)
 	proxyConfig := clientcmdapi.NewConfig()
 	cluster := clientcmdapi.NewCluster()
 	cluster.CertificateAuthorityData = serverCaPem.Bytes()
 	cluster.Server = fmt.Sprintf("https://127.0.0.1:%d", proxyHostPort)
-	proxyConfig.Clusters["rebac-proxy"] = cluster
+	proxyConfig.Clusters[proxyCtxName] = cluster
 	user := clientcmdapi.NewAuthInfo()
 	user.ClientCertificateData = clientCertPem.Bytes()
 	user.ClientKeyData = clientKeyPem.Bytes()
-	proxyConfig.AuthInfos["rebac-proxy"] = user
+	proxyConfig.AuthInfos[proxyCtxName] = user
 	kubeCtx := clientcmdapi.NewContext()
-	kubeCtx.Cluster = "rebac-proxy"
-	kubeCtx.AuthInfo = "rebac-proxy"
-	proxyConfig.Contexts["rebac-proxy"] = kubeCtx
-	proxyConfig.CurrentContext = "rebac-proxy"
+	kubeCtx.Cluster = proxyCtxName
+	kubeCtx.AuthInfo = proxyCtxName
+	proxyConfig.Contexts[proxyCtxName] = kubeCtx
+	proxyConfig.CurrentContext = proxyCtxName
 
 	// add admin config to the same kubeconfig (easier to switch)
 	adminConfig, err := clientcmd.LoadFromFile(kubeconfigPath)
 	if err != nil {
 		return err
 	}
-	proxyConfig.Clusters["rebac-proxy-admin"] = adminConfig.Clusters["kind-rebac-proxy-dev"]
-	proxyConfig.AuthInfos["rebac-proxy-admin"] = adminConfig.AuthInfos["kind-rebac-proxy-dev"]
+	proxyConfig.Clusters[adminCtxName] = adminConfig.Clusters[kubeCfgClusterName]
+	proxyConfig.AuthInfos[adminCtxName] = adminConfig.AuthInfos[kubeCfgClusterName]
 	adminCtx := clientcmdapi.NewContext()
-	adminCtx.Cluster = "rebac-proxy-admin"
-	adminCtx.AuthInfo = "rebac-proxy-admin"
-	proxyConfig.Contexts["rebac-proxy-admin"] = adminCtx
+	adminCtx.Cluster = adminCtxName
+	adminCtx.AuthInfo = adminCtxName
+	proxyConfig.Contexts[adminCtxName] = adminCtx
 
-	if err := clientcmd.WriteToFile(*proxyConfig, "rebac-proxy.kubeconfig"); err != nil {
+	if err := clientcmd.WriteToFile(*proxyConfig, generatedKubeConfigPath); err != nil {
 		return err
 	}
 	return nil
 }
-
-// // Cert generates local certs and ensures they are trusted by local trust stores.
-// func (d Dev) Cert() error {
-// 	if certsInstalled() {
-// 		return nil
-// 	}
-// 	fmt.Println("dev certs not found")
-// 	return d.Regen_cert()
-// }
-//
-// // Regen_cert regenerates local certs even if they already exist.
-// func (Dev) Regen_cert() error {
-// 	fmt.Println("generating certs...")
-//
-// 	certDir, err := outputDir("magefiles", "go", "run", "filippo.io/mkcert", "-CAROOT")
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	if err := runDirV("magefiles", "sudo", "go", "run", "filippo.io/mkcert", "-install"); err != nil {
-// 		return err
-// 	}
-//
-// 	for src, dst := range map[string]string{
-// 		filepath.Join(certDir, "rootCA-key.pem"): devTLSKeyPath,
-// 		filepath.Join(certDir, "rootCA.pem"):     devTLSCertPath,
-// 	} {
-// 		data, err := os.ReadFile(src)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		err = os.WriteFile(dst, data, 0o600)
-// 		if err != nil {
-// 			return fmt.Errorf("you may need to run with sudo, i.e. `mage dev:regen_cert`: %w", err)
-// 		}
-// 	}
-// 	return nil
-// }
-//
-// func certsInstalled() bool {
-// 	_, err := os.Stat(devTLSCertPath)
-// 	if err != nil {
-// 		return false
-// 	}
-// 	_, err = os.Stat(devTLSKeyPath)
-// 	return err == nil
-// }
-//
-// func genTrust(ctx context.Context, kubeconfigPath string) error {
-// 	req := csr.CertificateRequest{
-// 		KeyRequest: csr.NewKeyRequest(),
-// 		Hosts: []string{
-// 			"rebac-proxy.kube-system.svc.cluster.local",
-// 			"127.0.0.1",
-// 		},
-// 		CN: "rebac-proxy.kube-system.svc.cluster.local",
-// 	}
-//
-// 	var key, csrPEM []byte
-// 	g := &csr.Generator{Validator: genkey.Validator}
-// 	csrPEM, key, err := g.ProcessRequest(&req)
-// 	if err != nil {
-// 		key = nil
-// 		return err
-// 	}
-//
-// 	// use the current context in kubeconfig
-// 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	// create the clientset
-// 	clientset, err := kubernetes.NewForConfig(config)
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	kubeCSR, err := clientset.CertificatesV1().CertificateSigningRequests().Create(ctx, &certv1.CertificateSigningRequest{
-// 		ObjectMeta: metav1.ObjectMeta{Name: "rebac-proxy.kube-system"},
-// 		Spec: certv1.CertificateSigningRequestSpec{
-// 			Request: []byte(base64.StdEncoding.EncodeToString(csrPEM)),
-// 			Usages: []certv1.KeyUsage{
-// 				certv1.UsageDigitalSignature,
-// 				certv1.UsageKeyEncipherment,
-// 				certv1.UsageServerAuth,
-// 			},
-// 		},
-// 	}, metav1.CreateOptions{})
-// 	if err != nil {
-// 		return err
-// 	}
-// 	kubeCSR.Status.Conditions = append(kubeCSR.Status.Conditions, certv1.CertificateSigningRequestCondition{Type: certv1.CertificateApproved})
-// 	kubeCSR, err = clientset.CertificatesV1().CertificateSigningRequests().UpdateApproval(ctx, kubeCSR.Name, kubeCSR, metav1.UpdateOptions{})
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	for len(kubeCSR.Status.Certificate) == 0 {
-// 		fmt.Println("waiting for cert")
-// 		kubeCSR, err = clientset.CertificatesV1().CertificateSigningRequests().Get(ctx, kubeCSR.Name, metav1.GetOptions{})
-// 		if err != nil {
-// 			return err
-// 		}
-// 	}
-//
-// 	_, err = clientset.CoreV1().Secrets("kube-system").Create(ctx, &corev1.Secret{
-// 		ObjectMeta: metav1.ObjectMeta{Name: "rebac-proxy-tls", Namespace: "kube-system"},
-// 		StringData: map[string]string{
-// 			"cert": string(kubeCSR.Status.Certificate),
-// 			"key":  string(key),
-// 		},
-// 	}, metav1.CreateOptions{})
-//
-// 	return nil
-// }
