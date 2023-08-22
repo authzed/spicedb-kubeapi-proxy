@@ -1,1 +1,3 @@
 *.kubeconfig
+/testbin/
+/e2e/apiserver.local.config/

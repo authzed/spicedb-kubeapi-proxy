@@ -62,22 +62,25 @@ func (o *Options) Complete(ctx context.Context) error {
 	if err := logsv1.ValidateAndApply(o.Logs, utilfeature.DefaultFeatureGate); err != nil {
 		return err
 	}
-	if !filepath.IsAbs(o.BackendKubeconfigPath) {
-		pwd, err := os.Getwd()
+	var err error
+	if o.BackendConfig == nil {
+		// TODO: load ambient kube config if running in a cluster and no explict
+		// kubeconfig given
+		if !filepath.IsAbs(o.BackendKubeconfigPath) {
+			pwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			o.BackendKubeconfigPath = filepath.Join(pwd, o.BackendKubeconfigPath)
+		}
+		o.BackendConfig, err = clientcmd.LoadFromFile(o.BackendKubeconfigPath)
 		if err != nil {
 			return err
 		}
-		o.BackendKubeconfigPath = filepath.Join(pwd, o.BackendKubeconfigPath)
 	}
 
 	if !filepath.IsAbs(o.SecureServing.ServerCert.CertDirectory) {
 		o.SecureServing.ServerCert.CertDirectory = filepath.Join(o.CertDir, o.SecureServing.ServerCert.CertDirectory)
-	}
-
-	var err error
-	o.BackendConfig, err = clientcmd.LoadFromFile(o.BackendKubeconfigPath)
-	if err != nil {
-		return err
 	}
 
 	if err := o.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}, nil); err != nil {
