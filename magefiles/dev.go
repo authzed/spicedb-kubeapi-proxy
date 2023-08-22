@@ -44,7 +44,8 @@ const (
 	generatedKubeConfigPath = "proxy.kubeconfig"
 )
 
-func (Dev) Bootstrap(ctx context.Context) error {
+// Up brings up a dev cluster with the proxy installed
+func (Dev) Up(ctx context.Context) error {
 	var proxyHostPort int32
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		proxyHostPort, err = GetFreePort("localhost")
