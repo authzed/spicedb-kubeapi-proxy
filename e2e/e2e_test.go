@@ -85,7 +85,10 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	var config rest.Config
 	Expect(dec.Decode(&config)).To(Succeed())
 
-	user, err := testEnv.AddUser(envtest.User{Name: "admin"}, &config)
+	user, err := testEnv.AddUser(
+		envtest.User{Name: "admin", Groups: []string{"system:masters"}},
+		&config,
+	)
 	Expect(err).To(Succeed())
 	adminUser = user
 
