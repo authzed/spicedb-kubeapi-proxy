@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sync"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 
@@ -328,7 +329,8 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 	switch pom.GroupVersionKind().GroupKind() {
 	case schema.GroupKind{Group: "meta.k8s.io", Kind: "Table"}:
 		filtered, err = d.FilterTable(body)
-	// TODO: metav1.List
+	case schema.GroupKind{Group: "", Kind: "NamespaceList"}:
+		filtered, err = d.FilterList(body)
 	default:
 		// filter single object
 		filtered, err = d.FilterObject(&pom, body)
@@ -336,6 +338,9 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 
 	resp.Body = io.NopCloser(bytes.NewBuffer(filtered))
 	resp.Header["Content-Length"] = []string{fmt.Sprint(len(filtered))}
+	if len(filtered) == 0 {
+		resp.StatusCode = http.StatusNotFound
+	}
 	return nil
 }
 
@@ -485,6 +490,36 @@ func (d *AuthzData) FilterTable(body []byte) ([]byte, error) {
 	table.Rows = allowedRows
 
 	return json.Marshal(table)
+}
+
+func (d *AuthzData) FilterList(body []byte) ([]byte, error) {
+	list := metav1.List{}
+	if err := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(body), 100).Decode(&list); err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+
+	// wait for all allowednames to be synced
+	d.RLock()
+	defer d.RUnlock()
+
+	allowedItems := make([]runtime.RawExtension, 0)
+	for _, item := range list.Items {
+		pom := metav1.PartialObjectMetadata{}
+		decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(item.Raw), 100)
+		if err := decoder.Decode(&pom); err != nil {
+			fmt.Println(err)
+			return nil, err
+		}
+		if _, ok := d.allowedNames[pom.ObjectMeta.Name]; ok {
+			allowedItems = append(allowedItems, item)
+		}
+	}
+
+	list.Items = allowedItems
+
+	return json.Marshal(list)
+
 }
 
 func (d *AuthzData) FilterObject(pom *metav1.PartialObjectMetadata, body []byte) ([]byte, error) {

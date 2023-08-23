@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -63,7 +64,14 @@ var _ = Describe("Proxy", func() {
 			_, err = chaniClient.CoreV1().Namespaces().Get(ctx, chaniNamespace, metav1.GetOptions{})
 			Expect(err).To(Succeed())
 
-			// neither can see each other's namespace
+			// neither can get each other's namespace
+			out, err := paulClient.CoreV1().Namespaces().Get(ctx, chaniNamespace, metav1.GetOptions{})
+			fmt.Println(out)
+			Expect(k8serrors.IsNotFound(err)).To(BeTrue())
+			_, err = chaniClient.CoreV1().Namespaces().Get(ctx, paulNamespace, metav1.GetOptions{})
+			Expect(k8serrors.IsNotFound(err)).To(BeTrue())
+
+			// neither can see each other's namespace in the list
 			paulVisibleNamespaces, err := paulClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 			Expect(err).To(Succeed())
 			paulVisibleNamespaceNames := lo.Map(paulVisibleNamespaces.Items, func(item corev1.Namespace, index int) string {
