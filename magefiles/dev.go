@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -71,6 +72,8 @@ func (Dev) Up(ctx context.Context) error {
 		if err := generateCertsAndKubeConfig(ctx, kubeconfigPath, proxyHostPort); err != nil {
 			return err
 		}
+	} else {
+		fmt.Println("proxy kubeconfig found, skipping generation")
 	}
 
 	return sh.RunV("kustomizer", "apply", "inventory", "spicedb-kubeapi-proxy", "-k", "./deploy", "--prune", "--wait")
@@ -85,6 +88,7 @@ func (d Dev) Clean() error {
 		return err
 	}
 	_ = os.Remove(kubeconfigPath)
+	_ = os.Remove(generatedKubeConfigPath)
 	return nil
 }
 
@@ -219,6 +223,12 @@ func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, prox
 		return err
 	}
 
+	wd, err := os.Getwd()
+	proxyKeyPath := path.Join(wd, "proxy.key")
+	if err := os.WriteFile(proxyKeyPath, serverKeyPem.Bytes(), 0o600); err != nil {
+		fmt.Printf("unable to cache proxy private key in host machine: %s\n", err.Error())
+	}
+
 	var serverCertPem bytes.Buffer
 	err = pem.Encode(&serverCertPem, &pem.Block{
 		Type:  "CERTIFICATE",
@@ -226,6 +236,11 @@ func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, prox
 	})
 	if err != nil {
 		return err
+	}
+
+	proxyCertPath := path.Join(wd, "proxy.crt")
+	if err := os.WriteFile(proxyCertPath, serverCertPem.Bytes(), 0o600); err != nil {
+		fmt.Printf("unable to cache proxy public certificate in host machine: %s\n", err.Error())
 	}
 
 	_, err = clientset.CoreV1().Secrets("kube-system").Apply(ctx,
@@ -272,6 +287,11 @@ func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, prox
 	})
 	if err != nil {
 		return err
+	}
+
+	caPath := path.Join(wd, "client-ca.crt")
+	if err := os.WriteFile(caPath, clientCaPem.Bytes(), 0o600); err != nil {
+		fmt.Printf("unable to cache proxy client CA certificate in host machine: %s\n", err.Error())
 	}
 
 	_, err = clientset.CoreV1().Secrets("kube-system").Apply(ctx,
