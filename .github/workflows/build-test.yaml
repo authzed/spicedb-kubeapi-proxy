@@ -1,0 +1,81 @@
+---
+name: "Build & Test"
+on: # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - "main"
+  pull_request:
+    branches:
+      - "*"
+  merge_group:
+    types:
+      - "checks_requested"
+env:
+  GO_VERSION: "~1.20.7"
+jobs:
+  paths-filter:
+    runs-on: "ubuntu-latest"
+    outputs:
+      codechange: "${{ steps.code-filter.outputs.codechange }}"
+    steps:
+      - uses: "actions/checkout@v2"
+      - uses: "dorny/paths-filter@v2"
+        id: "code-filter"
+        with:
+          filters: |
+            codechange:
+              - ".github/workflows/build-test.yaml"
+              - "Dockerfile"
+              - "go.mod"
+              - "go.sum"
+              - "cmd/**"
+              - "magefiles/**"
+              - "pkg/**"
+              - "e2e/**"
+              - "internal/**"
+  build:
+    name: "Build Binary"
+    runs-on: "ubuntu-latest"
+    needs: "paths-filter"
+    if: |
+      needs.paths-filter.outputs.codechange == 'true'
+    steps:
+      - uses: "actions/checkout@v3"
+      - uses: "authzed/actions/setup-go@main"
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+      - uses: "authzed/actions/go-build@main"
+
+  unit:
+    name: "Unit"
+    runs-on: "ubuntu-latest-4-cores"
+    needs: "paths-filter"
+    if: |
+      needs.paths-filter.outputs.codechange == 'true'
+    steps:
+      - uses: "actions/checkout@v3"
+      - uses: "authzed/actions/setup-go@main"
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+      - name: "Unit tests"
+        uses: "magefile/mage-action@v2"
+        with:
+          version: "latest"
+          args: "test:unit"
+
+  e2e:
+    name: "e2e Tests"
+    runs-on: "ubuntu-latest-4-cores"
+    needs: "paths-filter"
+    if: |
+      needs.paths-filter.outputs.codechange == 'true'
+    steps:
+      - uses: "actions/checkout@v3"
+      - uses: "authzed/actions/setup-go@main"
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+      - name: "e2e tests"
+        uses: "magefile/mage-action@v2"
+        with:
+          version: "latest"
+          args: "test:e2e"

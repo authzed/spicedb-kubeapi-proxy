@@ -1,0 +1,20 @@
+---
+"area/cli":
+  - "cmd/**/*"
+"area/core":
+  - "pkg/**/*"
+"area/dependencies":
+  - "Dockerfile"
+  - "go.mod"
+  - "go.sum"
+"area/docs":
+  - "CODE-OF-CONDUCT.md"
+  - "CONTRIBUTING.md"
+  - "DCO"
+  - "LICENSE"
+  - "README.md"
+"area/tooling":
+  - "**/*_test.go"
+  - ".github/**/*"
+  - ".*"
+  - "Dockerfile*"

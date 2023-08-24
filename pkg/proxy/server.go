@@ -27,12 +27,12 @@ import (
 )
 
 type Server struct {
-	Options
+	opts    Options
 	Handler http.Handler
 }
 
 func NewServer(ctx context.Context, o Options) (*Server, error) {
-	s := &Server{Options: o}
+	s := &Server{opts: o}
 
 	conn, err := o.SpicedbServer.GRPCDialContext(ctx, grpc.WithInsecure())
 	if err != nil {
@@ -57,12 +57,15 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create transport: %w", err)
 	}
+
+	kubeCtx := o.BackendConfig.Contexts[o.BackendConfig.CurrentContext]
+	cluster := o.BackendConfig.Clusters[kubeCtx.Cluster]
+
 	clusterProxy := &httputil.ReverseProxy{
 		ErrorLog:      nil, // TODO
 		FlushInterval: -1,
 		Director: func(req *http.Request) {
-			// TODO: default to the kube svc env vars
-			req.URL.Host = "kubernetes.default:443"
+			req.URL.Host = strings.TrimPrefix(cluster.Server, "https://")
 			req.URL.Scheme = "https"
 		},
 		ModifyResponse: func(response *http.Response) error {
@@ -91,10 +94,11 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	failHandler := genericapifilters.Unauthorized(codecs)
 
 	handler := withAuthorization(clusterProxy, failHandler, spicedbClient, watchClient)
-	handler = withAuthentication(handler, failHandler, s.AuthenticationInfo.Authenticator)
+	handler = withAuthentication(handler, failHandler, s.opts.AuthenticationInfo.Authenticator)
 	handler = genericapifilters.WithRequestInfo(handler, requestInfoResolver)
 	handler = genericfilters.WithHTTPLogging(handler)
 	handler = genericfilters.WithPanicRecovery(handler, requestInfoResolver)
+	// TODO: withpriorityandfairness
 
 	mux.Handle("/", handler)
 	s.Handler = mux
@@ -105,12 +109,12 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 func (s *Server) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
-		if err := s.Options.SpicedbServer.Run(ctx); err != nil {
+		if err := s.opts.SpicedbServer.Run(ctx); err != nil {
 			klog.FromContext(ctx).Error(err, "failed to run spicedb")
 			cancel()
 		}
 	}()
-	doneCh, _, err := s.Options.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
+	doneCh, _, err := s.opts.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
 	if err != nil {
 		return err
 	}
