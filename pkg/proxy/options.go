@@ -9,14 +9,13 @@ import (
 	"github.com/authzed/spicedb/pkg/cmd/server"
 	"github.com/spf13/pflag"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	apiserveroptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/component-base/logs"
 	logsv1 "k8s.io/component-base/logs/api/v1"
-
-	apiserveroptions "k8s.io/apiserver/pkg/server/options"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/spicedb"
 )
@@ -36,7 +35,7 @@ type Options struct {
 	AdditionalAuthEnabled bool
 
 	SpicedbServer server.RunnableServer
-	SpiceDBClient any
+	// TemporalServer *temporalite.LiteServer
 }
 
 func NewOptions() *Options {
@@ -101,6 +100,26 @@ func (o *Options) Complete(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// var opts client.Options
+	// opts.Interceptors = append(opts.Interceptors, helloworld.NewTestInterceptor())
+	// ts := temporaltest.NewServer(
+	// 	temporaltest.WithT(t),
+	// 	temporaltest.WithBaseClientOptions(opts),
+	// )
+
+	// o.TemporalServer, err = temporalite.NewLiteServer(&temporalite.LiteServerConfig{
+	// 	// DatabaseFilePath: "proxy-tx.sqlite",
+	// 	Ephemeral:  true,
+	// 	Namespaces: []string{"tx"},
+	// 	DynamicConfig: dynamicconfig.StaticClient{
+	// 		dynamicconfig.ForceSearchAttributesCacheRefreshOnRead: []dynamicconfig.ConstrainedValue{{Value: true}},
+	// 	},
+	// 	FrontendIP: "127.0.0.1",
+	// })
+	// if err != nil {
+	// 	return err
+	// }
 
 	return nil
 }

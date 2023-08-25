@@ -2,7 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 images:
 - name: authzed/spicedb-kubeapi-proxy:dev
   newName: kind.local/spicedb-kubeapi-proxy
-  newTag: f2ed27188b9062886b40142ac724a55d9e3498d1945c5192e58aa797c4a23ded
+  newTag: 371d5e0a2a7dab0177c6e9ab427d3bb53adbd499db236b3cde6691314d075911
 kind: Kustomization
 resources:
 - proxy.yaml

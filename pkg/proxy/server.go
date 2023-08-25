@@ -11,6 +11,7 @@ import (
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	// temporal "go.temporal.io/sdk/client"
 	"google.golang.org/grpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -26,9 +27,13 @@ import (
 	"k8s.io/klog/v2"
 )
 
+const taskQueue = "2pc"
+
 type Server struct {
 	opts    Options
 	Handler http.Handler
+
+	// temporalClient temporal.Client
 }
 
 func NewServer(ctx context.Context, o Options) (*Server, error) {
@@ -40,6 +45,9 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	}
 	spicedbClient := v1.NewPermissionsServiceClient(conn)
 	watchClient := v1.NewWatchServiceClient(conn)
+
+	// TODO: understand namespaces
+	// s.opts.TemporalServer.Start()
 
 	mux := http.NewServeMux()
 
@@ -107,6 +115,9 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+
+	// TODO: errgroup
+
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
 		if err := s.opts.SpicedbServer.Run(ctx); err != nil {
@@ -114,6 +125,43 @@ func (s *Server) Run(ctx context.Context) error {
 			cancel()
 		}
 	}()
+
+	// go func() {
+	// 	// defer s.opts.TemporalServer.Stop()
+	// 	if err := s.opts.TemporalServer.Start(); err != nil {
+	// 		klog.FromContext(ctx).Error(err, "failed to start temporal")
+	// 		cancel()
+	// 		return
+	// 	}
+	//
+	// 	var err error
+	// 	// s.temporalClient, err = s.opts.TemporalServer.NewClientWithOptions(ctx, "tx")
+	// 	opts := temporal.Options{
+	// 		HostPort:  s.opts.TemporalServer.FrontendHostPort(),
+	// 		Namespace: "tx",
+	// 	}
+	// 	opts.Interceptors = append(opts.Interceptors, NewTestInterceptor())
+	// 	s.temporalClient, err = temporal.Dial(opts)
+	// 	if err != nil {
+	// 		klog.FromContext(ctx).Error(err, "failed to start temporal client")
+	// 		cancel()
+	// 		return
+	// 	}
+	// 	fmt.Println(s.temporalClient.CheckHealth(ctx, &temporal.CheckHealthRequest{}))
+	// 	// go func() {
+	// 	// 	w := worker.New(s.temporalClient, taskQueue, worker.Options{
+	// 	// 		WorkflowPanicPolicy: worker.FailWorkflow,
+	// 	// 	})
+	// 	// 	// defer w.Stop()
+	// 	// 	RegisterWorkflowsAndActivities(w)
+	// 	//
+	// 	// 	if err := w.Start(); err != nil {
+	// 	// 		klog.FromContext(ctx).Error(err, "failed to start temporal worker")
+	// 	// 		cancel()
+	// 	// 	}
+	// 	// }()
+	// }()
+
 	doneCh, _, err := s.opts.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
 	if err != nil {
 		return err

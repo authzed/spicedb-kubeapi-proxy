@@ -80,7 +80,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	enc := gob.NewEncoder(&buf)
 	Expect(enc.Encode(config)).To(Succeed())
 	return buf.Bytes()
-}, func(ctx context.Context, rc []byte) {
+}, func(rc []byte) {
 	dec := gob.NewDecoder(bytes.NewReader(rc))
 	var config rest.Config
 	Expect(dec.Decode(&config)).To(Succeed())
@@ -100,7 +100,8 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	port, err := GetFreePort("localhost")
 	Expect(err).To(Succeed())
 	clientCA = GenerateClientCA(port)
-
+	ctx, cancel := context.WithCancel(context.Background())
+	DeferCleanup(cancel)
 	opts := proxy.NewOptions()
 	opts.BackendConfig = backendCfg
 	opts.SecureServing.BindPort = port
@@ -110,8 +111,6 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	proxySrv, err := proxy.NewServer(ctx, *opts)
 	Expect(err).To(Succeed())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	DeferCleanup(cancel)
 	go func() {
 		defer GinkgoRecover()
 		Expect(proxySrv.Run(ctx))

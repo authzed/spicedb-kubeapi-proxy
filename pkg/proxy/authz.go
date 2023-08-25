@@ -21,6 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/endpoints/request"
+
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/temporalite"
 )
 
 func withAuthorization(handler, failed http.Handler, spicedbClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient) http.Handler {
@@ -68,6 +70,36 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 			req.Body = io.NopCloser(bytes.NewBuffer(body))
 
 			fmt.Println("pom", pom)
+
+			// protoregistry.GlobalTypes.RangeMessages(func(messageType protoreflect.MessageType) bool {
+			// 	fmt.Println(messageType)
+			// 	return true
+			// })
+			if err := temporalite.PrintResult(context.Background()); err != nil {
+				failed.ServeHTTP(w, req)
+				return
+			}
+
+			// _, err = temporalClient.ExecuteWorkflow(
+			// 	// wfr, err := temporalClient.ExecuteWorkflow(
+			// 	context.Background(),
+			// 	temporal.StartWorkflowOptions{TaskQueue: taskQueue},
+			// 	Greet,
+			// 	"world",
+			// )
+			// if err != nil {
+			// 	fmt.Println(err)
+			// 	failed.ServeHTTP(w, req)
+			// 	return
+			// }
+
+			// var result string
+			// if err := wfr.Get(context.Background(), &result); err != nil {
+			// 	fmt.Println(err)
+			// 	failed.ServeHTTP(w, req)
+			// }
+			// fmt.Println("RESULT", result)
+
 			resp, err := spicedbClient.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{
 				Updates: []*v1.RelationshipUpdate{{
 					Operation: v1.RelationshipUpdate_OPERATION_TOUCH,
@@ -412,6 +444,7 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 	resp.Body = io.NopCloser(bytes.NewBuffer(filtered))
 	resp.Header["Content-Length"] = []string{fmt.Sprint(len(filtered))}
 	if len(filtered) == 0 {
+		// TODO: should this use the failed handler?
 		resp.StatusCode = http.StatusNotFound
 	}
 	return nil
