@@ -11,6 +11,9 @@ import (
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/backend/sqlite"
+	"github.com/microsoft/durabletask-go/task"
 	"google.golang.org/grpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -27,8 +30,10 @@ import (
 )
 
 type Server struct {
-	opts    Options
-	Handler http.Handler
+	opts          Options
+	Handler       http.Handler
+	taskHubWorker backend.TaskHubWorker
+	spiceDBClient v1.PermissionsServiceClient
 }
 
 func NewServer(ctx context.Context, o Options) (*Server, error) {
@@ -38,8 +43,32 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	spicedbClient := v1.NewPermissionsServiceClient(conn)
+	s.spiceDBClient = v1.NewPermissionsServiceClient(conn)
 	watchClient := v1.NewWatchServiceClient(conn)
+
+	// durabletask - stores planned dual writes in a sqlite db
+	logger := backend.DefaultLogger()
+	r := task.NewTaskRegistry()
+	if err := r.AddOrchestratorN(WriteToSpiceDBAndKubeName, s.WriteToSpiceDBAndKube); err != nil {
+		return nil, err
+	}
+	if err := r.AddActivity(s.WriteToSpiceDB); err != nil {
+		return nil, err
+	}
+	if err := r.AddActivity(s.WriteToKube); err != nil {
+		return nil, err
+	}
+	if err := r.AddActivity(s.CheckKube); err != nil {
+		return nil, err
+	}
+
+	// note: can use the in-memory sqlite provider by specifying ""
+	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions("dtx.sqlite"), logger)
+	executor := task.NewTaskExecutor(r)
+	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
+	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
+	s.taskHubWorker = backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
+	taskHubClient := backend.NewTaskHubClient(be)
 
 	mux := http.NewServeMux()
 
@@ -93,7 +122,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	codecs := serializer.NewCodecFactory(scheme)
 	failHandler := genericapifilters.Unauthorized(codecs)
 
-	handler := withAuthorization(clusterProxy, failHandler, spicedbClient, watchClient)
+	handler := withAuthorization(clusterProxy, failHandler, s.spiceDBClient, watchClient, taskHubClient)
 	handler = withAuthentication(handler, failHandler, s.opts.AuthenticationInfo.Authenticator)
 	handler = genericapifilters.WithRequestInfo(handler, requestInfoResolver)
 	handler = genericfilters.WithHTTPLogging(handler)
@@ -108,9 +137,18 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 
 func (s *Server) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
+
+	// TODO: errgroup
+
 	go func() {
 		if err := s.opts.SpicedbServer.Run(ctx); err != nil {
 			klog.FromContext(ctx).Error(err, "failed to run spicedb")
+			cancel()
+		}
+	}()
+	go func() {
+		if err := s.taskHubWorker.Start(ctx); err != nil {
+			klog.FromContext(ctx).Error(err, "failed to run durable task worker")
 			cancel()
 		}
 	}()
@@ -120,6 +158,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	<-doneCh
+	if err := s.taskHubWorker.Shutdown(context.Background()); err != nil {
+		return err
+	}
 	return nil
 }
 

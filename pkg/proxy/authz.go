@@ -11,10 +11,13 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/backend"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/authentication/user"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,7 +26,7 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 )
 
-func withAuthorization(handler, failed http.Handler, spicedbClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient) http.Handler {
+func withAuthorization(handler, failed http.Handler, spicedbClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, taskHubClient backend.TaskHubClient) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -33,8 +36,7 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 			failed.ServeHTTP(w, req)
 			return
 		}
-		fmt.Println(requestInfo)
-		user, ok := request.UserFrom(req.Context())
+		userInfo, ok := request.UserFrom(req.Context())
 		if !ok {
 			failed.ServeHTTP(w, req)
 			return
@@ -65,33 +67,33 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 				return
 			}
 
-			req.Body = io.NopCloser(bytes.NewBuffer(body))
-
-			fmt.Println("pom", pom)
-			resp, err := spicedbClient.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{
-				Updates: []*v1.RelationshipUpdate{{
-					Operation: v1.RelationshipUpdate_OPERATION_TOUCH,
-					Relationship: &v1.Relationship{
-						Resource: &v1.ObjectReference{
-							ObjectType: "namespace",
-							ObjectId:   pom.ObjectMeta.Name,
-						},
-						Relation: "creator",
-						Subject: &v1.SubjectReference{
-							Object: &v1.ObjectReference{
-								ObjectType: "user",
-								ObjectId:   user.GetName(),
-							},
-						},
-					},
-				}},
-			})
+			id, err := taskHubClient.ScheduleNewOrchestration(ctx, WriteToSpiceDBAndKubeName, api.WithInput(CreateObjInput{
+				RequestInfo: requestInfo,
+				UserInfo:    userInfo.(*user.DefaultInfo),
+				ObjectMeta:  &pom.ObjectMeta,
+				Body:        body,
+			}))
 			if err != nil {
 				fmt.Println(err)
 				failed.ServeHTTP(w, req)
 				return
 			}
-			fmt.Println(resp)
+			metadata, err := taskHubClient.WaitForOrchestrationCompletion(ctx, id)
+			if err != nil {
+				fmt.Println(err)
+				failed.ServeHTTP(w, req)
+				return
+			}
+			// TODO: needed?
+			if metadata.FailureDetails != nil {
+				fmt.Println(metadata.FailureDetails.GetErrorMessage())
+				failed.ServeHTTP(w, req)
+				return
+			}
+
+			req.Body = io.NopCloser(bytes.NewBuffer(body))
+
+			fmt.Println("pom", pom)
 
 			allowed := make(chan string)
 			req = req.WithContext(WithAuthzData(req.Context(), &AuthzData{
@@ -100,7 +102,26 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 			}))
 			close(allowed)
 
-			handler.ServeHTTP(w, req)
+			var resp KubeResp
+			if err := json.Unmarshal([]byte(metadata.SerializedOutput), &resp); err != nil {
+				fmt.Println(err)
+				failed.ServeHTTP(w, req)
+				return
+			}
+			// this can happen if there are un-recoverable failures in the
+			// durable fn execution
+			if resp.Body == nil {
+				failed.ServeHTTP(w, req)
+				return
+			}
+
+			w.Header().Set("Content-Type", resp.ContentType)
+			w.WriteHeader(resp.StatusCode)
+			if _, err := w.Write(resp.Body); err != nil {
+				fmt.Println(err)
+				failed.ServeHTTP(w, req)
+				return
+			}
 			return
 		}
 
@@ -128,7 +149,7 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 					Subject: &v1.SubjectReference{
 						Object: &v1.ObjectReference{
 							ObjectType: "user",
-							ObjectId:   user.GetName(),
+							ObjectId:   userInfo.GetName(),
 						},
 					},
 				})
@@ -168,7 +189,7 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 					Subject: &v1.SubjectReference{
 						Object: &v1.ObjectReference{
 							ObjectType: "user",
-							ObjectId:   user.GetName(),
+							ObjectId:   userInfo.GetName(),
 						},
 					},
 				})
@@ -246,7 +267,7 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 								Subject: &v1.SubjectReference{
 									Object: &v1.ObjectReference{
 										ObjectType: "user",
-										ObjectId:   user.GetName(),
+										ObjectId:   userInfo.GetName(),
 									},
 								},
 							})
