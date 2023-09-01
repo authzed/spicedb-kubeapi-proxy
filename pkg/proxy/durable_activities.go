@@ -15,12 +15,12 @@ func (s *Server) WriteToSpiceDB(ctx task.ActivityContext) (any, error) {
 		return nil, err
 	}
 	failpoints.FailPoint("panicWriteSpiceDB")
-	out, err := s.SpiceDBClient.WriteRelationships(ctx.Context(), &req)
+	out, err := s.PermissionClient().WriteRelationships(ctx.Context(), &req)
 	failpoints.FailPoint("panicSpiceDBReadResp")
 	return out, err
 }
 
-// WriteToKube
+// WriteToKube peforms a Kube API Server POST, specified in a KubeReqInput propagated via the task.ActivityContext arg
 func (s *Server) WriteToKube(ctx task.ActivityContext) (any, error) {
 	var req KubeReqInput
 	if err := ctx.GetInput(&req); err != nil {

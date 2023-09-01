@@ -14,7 +14,7 @@ import (
 
 // GetAllTuples collects all tuples matching the filter from SpiceDB
 func GetAllTuples(ctx context.Context, filter *v1.RelationshipFilter) []*v1.ReadRelationshipsResponse {
-	client, err := proxySrv.SpiceDBClient.ReadRelationships(ctx, &v1.ReadRelationshipsRequest{
+	client, err := proxySrv.PermissionClient().ReadRelationships(ctx, &v1.ReadRelationshipsRequest{
 		Consistency:        &v1.Consistency{Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true}},
 		RelationshipFilter: filter,
 	})

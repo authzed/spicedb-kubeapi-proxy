@@ -25,6 +25,8 @@ spec:
       containers:
         - args:
           - --secure-port=8443
+          - --spicedb-endpoint
+          - embedded://
           - --backend-kubeconfig
           - /opt/proxy/kubeconfig
           - --cert-dir
