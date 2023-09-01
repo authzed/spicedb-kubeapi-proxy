@@ -26,7 +26,7 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 )
 
-func withAuthorization(handler, failed http.Handler, spicedbClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, taskHubClient backend.TaskHubClient) http.Handler {
+func (s *Server) WithAuthorization(handler, failed http.Handler, watchClient v1.WatchServiceClient, taskHubClient backend.TaskHubClient) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -67,7 +67,7 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 				return
 			}
 
-			id, err := taskHubClient.ScheduleNewOrchestration(ctx, WriteToSpiceDBAndKubeName, api.WithInput(CreateObjInput{
+			id, err := taskHubClient.ScheduleNewOrchestration(ctx, s.LockMode, api.WithInput(CreateObjInput{
 				RequestInfo: requestInfo,
 				UserInfo:    userInfo.(*user.DefaultInfo),
 				ObjectMeta:  &pom.ObjectMeta,
@@ -84,13 +84,6 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 				failed.ServeHTTP(w, req)
 				return
 			}
-			// TODO: needed?
-			if metadata.FailureDetails != nil {
-				fmt.Println(metadata.FailureDetails.GetErrorMessage())
-				failed.ServeHTTP(w, req)
-				return
-			}
-
 			req.Body = io.NopCloser(bytes.NewBuffer(body))
 
 			fmt.Println("pom", pom)
@@ -137,7 +130,7 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 			requestInfo.APIGroup == "" &&
 			requestInfo.Name != "" {
 			go func() {
-				cr, err := spicedbClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
+				cr, err := s.SpiceDBClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
 					Consistency: &v1.Consistency{
 						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 					},
@@ -180,7 +173,7 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 			requestInfo.APIGroup == "" {
 
 			go func() {
-				lr, err := spicedbClient.LookupResources(ctx, &v1.LookupResourcesRequest{
+				lr, err := s.SpiceDBClient.LookupResources(ctx, &v1.LookupResourcesRequest{
 					Consistency: &v1.Consistency{
 						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 					},
@@ -253,7 +246,7 @@ func withAuthorization(handler, failed http.Handler, spicedbClient v1.Permission
 					for _, u := range resp.Updates {
 						if u.Operation == v1.RelationshipUpdate_OPERATION_TOUCH || u.Operation == v1.RelationshipUpdate_OPERATION_CREATE {
 							// do a check
-							cr, err := spicedbClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
+							cr, err := s.SpiceDBClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
 								Consistency: &v1.Consistency{
 									Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
 									// TODO
@@ -311,12 +304,9 @@ func AuthzDataFrom(ctx context.Context) (*AuthzData, bool) {
 
 type AuthzData struct {
 	sync.RWMutex
-	allowedNameC       chan string
-	allowedNames       map[string]struct{}
-	allowedNamespaces  map[string]struct{}
-	allowAllNamespaces bool
-
-	buffered [][]byte
+	allowedNameC chan string
+	allowedNames map[string]struct{}
+	// TODO: may need to include namespace info
 }
 
 type listOrObjectMeta struct {
@@ -428,6 +418,10 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 	default:
 		// filter single object
 		filtered, err = d.FilterObject(pom.ToPartialObjectMetadata(), body)
+	}
+
+	if err != nil {
+		fmt.Println(err)
 	}
 
 	resp.Body = io.NopCloser(bytes.NewBuffer(filtered))
@@ -613,7 +607,6 @@ func (d *AuthzData) FilterList(body []byte) ([]byte, error) {
 	list.Items = allowedItems
 
 	return json.Marshal(list)
-
 }
 
 func (d *AuthzData) FilterObject(pom *metav1.PartialObjectMetadata, body []byte) ([]byte, error) {

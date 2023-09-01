@@ -5,6 +5,8 @@ go 1.20
 replace github.com/authzed/spicedb-kubeapi-proxy => ../
 
 require (
+	github.com/authzed/authzed-go v0.9.1-0.20230810180432-2fb0fd4c66dd
+	github.com/authzed/spicedb v1.24.1-0.20230821163419-e4bb3adfd50b
 	github.com/authzed/spicedb-kubeapi-proxy v0.0.0-00010101000000-000000000000
 	github.com/go-logr/zapr v1.2.4
 	github.com/onsi/ginkgo/v2 v2.11.0
@@ -14,6 +16,7 @@ require (
 	go.uber.org/zap v1.24.0
 	k8s.io/api v0.28.0
 	k8s.io/apimachinery v0.28.0
+	k8s.io/apiserver v0.28.0
 	k8s.io/client-go v0.28.0
 	sigs.k8s.io/controller-runtime v0.15.1
 	sigs.k8s.io/controller-runtime/tools/setup-envtest v0.0.0-20230817155522-304027bcbe4b
@@ -33,11 +36,9 @@ require (
 	github.com/NYTimes/gziphandler v1.1.1 // indirect
 	github.com/antlr/antlr4/runtime/Go/antlr/v4 v4.0.0-20230305170008-8188dc5388df // indirect
 	github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a // indirect
-	github.com/authzed/authzed-go v0.9.1-0.20230810180432-2fb0fd4c66dd // indirect
 	github.com/authzed/cel-go v0.17.5 // indirect
 	github.com/authzed/consistent v0.1.0 // indirect
 	github.com/authzed/grpcutil v0.0.0-20230703173955-bdd0ac3f16a5 // indirect
-	github.com/authzed/spicedb v1.24.1-0.20230821163419-e4bb3adfd50b // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
@@ -139,8 +140,6 @@ require (
 	github.com/outcaste-io/ristretto v0.2.3 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.9 // indirect
-	github.com/pingcap/errors v0.11.4 // indirect
-	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/pquerna/cachecontrol v0.1.0 // indirect
@@ -208,7 +207,6 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiextensions-apiserver v0.27.2 // indirect
-	k8s.io/apiserver v0.28.0 // indirect
 	k8s.io/cloud-provider v0.0.0 // indirect
 	k8s.io/cluster-bootstrap v0.0.0 // indirect
 	k8s.io/component-base v0.28.0 // indirect

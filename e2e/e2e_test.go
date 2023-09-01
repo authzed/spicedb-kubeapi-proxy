@@ -40,7 +40,8 @@ import (
 )
 
 var (
-	testEnv *envtest.Environment
+	testEnv  *envtest.Environment
+	proxySrv *proxy.Server
 
 	// adminUser is configured for the un-proxied apiserver
 	adminUser *envtest.AuthenticatedUser
@@ -107,8 +108,11 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
 	opts.Authentication.BuiltInOptions.ClientCert.ClientCA = clientCA.Path()
 	Expect(opts.Complete(ctx)).To(Succeed())
-	proxySrv, err := proxy.NewServer(ctx, *opts)
+	proxySrv, err = proxy.NewServer(ctx, *opts)
 	Expect(err).To(Succeed())
+
+	// speed up backoff for tests
+	proxy.KubeBackoff.Duration = 1 * time.Microsecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 	DeferCleanup(cancel)
