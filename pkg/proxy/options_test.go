@@ -50,7 +50,7 @@ func TestRemoteSpiceDB(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv, addr := newServer(t, ctx)
+	srv, addr := newTCPSpiceDB(t, ctx)
 	go func() {
 		if err := srv.Run(ctx); err != nil {
 			require.NoError(t, err)
@@ -79,7 +79,7 @@ func optionsForTesting(t *testing.T) *Options {
 	opts := NewOptions()
 	opts.SecureServing.BindPort = getFreePort(t, "127.0.0.1")
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
-	opts.BackendKubeconfigPath = testKubeConfig(t)
+	opts.BackendKubeconfigPath = kubeConfigForTest(t)
 	require.Empty(t, opts.Validate())
 	return opts
 }
@@ -95,7 +95,7 @@ func getFreePort(t *testing.T, listenAddr string) int {
 	return port
 }
 
-func newServer(t *testing.T, ctx context.Context) (server.RunnableServer, string) {
+func newTCPSpiceDB(t *testing.T, ctx context.Context) (server.RunnableServer, string) {
 	t.Helper()
 
 	ds, err := datastore.NewDatastore(ctx,
@@ -129,7 +129,7 @@ func newServer(t *testing.T, ctx context.Context) (server.RunnableServer, string
 	return srv, address
 }
 
-func testKubeConfig(t *testing.T) string {
+func kubeConfigForTest(t *testing.T) string {
 	t.Helper()
 
 	c, err := clientcmd.NewDefaultClientConfigLoadingRules().Load()

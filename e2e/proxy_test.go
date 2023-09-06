@@ -18,7 +18,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/failpoints"
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
 )
 
 var _ = Describe("Proxy", func() {
@@ -119,9 +119,9 @@ var _ = Describe("Proxy", func() {
 
 				// make kube write fail for chani's namespace, spicedb write will have
 				// succeeded
-				if proxySrv.LockMode == proxy.PessimisticWriteToSpiceDBAndKube {
+				if proxySrv.LockMode == distributedtx.StrategyPessimisticWriteToSpiceDBAndKube {
 					// the locking version retries if the connection fails
-					failpoints.EnableFailPoint("panicKubeWrite", proxy.MaxKubeAttempts+1)
+					failpoints.EnableFailPoint("panicKubeWrite", distributedtx.MaxKubeAttempts+1)
 				} else {
 					failpoints.EnableFailPoint("panicKubeWrite", 1)
 				}
@@ -279,14 +279,14 @@ var _ = Describe("Proxy", func() {
 
 		When("optimistic locking is used", func() {
 			BeforeEach(func() {
-				proxySrv.LockMode = proxy.OptimisticWriteToSpiceDBAndKube
+				proxySrv.LockMode = distributedtx.StrategyOptimisticWriteToSpiceDBAndKube
 			})
 			AssertDualWriteBehavior()
 		})
 
 		When("pessimistic locking is used", func() {
 			BeforeEach(func() {
-				proxySrv.LockMode = proxy.PessimisticWriteToSpiceDBAndKube
+				proxySrv.LockMode = distributedtx.StrategyPessimisticWriteToSpiceDBAndKube
 			})
 			AssertDualWriteBehavior()
 		})

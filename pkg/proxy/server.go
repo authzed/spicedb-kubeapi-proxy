@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/durabletask"
+
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
-	"github.com/microsoft/durabletask-go/backend"
-	"github.com/microsoft/durabletask-go/backend/sqlite"
-	"github.com/microsoft/durabletask-go/task"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -31,10 +31,10 @@ import (
 )
 
 type Server struct {
-	opts          Options
-	Handler       http.Handler
-	TaskHubWorker backend.TaskHubWorker
-	KubeClient    *kubernetes.Clientset
+	opts       Options
+	Handler    http.Handler
+	TaskWorker durabletask.TaskWorker
+	KubeClient *kubernetes.Clientset
 
 	// LockMode references the name of the workflow to run for dual writes
 	// This is very temporary, and should be replaced with per-request
@@ -42,10 +42,12 @@ type Server struct {
 	LockMode string
 }
 
+var defaultDistributedTransactionProvider = durabletask.Setup
+
 func NewServer(ctx context.Context, o Options) (*Server, error) {
 	s := &Server{
 		opts:     o,
-		LockMode: DefaultLockMode,
+		LockMode: distributedtx.DefaultLockMode,
 	}
 
 	klog.FromContext(ctx).Info("starting durable task engine")
@@ -57,33 +59,6 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// durabletask - stores planned dual writes in a sqlite db
-	logger := backend.DefaultLogger()
-	r := task.NewTaskRegistry()
-	if err := r.AddOrchestratorN(PessimisticWriteToSpiceDBAndKube, s.PessimisticWriteToSpiceDBAndKube); err != nil {
-		return nil, err
-	}
-	if err := r.AddOrchestratorN(OptimisticWriteToSpiceDBAndKube, s.OptimisticWriteToSpiceDBAndKube); err != nil {
-		return nil, err
-	}
-	if err := r.AddActivityN(WriteToSpiceDB, s.WriteToSpiceDB); err != nil {
-		return nil, err
-	}
-	if err := r.AddActivityN(WriteToKube, s.WriteToKube); err != nil {
-		return nil, err
-	}
-	if err := r.AddActivityN(CheckKube, s.CheckKube); err != nil {
-		return nil, err
-	}
-
-	// note: can use the in-memory sqlite provider by specifying ""
-	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(o.DurableTaskDatabasePath), logger)
-	executor := task.NewTaskExecutor(r)
-	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
-	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
-	s.TaskHubWorker = backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
-	taskHubClient := backend.NewTaskHubClient(be)
 
 	mux := http.NewServeMux()
 
@@ -137,7 +112,13 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	codecs := serializer.NewCodecFactory(scheme)
 	failHandler := genericapifilters.Unauthorized(codecs)
 
-	handler, err := WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, taskHubClient, &s.LockMode)
+	scheduler, worker, err := defaultDistributedTransactionProvider(s.opts.PermissionsClient, s.KubeClient.RESTClient(), durabletask.MemorySQLite)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize distributed transaction handling: %w", err)
+	}
+	s.TaskWorker = worker
+
+	handler, err := WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, scheduler, &s.LockMode)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
 	}
@@ -175,7 +156,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	go func() {
-		if err := s.TaskHubWorker.Start(ctx); err != nil {
+		if err := s.TaskWorker.Start(ctx); err != nil {
 			klog.FromContext(ctx).Error(err, "failed to run durable task worker")
 			cancel()
 			return
@@ -191,7 +172,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
-	if err := s.TaskHubWorker.Shutdown(ctx); err != nil {
+	if err := s.TaskWorker.Shutdown(ctx); err != nil {
 		return err
 	}
 	return nil
