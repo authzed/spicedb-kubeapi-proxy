@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/workflows"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
 )
 
 var (
@@ -113,7 +114,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	Expect(err).To(Succeed())
 
 	// speed up backoff for tests
-	proxy.KubeBackoff.Duration = 1 * time.Microsecond
+	distributedtx.KubeBackoff.Duration = 1 * time.Microsecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 	DeferCleanup(cancel)

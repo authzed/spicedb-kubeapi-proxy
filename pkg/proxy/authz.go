@@ -11,27 +11,26 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/backend"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/apiserver/pkg/authentication/user"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
 )
 
-func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, taskHubClient backend.TaskHubClient, lockMode *string) (http.Handler, error) {
+func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, scheduler distributedtx.TaskScheduler, lockMode *string) (http.Handler, error) {
 	if *lockMode == "" {
 		return nil, fmt.Errorf("lock mode is undefined")
 	}
 
-	if !(*lockMode == PessimisticWriteToSpiceDBAndKube || *lockMode == OptimisticWriteToSpiceDBAndKube) {
+	if !(*lockMode == distributedtx.StrategyPessimisticWriteToSpiceDBAndKube || *lockMode == distributedtx.StrategyOptimisticWriteToSpiceDBAndKube) {
 		return nil, fmt.Errorf("unexpected lock mode: %s", *lockMode)
 	}
 
@@ -75,18 +74,18 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				return
 			}
 
-			id, err := taskHubClient.ScheduleNewOrchestration(ctx, *lockMode, api.WithInput(CreateObjInput{
+			id, err := scheduler.Schedule(ctx, *lockMode, &distributedtx.CreateObjInput{
 				RequestInfo: requestInfo,
 				UserInfo:    userInfo.(*user.DefaultInfo),
 				ObjectMeta:  &pom.ObjectMeta,
 				Body:        body,
-			}))
+			})
 			if err != nil {
 				fmt.Println(err)
 				failed.ServeHTTP(w, req)
 				return
 			}
-			metadata, err := taskHubClient.WaitForOrchestrationCompletion(ctx, id)
+			metadata, err := scheduler.WaitForCompletion(ctx, id)
 			if err != nil {
 				fmt.Println(err)
 				failed.ServeHTTP(w, req)
@@ -103,8 +102,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 			}))
 			close(allowed)
 
-			var resp KubeResp
-			if err := json.Unmarshal([]byte(metadata.SerializedOutput), &resp); err != nil {
+			var resp distributedtx.KubeResp
+			if err := json.Unmarshal(metadata.SerializedOutput, &resp); err != nil {
 				fmt.Println(err)
 				failed.ServeHTTP(w, req)
 				return

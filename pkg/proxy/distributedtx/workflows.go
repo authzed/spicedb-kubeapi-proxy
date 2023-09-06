@@ -1,33 +1,30 @@
-package proxy
+package distributedtx
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cespare/xxhash/v2"
-	"github.com/microsoft/durabletask-go/task"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apiserver/pkg/authentication/user"
-	"k8s.io/apiserver/pkg/endpoints/request"
 )
 
 const (
-	lockResourceType                 = "lock"
-	lockRelationName                 = "workflow"
-	workflowResourceType             = "workflow"
-	MaxKubeAttempts                  = 5
-	DefaultLockMode                  = PessimisticWriteToSpiceDBAndKube
-	OptimisticWriteToSpiceDBAndKube  = "OptimisticWriteToSpiceDBAndKube"
-	PessimisticWriteToSpiceDBAndKube = "PessimisticWriteToSpiceDBAndKube"
-	WriteToSpiceDB                   = "WriteToSpiceDBActivity"
-	WriteToKube                      = "WriteToKubeActivity"
-	CheckKube                        = "CheckKubeActivity"
+	lockResourceType                         = "lock"
+	lockRelationName                         = "workflow"
+	workflowResourceType                     = "workflow"
+	MaxKubeAttempts                          = 5
+	DefaultLockMode                          = StrategyPessimisticWriteToSpiceDBAndKube
+	StrategyOptimisticWriteToSpiceDBAndKube  = "OptimisticWriteToSpiceDBAndKube"
+	StrategyPessimisticWriteToSpiceDBAndKube = "PessimisticWriteToSpiceDBAndKube"
+	WriteToSpiceDB                           = "WriteToSpiceDBActivity"
+	WriteToKube                              = "WriteToKubeActivity"
+	CheckKube                                = "CheckKubeActivity"
 )
 
 var KubeBackoff = wait.Backoff{
@@ -37,24 +34,22 @@ var KubeBackoff = wait.Backoff{
 	Steps:    MaxKubeAttempts,
 }
 
-type CreateObjInput struct {
-	RequestInfo *request.RequestInfo
-	UserInfo    *user.DefaultInfo
-	ObjectMeta  *metav1.ObjectMeta
-	Body        []byte
+type TaskExecutor interface {
+	Call(name string, arg any) Task
 }
 
-type KubeReqInput struct {
-	RequestInfo *request.RequestInfo
-	ObjectMeta  *metav1.ObjectMeta
-	Body        []byte
+type TaskScheduler interface {
+	Schedule(ctx context.Context, orchestrator string, opts ...any) (string, error)
+	WaitForCompletion(ctx context.Context, id string) (*OrchestrationResult, error)
 }
 
-type KubeResp struct {
-	Body        []byte
-	ContentType string
-	StatusCode  int
-	Err         k8serrors.StatusError
+type OrchestrationResult struct {
+	SerializedOutput []byte
+	Err              string
+}
+
+type Task interface {
+	Await(v any) error
 }
 
 type RollbackRelationships []*v1.Relationship
@@ -69,7 +64,7 @@ func (r *RollbackRelationships) WithRels(relationships ...*v1.Relationship) *Rol
 	return r
 }
 
-func (r *RollbackRelationships) Cleanup(ctx *task.OrchestrationContext) {
+func (r *RollbackRelationships) Cleanup(executor TaskExecutor) {
 	updates := make([]*v1.RelationshipUpdate, 0, len(*r))
 	for _, rel := range *r {
 		rel := rel
@@ -81,9 +76,9 @@ func (r *RollbackRelationships) Cleanup(ctx *task.OrchestrationContext) {
 	// TODO: Should this be a separate workflow?
 	for {
 		var delResp v1.WriteRelationshipsResponse
-		if err := ctx.CallActivity(WriteToSpiceDB, task.WithActivityInput(&v1.WriteRelationshipsRequest{
+		if err := executor.Call(WriteToSpiceDB, &v1.WriteRelationshipsRequest{
 			Updates: updates,
-		})).Await(&delResp); err != nil {
+		}).Await(&delResp); err != nil {
 			fmt.Println("error deleting lock tuple", err)
 			continue
 		}
@@ -95,17 +90,21 @@ func (r *RollbackRelationships) Cleanup(ctx *task.OrchestrationContext) {
 // PessimisticWriteToSpiceDBAndKube ensures that a write exists in both SpiceDB
 // and kube, or neither, using locks. It prevents multiple users from writing
 // the same object/fields at the same time
-func (s *Server) PessimisticWriteToSpiceDBAndKube(ctx *task.OrchestrationContext) (any, error) {
+func PessimisticWriteToSpiceDBAndKube(ctx IdentifiableExecutionInput, executor TaskExecutor) (any, error) {
 	var input CreateObjInput
 	if err := ctx.GetInput(&input); err != nil {
 		return nil, err
+	}
+
+	if err := validateInput(input); err != nil {
+		return nil, fmt.Errorf("invalid input to PessimisticWriteToSpiceDBAndKube: %w", err)
 	}
 
 	// this is hardcoded for namespaces for now; should be configurable and
 	// come from the workflow input
 	spiceDBRelationship := SpiceDBNamespaceRel(input)
 	clusterRelationship := SpiceDBClusterRel(input)
-	lockTuple := LockRel(input, string(ctx.ID))
+	lockTuple := LockRel(input, ctx.ID())
 
 	// tuples to remove when the workflow is complete.
 	// in some cases we will roll back the input, in all cases we remove
@@ -113,7 +112,7 @@ func (s *Server) PessimisticWriteToSpiceDBAndKube(ctx *task.OrchestrationContext
 	rollback := NewRollbackRelationships(lockTuple)
 
 	var resp v1.WriteRelationshipsResponse
-	if err := ctx.CallActivity(WriteToSpiceDB, task.WithActivityInput(&v1.WriteRelationshipsRequest{
+	if err := executor.Call(WriteToSpiceDB, &v1.WriteRelationshipsRequest{
 		OptionalPreconditions: []*v1.Precondition{{
 			Operation: v1.Precondition_OPERATION_MUST_NOT_MATCH,
 			Filter: &v1.RelationshipFilter{
@@ -144,11 +143,11 @@ func (s *Server) PessimisticWriteToSpiceDBAndKube(ctx *task.OrchestrationContext
 			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
 			Relationship: clusterRelationship,
 		}},
-	})).Await(&resp); err != nil {
+	}).Await(&resp); err != nil {
 		// request failed for some reason
 		fmt.Println("spicedb write failed", err)
 
-		rollback.WithRels(spiceDBRelationship, clusterRelationship).Cleanup(ctx)
+		rollback.WithRels(spiceDBRelationship, clusterRelationship).Cleanup(executor)
 
 		// if the spicedb write fails, report it as a kube conflict error
 		// we return this for any error, not just lock conflicts, so that the
@@ -167,11 +166,11 @@ func (s *Server) PessimisticWriteToSpiceDBAndKube(ctx *task.OrchestrationContext
 	for i := 0; i <= MaxKubeAttempts; i++ {
 		// Attempt to write to kube
 		var out KubeResp
-		if err := ctx.CallActivity(WriteToKube, task.WithActivityInput(&KubeReqInput{
+		if err := executor.Call(WriteToKube, &KubeReqInput{
 			RequestInfo: input.RequestInfo,
 			ObjectMeta:  input.ObjectMeta,
 			Body:        input.Body,
-		})).Await(&out); err != nil {
+		}).Await(&out); err != nil {
 			// didn't get a response from kube, try again
 			fmt.Println("kube write failed", err, out)
 			time.Sleep(backoff.Step())
@@ -185,23 +184,35 @@ func (s *Server) PessimisticWriteToSpiceDBAndKube(ctx *task.OrchestrationContext
 		}
 
 		if out.StatusCode == http.StatusConflict || out.StatusCode == http.StatusCreated {
-			rollback.Cleanup(ctx)
+			rollback.Cleanup(executor)
 			return out, nil
 		}
 
 		// some other status code is some other type of error, remove
 		// the original tuple and the lock tuple
-		rollback.WithRels(spiceDBRelationship, clusterRelationship).Cleanup(ctx)
+		rollback.WithRels(spiceDBRelationship, clusterRelationship).Cleanup(executor)
 		return out, nil
 	}
-	rollback.WithRels(spiceDBRelationship, clusterRelationship).Cleanup(ctx)
+	rollback.WithRels(spiceDBRelationship, clusterRelationship).Cleanup(executor)
 	return nil, fmt.Errorf("failed to communicate with kubernetes after %d attempts", MaxKubeAttempts)
+}
+
+func validateInput(input CreateObjInput) error {
+	if input.UserInfo.GetName() == "" {
+		return fmt.Errorf("missing user info in CreateObjectInput")
+	}
+
+	if input.ObjectMeta.Name == "" {
+		return fmt.Errorf("missing object meta in CreateObjectInput")
+	}
+
+	return nil
 }
 
 // OptimisticWriteToSpiceDBAndKube ensures that a write exists in both SpiceDB and kube,
 // or neither. It attempts to perform the writes and rolls back if errors are
 // encountered, leaving the user to retry on write conflicts.
-func (s *Server) OptimisticWriteToSpiceDBAndKube(ctx *task.OrchestrationContext) (any, error) {
+func OptimisticWriteToSpiceDBAndKube(ctx IdentifiableExecutionInput, executor TaskExecutor) (any, error) {
 	var input CreateObjInput
 	if err := ctx.GetInput(&input); err != nil {
 		return nil, err
@@ -216,7 +227,7 @@ func (s *Server) OptimisticWriteToSpiceDBAndKube(ctx *task.OrchestrationContext)
 	rollback := NewRollbackRelationships(spiceDBRelationship, clusterRelationship)
 
 	var resp v1.WriteRelationshipsResponse
-	if err := ctx.CallActivity(WriteToSpiceDB, task.WithActivityInput(&v1.WriteRelationshipsRequest{
+	if err := executor.Call(WriteToSpiceDB, &v1.WriteRelationshipsRequest{
 		Updates: []*v1.RelationshipUpdate{{
 			Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
 			Relationship: spiceDBRelationship,
@@ -224,35 +235,35 @@ func (s *Server) OptimisticWriteToSpiceDBAndKube(ctx *task.OrchestrationContext)
 			Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
 			Relationship: clusterRelationship,
 		}},
-	})).Await(&resp); err != nil {
-		rollback.Cleanup(ctx)
+	}).Await(&resp); err != nil {
+		rollback.Cleanup(executor)
 		fmt.Println("WRITE ERR", err)
 		// report spicedb write errors as conflicts
 		return KubeConflict(err, input), nil
 	}
 
 	var out KubeResp
-	if err := ctx.CallActivity(WriteToKube, task.WithActivityInput(&KubeReqInput{
+	if err := executor.Call(WriteToKube, &KubeReqInput{
 		RequestInfo: input.RequestInfo,
 		ObjectMeta:  input.ObjectMeta,
 		Body:        input.Body,
-	})).Await(&out); err != nil {
+	}).Await(&out); err != nil {
 		// if there's an error, might need to roll back the spicedb write
 
 		// check if object exists - we might have failed the write task but
 		// succeeded in writing to kube
 		var exists bool
-		if err := ctx.CallActivity(CheckKube, task.WithActivityInput(&KubeReqInput{
+		if err := executor.Call(CheckKube, &KubeReqInput{
 			RequestInfo: input.RequestInfo,
 			ObjectMeta:  input.ObjectMeta,
 			Body:        input.Body,
-		})).Await(&exists); err != nil {
+		}).Await(&exists); err != nil {
 			return nil, err
 		}
 
 		// if the object doesn't exist, clean up the spicedb write
 		if !exists {
-			rollback.Cleanup(ctx)
+			rollback.Cleanup(executor)
 			return nil, err
 		}
 	}
