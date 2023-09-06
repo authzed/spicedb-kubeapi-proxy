@@ -22,6 +22,7 @@ const (
 	lockRelationName                 = "workflow"
 	workflowResourceType             = "workflow"
 	MaxKubeAttempts                  = 5
+	DefaultLockMode                  = PessimisticWriteToSpiceDBAndKube
 	OptimisticWriteToSpiceDBAndKube  = "OptimisticWriteToSpiceDBAndKube"
 	PessimisticWriteToSpiceDBAndKube = "PessimisticWriteToSpiceDBAndKube"
 	WriteToSpiceDB                   = "WriteToSpiceDBActivity"

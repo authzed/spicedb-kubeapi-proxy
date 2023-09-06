@@ -26,7 +26,15 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 )
 
-func (s *Server) WithAuthorization(handler, failed http.Handler, watchClient v1.WatchServiceClient, taskHubClient backend.TaskHubClient) http.Handler {
+func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, taskHubClient backend.TaskHubClient, lockMode *string) (http.Handler, error) {
+	if *lockMode == "" {
+		return nil, fmt.Errorf("lock mode is undefined")
+	}
+
+	if !(*lockMode == PessimisticWriteToSpiceDBAndKube || *lockMode == OptimisticWriteToSpiceDBAndKube) {
+		return nil, fmt.Errorf("unexpected lock mode: %s", *lockMode)
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -67,7 +75,7 @@ func (s *Server) WithAuthorization(handler, failed http.Handler, watchClient v1.
 				return
 			}
 
-			id, err := taskHubClient.ScheduleNewOrchestration(ctx, s.LockMode, api.WithInput(CreateObjInput{
+			id, err := taskHubClient.ScheduleNewOrchestration(ctx, *lockMode, api.WithInput(CreateObjInput{
 				RequestInfo: requestInfo,
 				UserInfo:    userInfo.(*user.DefaultInfo),
 				ObjectMeta:  &pom.ObjectMeta,
@@ -130,7 +138,7 @@ func (s *Server) WithAuthorization(handler, failed http.Handler, watchClient v1.
 			requestInfo.APIGroup == "" &&
 			requestInfo.Name != "" {
 			go func() {
-				cr, err := s.SpiceDBClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
+				cr, err := permissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
 					Consistency: &v1.Consistency{
 						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 					},
@@ -173,7 +181,7 @@ func (s *Server) WithAuthorization(handler, failed http.Handler, watchClient v1.
 			requestInfo.APIGroup == "" {
 
 			go func() {
-				lr, err := s.SpiceDBClient.LookupResources(ctx, &v1.LookupResourcesRequest{
+				lr, err := permissionsClient.LookupResources(ctx, &v1.LookupResourcesRequest{
 					Consistency: &v1.Consistency{
 						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 					},
@@ -246,7 +254,7 @@ func (s *Server) WithAuthorization(handler, failed http.Handler, watchClient v1.
 					for _, u := range resp.Updates {
 						if u.Operation == v1.RelationshipUpdate_OPERATION_TOUCH || u.Operation == v1.RelationshipUpdate_OPERATION_CREATE {
 							// do a check
-							cr, err := s.SpiceDBClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
+							cr, err := permissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
 								Consistency: &v1.Consistency{
 									Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
 									// TODO
@@ -284,7 +292,7 @@ func (s *Server) WithAuthorization(handler, failed http.Handler, watchClient v1.
 		req = req.WithContext(WithAuthzData(req.Context(), &authzData))
 
 		handler.ServeHTTP(w, req)
-	})
+	}), nil
 }
 
 type requestAuthzData int
@@ -420,6 +428,8 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 		filtered, err = d.FilterObject(pom.ToPartialObjectMetadata(), body)
 	}
 
+	// FIXME we are not returning the err here, and if added, no e2e test passes because "FilterObject"
+	// returns "unauthorized" error
 	if err != nil {
 		fmt.Println(err)
 	}

@@ -7,3 +7,4 @@ proxy.key
 *__failpoint_*.go
 *.go__failpoint*
 *.sqlite
+magefiles/mage_output_file.go
