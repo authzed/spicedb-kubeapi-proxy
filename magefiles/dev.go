@@ -45,7 +45,7 @@ const (
 	generatedKubeConfigPath = "proxy.kubeconfig"
 )
 
-// Up brings up a dev cluster with the proxy installed
+// Up brings up a dev cluster with the proxy installed.
 func (Dev) Up(ctx context.Context) error {
 	var proxyHostPort int32
 	if _, err := os.Stat(kubeconfigPath); err != nil {
@@ -79,7 +79,7 @@ func (Dev) Up(ctx context.Context) error {
 	return sh.RunV("kustomizer", "apply", "inventory", "spicedb-kubeapi-proxy", "-k", "./deploy", "--prune", "--wait")
 }
 
-// Clean deletes the dev stack cluster
+// Clean deletes the dev stack cluster.
 func (d Dev) Clean() error {
 	provider := kind.NewProvider(
 		kind.ProviderWithLogger(cmd.NewLogger()),

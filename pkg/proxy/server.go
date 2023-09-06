@@ -11,7 +11,11 @@ import (
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/backend/sqlite"
+	"github.com/microsoft/durabletask-go/task"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -22,24 +26,73 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/server"
 	genericfilters "k8s.io/apiserver/pkg/server/filters"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/klog/v2"
 )
 
 type Server struct {
-	opts    Options
-	Handler http.Handler
+	opts          Options
+	Handler       http.Handler
+	TaskHubWorker backend.TaskHubWorker
+	SpiceDBClient v1.PermissionsServiceClient
+	KubeClient    *kubernetes.Clientset
+
+	// LockMode references the name of the workflow to run for dual writes
+	// This is very temporary, and should be replaced with per-request
+	// configuration.
+	LockMode string
 }
 
 func NewServer(ctx context.Context, o Options) (*Server, error) {
-	s := &Server{opts: o}
+	s := &Server{
+		opts:     o,
+		LockMode: PessimisticWriteToSpiceDBAndKube,
+	}
 
-	conn, err := o.SpicedbServer.GRPCDialContext(ctx, grpc.WithInsecure())
+	conn, err := o.SpicedbServer.GRPCDialContext(ctx, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
-	spicedbClient := v1.NewPermissionsServiceClient(conn)
+	s.SpiceDBClient = v1.NewPermissionsServiceClient(conn)
 	watchClient := v1.NewWatchServiceClient(conn)
+
+	restConfig, err := clientcmd.NewDefaultClientConfig(*s.opts.BackendConfig, nil).ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+	s.KubeClient, err = kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// durabletask - stores planned dual writes in a sqlite db
+	logger := backend.DefaultLogger()
+	r := task.NewTaskRegistry()
+	if err := r.AddOrchestratorN(PessimisticWriteToSpiceDBAndKube, s.PessimisticWriteToSpiceDBAndKube); err != nil {
+		return nil, err
+	}
+	if err := r.AddOrchestratorN(OptimisticWriteToSpiceDBAndKube, s.OptimisticWriteToSpiceDBAndKube); err != nil {
+		return nil, err
+	}
+	if err := r.AddActivityN(WriteToSpiceDB, s.WriteToSpiceDB); err != nil {
+		return nil, err
+	}
+	if err := r.AddActivityN(WriteToKube, s.WriteToKube); err != nil {
+		return nil, err
+	}
+	if err := r.AddActivityN(CheckKube, s.CheckKube); err != nil {
+		return nil, err
+	}
+
+	// note: can use the in-memory sqlite provider by specifying ""
+	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(""), logger)
+	executor := task.NewTaskExecutor(r)
+	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
+	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
+	s.TaskHubWorker = backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
+	taskHubClient := backend.NewTaskHubClient(be)
 
 	mux := http.NewServeMux()
 
@@ -93,7 +146,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	codecs := serializer.NewCodecFactory(scheme)
 	failHandler := genericapifilters.Unauthorized(codecs)
 
-	handler := withAuthorization(clusterProxy, failHandler, spicedbClient, watchClient)
+	handler := s.WithAuthorization(clusterProxy, failHandler, watchClient, taskHubClient)
 	handler = withAuthentication(handler, failHandler, s.opts.AuthenticationInfo.Authenticator)
 	handler = genericapifilters.WithRequestInfo(handler, requestInfoResolver)
 	handler = genericfilters.WithHTTPLogging(handler)
@@ -108,9 +161,18 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 
 func (s *Server) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
+
+	// TODO: errgroup
+
 	go func() {
 		if err := s.opts.SpicedbServer.Run(ctx); err != nil {
 			klog.FromContext(ctx).Error(err, "failed to run spicedb")
+			cancel()
+		}
+	}()
+	go func() {
+		if err := s.TaskHubWorker.Start(ctx); err != nil {
+			klog.FromContext(ctx).Error(err, "failed to run durable task worker")
 			cancel()
 		}
 	}()
@@ -120,6 +182,12 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	<-doneCh
+
+	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+	if err := s.TaskHubWorker.Shutdown(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

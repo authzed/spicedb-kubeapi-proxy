@@ -4,3 +4,6 @@
 client-ca.crt
 proxy.crt
 proxy.key
+*__failpoint_*.go
+*.go__failpoint*
+*.sqlite

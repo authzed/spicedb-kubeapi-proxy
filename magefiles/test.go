@@ -9,17 +9,17 @@ import (
 
 type Test mg.Namespace
 
-// Unit runs the unit tests
+// Unit runs the unit tests.
 func (Test) Unit() error {
 	return RunSh("go", WithV())("test", "./...")
 }
 
-// E2e runs the end-to-end tests against a real apiserver
+// E2e runs the end-to-end tests against a real apiserver.
 func (Test) E2e() error {
 	return RunSh("go", Tool())(
 		"run",
 		"github.com/onsi/ginkgo/v2/ginkgo",
-		"--tags=e2e",
+		"--tags=e2e,failpoints",
 		"-r",
 		"-vv",
 		"--fail-fast",

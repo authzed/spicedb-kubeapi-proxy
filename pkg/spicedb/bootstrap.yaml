@@ -2,9 +2,14 @@ schema: |-
   definition cluster {}
   definition user {}
   definition namespace {
+    relation cluster: cluster
     relation creator: user
     relation viewer: user
     permission view = viewer + creator
   }
+  definition lock {
+    relation workflow: workflow
+  }
+  definition workflow {}
 relationships: |
   namespace:kube-system#viewer@user:rakis

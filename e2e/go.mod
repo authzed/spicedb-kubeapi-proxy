@@ -5,12 +5,18 @@ go 1.20
 replace github.com/authzed/spicedb-kubeapi-proxy => ../
 
 require (
+	github.com/authzed/authzed-go v0.9.1-0.20230810180432-2fb0fd4c66dd
+	github.com/authzed/spicedb v1.24.1-0.20230821163419-e4bb3adfd50b
 	github.com/authzed/spicedb-kubeapi-proxy v0.0.0-00010101000000-000000000000
 	github.com/go-logr/zapr v1.2.4
 	github.com/onsi/ginkgo/v2 v2.11.0
 	github.com/onsi/gomega v1.27.10
+	github.com/samber/lo v1.38.1
 	github.com/spf13/afero v1.9.5
 	go.uber.org/zap v1.24.0
+	k8s.io/api v0.28.0
+	k8s.io/apimachinery v0.28.0
+	k8s.io/apiserver v0.28.0
 	k8s.io/client-go v0.28.0
 	sigs.k8s.io/controller-runtime v0.15.1
 	sigs.k8s.io/controller-runtime/tools/setup-envtest v0.0.0-20230817155522-304027bcbe4b
@@ -30,11 +36,9 @@ require (
 	github.com/NYTimes/gziphandler v1.1.1 // indirect
 	github.com/antlr/antlr4/runtime/Go/antlr/v4 v4.0.0-20230305170008-8188dc5388df // indirect
 	github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a // indirect
-	github.com/authzed/authzed-go v0.9.1-0.20230810180432-2fb0fd4c66dd // indirect
 	github.com/authzed/cel-go v0.17.5 // indirect
 	github.com/authzed/consistent v0.1.0 // indirect
 	github.com/authzed/grpcutil v0.0.0-20230703173955-bdd0ac3f16a5 // indirect
-	github.com/authzed/spicedb v1.24.1-0.20230821163419-e4bb3adfd50b // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
@@ -112,15 +116,18 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/jzelinskie/cobrautil/v2 v2.0.0-20230714172849-80717639cec5 // indirect
 	github.com/jzelinskie/stringz v0.0.2 // indirect
+	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
 	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
 	github.com/lthibault/jitterbug v2.0.0+incompatible // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
+	github.com/marusama/semaphore/v2 v2.5.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
+	github.com/microsoft/durabletask-go v0.3.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/moby/sys/mountinfo v0.6.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -140,9 +147,9 @@ require (
 	github.com/prometheus/client_model v0.4.0 // indirect
 	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.11.0 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/cors v1.9.0 // indirect
 	github.com/rs/zerolog v1.29.1 // indirect
-	github.com/samber/lo v1.38.1 // indirect
 	github.com/scylladb/go-set v1.0.2 // indirect
 	github.com/sean-/sysexits v1.0.0 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
@@ -199,10 +206,7 @@ require (
 	gopkg.in/square/go-jose.v2 v2.6.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/api v0.28.0 // indirect
 	k8s.io/apiextensions-apiserver v0.27.2 // indirect
-	k8s.io/apimachinery v0.28.0 // indirect
-	k8s.io/apiserver v0.28.0 // indirect
 	k8s.io/cloud-provider v0.0.0 // indirect
 	k8s.io/cluster-bootstrap v0.0.0 // indirect
 	k8s.io/component-base v0.28.0 // indirect
@@ -217,6 +221,16 @@ require (
 	k8s.io/mount-utils v0.0.0 // indirect
 	k8s.io/pod-security-admission v0.0.0 // indirect
 	k8s.io/utils v0.0.0-20230406110748-d93618cff8a2 // indirect
+	lukechampine.com/uint128 v1.2.0 // indirect
+	modernc.org/cc/v3 v3.40.0 // indirect
+	modernc.org/ccgo/v3 v3.16.13 // indirect
+	modernc.org/libc v1.22.5 // indirect
+	modernc.org/mathutil v1.5.0 // indirect
+	modernc.org/memory v1.5.0 // indirect
+	modernc.org/opt v0.1.3 // indirect
+	modernc.org/sqlite v1.22.1 // indirect
+	modernc.org/strutil v1.1.3 // indirect
+	modernc.org/token v1.0.1 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.1.2 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.3.0 // indirect
