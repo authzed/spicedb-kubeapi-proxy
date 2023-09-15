@@ -113,7 +113,7 @@ var _ = Describe("Proxy", func() {
 				Expect(chaniList).To(ContainElement(chaniNamespace))
 			})
 
-			It("cleans up dual writes on kube failures", func(ctx context.Context) {
+			It("recovers when there are kube failures", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 
@@ -125,21 +125,22 @@ var _ = Describe("Proxy", func() {
 				} else {
 					failpoints.EnableFailPoint("panicKubeWrite", 1)
 				}
-				Expect(CreateNamespace(ctx, chaniClient, chaniNamespace)).ToNot(BeNil())
+				// Chani's write panics, but is retried
+				Expect(CreateNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
 
-				// paul creates chani's namespace
-				Expect(CreateNamespace(ctx, paulClient, chaniNamespace)).To(Succeed())
+				// paul isn't able to create chanis namespace
+				Expect(CreateNamespace(ctx, paulClient, chaniNamespace)).ToNot(BeNil())
 
-				// paul can get both namespaces
+				// paul can only get his namespace
 				Expect(GetNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
-				Expect(GetNamespace(ctx, paulClient, chaniNamespace)).To(Succeed())
+				Expect(GetNamespace(ctx, paulClient, chaniNamespace)).ToNot(BeNil())
 
-				// chani can't get her namespace - this indicates the spicedb write was rolled back
-				// from the failed dual write above
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+				// chani can get her namespace - this indicates the workflow was retried and eventually succeeded
+				Expect(GetNamespace(ctx, chaniClient, paulNamespace)).ToNot(BeNil())
+				Expect(GetNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
 			})
 
-			It("recovers dual writes when kube write succeeds but crashes", func(ctx context.Context) {
+			It("recovers when kube write succeeds but crashes", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 
@@ -179,34 +180,30 @@ var _ = Describe("Proxy", func() {
 				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
 			})
 
-			It("recovers dual writes when there are spicedb write failures", func(ctx context.Context) {
+			It("recovers when there are spicedb write failures", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 
-				// make spicedb write crash on chani's namespace write
+				// make spicedb write crash on chani's namespace write, eventually succeeds
 				failpoints.EnableFailPoint("panicWriteSpiceDB", 1)
-				Expect(CreateNamespace(ctx, chaniClient, chaniNamespace)).ToNot(BeNil())
+				Expect(CreateNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
 
-				// paul creates chani's namespace so that the namespace exists
-				Expect(CreateNamespace(ctx, paulClient, chaniNamespace)).To(Succeed())
+				// paul is unable to create chani's namespace as it's already claimed
+				Expect(CreateNamespace(ctx, paulClient, chaniNamespace)).ToNot(BeNil())
 
-				// check that chani can't get her namespace, indirectly showing
-				// that the spicedb write was rolled back
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+				// Check Chani is able to get namespace
+				Expect(GetNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
 
-				// confirm the relationship doesn't exist
+				// confirm the relationship exists
 				Expect(len(GetAllTuples(ctx, &v1.RelationshipFilter{
 					ResourceType:          "namespace",
 					OptionalResourceId:    chaniNamespace,
 					OptionalRelation:      "creator",
 					OptionalSubjectFilter: &v1.SubjectFilter{SubjectType: "user", OptionalSubjectId: "chani"},
-				}))).To(BeZero())
-
-				// confirm paul can get the namespace
-				Expect(GetNamespace(ctx, paulClient, chaniNamespace)).To(Succeed())
+				}))).ToNot(BeZero())
 			})
 
-			It("recovers dual writes when spicedb write succeeds but crashes", func(ctx context.Context) {
+			It("recovers when spicedb write succeeds but crashes", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 

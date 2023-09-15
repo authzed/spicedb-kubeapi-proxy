@@ -29,8 +29,9 @@ import (
 )
 
 const (
-	defaultDurableTaskDatabasePath = "/tmp/dtx.sqlite"
-	EmbeddedSpiceDBEndpoint        = "embedded://"
+	defaultWorkflowDatabasePath = "/tmp/dtx.sqlite"
+	EmbeddedSpiceDBEndpoint     = "embedded://"
+	defaultDialerTimeout        = 5 * time.Second
 )
 
 type Options struct {
@@ -55,8 +56,8 @@ type Options struct {
 	skipVerifyCA      bool
 	token             string
 
-	DurableTaskDatabasePath string
-	LockMode                string
+	WorkflowDatabasePath string
+	LockMode             string
 }
 
 func NewOptions() *Options {
@@ -75,7 +76,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	o.SecureServing.AddFlags(fs)
 	o.Authentication.AddFlags(fs)
 	logsv1.AddFlags(o.Logs, fs)
-	fs.StringVar(&o.DurableTaskDatabasePath, "durabletask-database-path", defaultDurableTaskDatabasePath, "Path for the file representing the SQLite database used for the durable task engine.")
+	fs.StringVar(&o.WorkflowDatabasePath, "workflow-database-path", defaultWorkflowDatabasePath, "Path for the file representing the SQLite database used for the workflow engine.")
 	fs.StringVar(&o.BackendKubeconfigPath, "backend-kubeconfig", o.BackendKubeconfigPath, "The path to the kubeconfig to proxy connections to. It should authenticate the user with cluster-admin permission.")
 	fs.StringVar(&o.SpiceDBEndpoint, "spicedb-endpoint", "localhost:50051", "Defines the endpoint endpoint to the SpiceDB authorizing proxy operations. if embedded:// is specified, an in memory ephemeral instance created.")
 	fs.BoolVar(&o.insecure, "spicedb-insecure", false, "If set to true uses the insecure transport configuration for gRPC. Set to false by default.")
@@ -165,7 +166,7 @@ func (o *Options) Complete(ctx context.Context) error {
 		}
 		opts = append(opts, grpc.WithConnectParams(grpc.ConnectParams{Backoff: backoff.DefaultConfig}))
 
-		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		timeoutCtx, cancel := context.WithTimeout(ctx, defaultDialerTimeout)
 		defer cancel()
 		conn, err = grpc.DialContext(timeoutCtx, o.SpiceDBEndpoint, opts...)
 		if err != nil {
