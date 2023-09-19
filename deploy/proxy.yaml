@@ -1,5 +1,5 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   labels:
     app: spicedb-kubeapi-proxy
@@ -7,15 +7,11 @@ metadata:
   name: spicedb-kubeapi-proxy
   namespace: kube-system
 spec:
-  replicas: 1
+  serviceName: spicedb-kubeapi-proxy
+  replicas: 2
   selector:
     matchLabels:
       app: spicedb-kubeapi-proxy
-  strategy:
-    rollingUpdate:
-      maxSurge: 25%
-      maxUnavailable: 25%
-    type: RollingUpdate
   template:
     metadata:
       labels:
@@ -81,11 +77,19 @@ spec:
         - name: client-ca
           secret:
             secretName: rebac-proxy-request-client-ca
+  volumeClaimTemplates:
+    - metadata:
+        name: workflow-database
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 1Gi
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: rebac-proxy
+  name: spicedb-kubeapi-proxy
   namespace: kube-system
 spec:
   type: NodePort
