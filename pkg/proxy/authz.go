@@ -14,6 +14,8 @@ import (
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"github.com/cschleiden/go-workflows/client"
+	"github.com/google/uuid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -25,13 +27,10 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 )
 
-func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, scheduler distributedtx.TaskScheduler, lockMode *string) (http.Handler, error) {
-	if *lockMode == "" {
-		return nil, fmt.Errorf("lock mode is undefined")
-	}
-
-	if !(*lockMode == distributedtx.StrategyPessimisticWriteToSpiceDBAndKube || *lockMode == distributedtx.StrategyOptimisticWriteToSpiceDBAndKube) {
-		return nil, fmt.Errorf("unexpected lock mode: %s", *lockMode)
+func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient client.Client, lockMode *string) (http.Handler, error) {
+	workflow, err := distributedtx.WorkflowForLockMode(*lockMode)
+	if err != nil {
+		return nil, err
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -74,7 +73,9 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				return
 			}
 
-			id, err := scheduler.Schedule(ctx, *lockMode, &distributedtx.CreateObjInput{
+			id, err := workflowClient.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{
+				InstanceID: uuid.NewString(),
+			}, workflow, &distributedtx.CreateObjInput{
 				RequestInfo: requestInfo,
 				UserInfo:    userInfo.(*user.DefaultInfo),
 				ObjectMeta:  &pom.ObjectMeta,
@@ -85,7 +86,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				failed.ServeHTTP(w, req)
 				return
 			}
-			metadata, err := scheduler.WaitForCompletion(ctx, id)
+
+			resp, err := client.GetWorkflowResult[distributedtx.KubeResp](ctx, workflowClient, id, distributedtx.DefaultWorkflowTimeout)
 			if err != nil {
 				fmt.Println(err)
 				failed.ServeHTTP(w, req)
@@ -102,14 +104,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 			}))
 			close(allowed)
 
-			var resp distributedtx.KubeResp
-			if err := json.Unmarshal(metadata.SerializedOutput, &resp); err != nil {
-				fmt.Println(err)
-				failed.ServeHTTP(w, req)
-				return
-			}
 			// this can happen if there are un-recoverable failures in the
-			// durable fn execution
+			// workflow execution
 			if resp.Body == nil {
 				failed.ServeHTTP(w, req)
 				return

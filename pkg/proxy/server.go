@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/durabletask"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,10 +30,10 @@ import (
 )
 
 type Server struct {
-	opts       Options
-	Handler    http.Handler
-	TaskWorker durabletask.TaskWorker
-	KubeClient *kubernetes.Clientset
+	opts           Options
+	Handler        http.Handler
+	WorkflowWorker *distributedtx.Worker
+	KubeClient     *kubernetes.Clientset
 
 	// LockMode references the name of the workflow to run for dual writes
 	// This is very temporary, and should be replaced with per-request
@@ -42,15 +41,12 @@ type Server struct {
 	LockMode string
 }
 
-var defaultDistributedTransactionProvider = durabletask.Setup
-
 func NewServer(ctx context.Context, o Options) (*Server, error) {
 	s := &Server{
 		opts:     o,
 		LockMode: distributedtx.DefaultLockMode,
 	}
 
-	klog.FromContext(ctx).Info("starting durable task engine")
 	restConfig, err := clientcmd.NewDefaultClientConfig(*s.opts.BackendConfig, nil).ClientConfig()
 	if err != nil {
 		return nil, err
@@ -112,13 +108,16 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	codecs := serializer.NewCodecFactory(scheme)
 	failHandler := genericapifilters.Unauthorized(codecs)
 
-	scheduler, worker, err := defaultDistributedTransactionProvider(s.opts.PermissionsClient, s.KubeClient.RESTClient(), durabletask.MemorySQLite)
+	workflowClient, worker, err := distributedtx.SetupWithSQLiteBackend(ctx,
+		s.opts.PermissionsClient,
+		s.KubeClient.RESTClient(),
+		o.WorkflowDatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize distributed transaction handling: %w", err)
 	}
-	s.TaskWorker = worker
+	s.WorkflowWorker = worker
 
-	handler, err := WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, scheduler, &s.LockMode)
+	handler, err := WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, &s.LockMode)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
 	}
@@ -156,12 +155,12 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	go func() {
-		if err := s.TaskWorker.Start(ctx); err != nil {
-			klog.FromContext(ctx).Error(err, "failed to run durable task worker")
+		if err := s.WorkflowWorker.Start(ctx); err != nil {
+			klog.FromContext(ctx).Error(err, "failed to run workflow worker")
 			cancel()
 			return
 		}
-		klog.FromContext(ctx).Info("task hub worker started")
+		klog.FromContext(ctx).Info("workflow worker started")
 	}()
 	doneCh, _, err := s.opts.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
 	if err != nil {
@@ -172,7 +171,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
-	if err := s.TaskWorker.Shutdown(ctx); err != nil {
+	if err := s.WorkflowWorker.Shutdown(ctx); err != nil {
 		return err
 	}
 	return nil
