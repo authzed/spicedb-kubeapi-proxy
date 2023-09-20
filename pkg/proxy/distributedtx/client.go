@@ -2,9 +2,12 @@ package distributedtx
 
 import (
 	"context"
+	"log/slog"
+	"os"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/backend"
+	"github.com/cschleiden/go-workflows/backend/monoprocess"
 	"github.com/cschleiden/go-workflows/backend/sqlite"
 	"github.com/cschleiden/go-workflows/client"
 	"github.com/cschleiden/go-workflows/worker"
@@ -12,9 +15,13 @@ import (
 	"k8s.io/klog/v2"
 )
 
+const defaultLogLevel = slog.LevelDebug
+
 func SetupWithMemoryBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface) (client.Client, *Worker, error) {
 	ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("backend", "sqlite-memory"))
-	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewInMemoryBackend())
+	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewInMemoryBackend(backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: defaultLogLevel,
+	})))))
 }
 
 func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, sqlitePath string) (client.Client, *Worker, error) {
@@ -23,7 +30,9 @@ func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.Permissions
 	}
 
 	ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("backend", "sqlite-file"))
-	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewSqliteBackend(sqlitePath))
+	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewSqliteBackend(sqlitePath, backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: defaultLogLevel,
+	})))))
 }
 
 func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, backend backend.Backend) (client.Client, *Worker, error) {
@@ -33,7 +42,8 @@ func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServic
 		KubeClient:       kubeClient,
 	}
 
-	w := worker.New(backend, &worker.DefaultWorkerOptions)
+	monoBackend := monoprocess.NewMonoprocessBackend(backend)
+	w := worker.New(monoBackend, &worker.DefaultWorkerOptions)
 
 	if err := w.RegisterWorkflow(PessimisticWriteToSpiceDBAndKube); err != nil {
 		return nil, nil, err
@@ -51,7 +61,7 @@ func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServic
 		return nil, nil, err
 	}
 
-	return client.New(backend), &Worker{worker: w}, nil
+	return client.New(monoBackend), &Worker{worker: w}, nil
 }
 
 type Worker struct {

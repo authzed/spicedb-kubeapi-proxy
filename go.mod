@@ -24,7 +24,7 @@ require (
 	k8s.io/kubernetes v1.28.0
 )
 
-replace github.com/cschleiden/go-workflows => github.com/vroldanbet/go-workflows v0.0.0-20230918124723-368160933470
+replace github.com/cschleiden/go-workflows => github.com/vroldanbet/go-workflows v0.0.0-20230920154829-ec90b5bd4fd6
 
 require (
 	buf.build/gen/go/gogo/protobuf/protocolbuffers/go v1.31.0-20210810001428-4df00b267f94.1 // indirect

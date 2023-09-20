@@ -564,8 +564,8 @@ github.com/subosito/gotenv v1.4.2 h1:X1TuBLAMDFbaTAChgCBLu3DU3UPyELpnF2jjJ2cz/S8
 github.com/subosito/gotenv v1.4.2/go.mod h1:ayKnFf/c6rvx/2iiLrJUk1e6plDbT3edrFNGqEflhK0=
 github.com/tmc/grpc-websocket-proxy v0.0.0-20220101234140-673ab2c3ae75 h1:6fotK7otjonDflCTK0BCfls4SPy3NcCVb5dqqmbRknE=
 github.com/tmc/grpc-websocket-proxy v0.0.0-20220101234140-673ab2c3ae75/go.mod h1:KO6IkyS8Y3j8OdNO85qEYBsRPuteD+YciPomcXdrMnk=
-github.com/vroldanbet/go-workflows v0.0.0-20230918124723-368160933470 h1:WdvVQpO50vgrqrjTEYK0X0rUQgbLkAorA/NXzNGQav8=
-github.com/vroldanbet/go-workflows v0.0.0-20230918124723-368160933470/go.mod h1:ZOjusEe+7EAODZLR5PyvciQunZi7D9ebwlzaU+nqU/8=
+github.com/vroldanbet/go-workflows v0.0.0-20230920154829-ec90b5bd4fd6 h1:q5GbpKIFuK5veEV7FKC2Nw9AvOigse+8sUK94Hknywk=
+github.com/vroldanbet/go-workflows v0.0.0-20230920154829-ec90b5bd4fd6/go.mod h1:ZOjusEe+7EAODZLR5PyvciQunZi7D9ebwlzaU+nqU/8=
 github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb h1:zGWFAtiMcyryUHoUjUJX0/lt1H2+i2Ka2n+D3DImSNo=
 github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb/go.mod h1:N2zxlSyiKSe5eX1tZViRH5QA0qijqEDrYZiPEAiq3wU=
 github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 h1:EzJWgHovont7NscjpAxXsDA8S8BMYve8Y5+7cuRE7R0=
