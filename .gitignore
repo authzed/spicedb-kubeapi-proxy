@@ -1,9 +1,7 @@
 *.kubeconfig
 /testbin/
-/e2e/apiserver.local.config/
+/**/apiserver.local.config/
 client-ca.crt
-proxy.crt
-proxy.key
 *__failpoint_*.go
 *.go__failpoint*
 *.sqlite

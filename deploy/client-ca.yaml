@@ -1,0 +1,31 @@
+# This certificate will be used as CA authority for proxy clients
+# Any service talking directly to the proxy should have its own signed certificated
+# which is then used by the proxy to authenticate the client
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: spicedb-kubeapi-proxy-client-ca
+  namespace: spicedb-kubeapi-proxy
+spec:
+  isCA: true
+  commonName: spicedb-kubeapi-proxy
+  secretName: spicedb-kubeapi-proxy-client-ca-cert
+  duration: 17520h0m0s   # 2y
+  renewBefore: 8760h0m0s # 1y
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    name: spicedb-kubeapi-proxy-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: spicedb-kubeapi-proxy-client-ca-issuer
+  namespace: spicedb-kubeapi-proxy
+spec:
+  ca:
+    secretName: spicedb-kubeapi-proxy-client-ca-cert
