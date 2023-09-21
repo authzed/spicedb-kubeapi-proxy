@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -41,6 +42,7 @@ type Options struct {
 
 	BackendKubeconfigPath string
 	BackendConfig         *clientcmdapi.Config
+	OverrideUpstream      bool
 
 	CertDir string
 
@@ -77,6 +79,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	o.Authentication.AddFlags(fs)
 	logsv1.AddFlags(o.Logs, fs)
 	fs.StringVar(&o.WorkflowDatabasePath, "workflow-database-path", defaultWorkflowDatabasePath, "Path for the file representing the SQLite database used for the workflow engine.")
+	fs.BoolVar(&o.OverrideUpstream, "override-upstream", true, "if true, uses the environment to pick the upstream apiserver address instead of what is listed in --backend-kubeconfig. This simplifies kubeconfig management when running the proxy in the same cluster as the upstream.")
 	fs.StringVar(&o.BackendKubeconfigPath, "backend-kubeconfig", o.BackendKubeconfigPath, "The path to the kubeconfig to proxy connections to. It should authenticate the user with cluster-admin permission.")
 	fs.StringVar(&o.SpiceDBEndpoint, "spicedb-endpoint", "localhost:50051", "Defines the endpoint endpoint to the SpiceDB authorizing proxy operations. if embedded:// is specified, an in memory ephemeral instance created.")
 	fs.BoolVar(&o.insecure, "spicedb-insecure", false, "If set to true uses the insecure transport configuration for gRPC. Set to false by default.")
@@ -102,6 +105,16 @@ func (o *Options) Complete(ctx context.Context) error {
 		o.BackendConfig, err = clientcmd.LoadFromFile(o.BackendKubeconfigPath)
 		if err != nil {
 			return fmt.Errorf("couldn't load kubeconfig: %w", err)
+		}
+		// This uses the in-cluster config to get the URI
+		// In the future we may want options that use the full in-cluster config
+		// instead of requiring a kubeconfig.
+		if o.OverrideUpstream {
+			host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
+			addr := "https://" + net.JoinHostPort(host, port)
+			for i := range o.BackendConfig.Clusters {
+				o.BackendConfig.Clusters[i].Server = addr
+			}
 		}
 		klog.FromContext(ctx).WithValues("kubeconfig", o.BackendKubeconfigPath).Error(err, "loaded backend kube config")
 	}
