@@ -94,8 +94,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				break
 			}
 			writeRels := make([]*v1.Relationship, 0, len(r.Writes))
-			for _, c := range r.Writes {
-				rel, err := rules.ResolveRel(c, input)
+			for _, write := range r.Writes {
+				rel, err := rules.ResolveRel(write, input)
 				if err != nil {
 					failed.ServeHTTP(w, req)
 					return
@@ -145,8 +145,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				}
 				return p
 			}
-			for _, c := range r.Must {
-				rel, err := rules.ResolveRel(c, input)
+			for _, precondition := range r.Must {
+				rel, err := rules.ResolveRel(precondition, input)
 				if err != nil {
 					failed.ServeHTTP(w, req)
 					return
@@ -155,8 +155,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				p.Operation = v1.Precondition_OPERATION_MUST_MATCH
 				preconditions = append(preconditions, p)
 			}
-			for _, c := range r.MustNot {
-				rel, err := rules.ResolveRel(c, input)
+			for _, precondition := range r.MustNot {
+				rel, err := rules.ResolveRel(precondition, input)
 				if err != nil {
 					failed.ServeHTTP(w, req)
 					return
@@ -223,6 +223,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 			allowedNN:  map[types.NamespacedName]struct{}{},
 		}
 
+		authorizeGet(input, authzData)
+
 		if err := filter(ctx, matchingRules, input, authzData, permissionsClient, watchClient); err != nil {
 			failed.ServeHTTP(w, req)
 			return
@@ -281,86 +283,62 @@ func filter(ctx context.Context, matchingRules []*rules.RunnableRule, input *rul
 	// filter responses by fetching a list of allowed objects in parallel with
 	// the request
 	for _, r := range matchingRules {
-		for _, f := range r.Filter {
-			rel, err := rules.ResolveRel(f, input)
+		for _, f := range r.PreFilter {
+
+			rel, err := rules.ResolveRel(f.Rel, input)
 			if err != nil {
 				return err
 			}
 
+			filter := &rules.ResolvedPreFilter{
+				LookupType: f.LookupType,
+				Rel:        rel,
+				Name:       f.Name,
+				Namespace:  f.Namespace,
+			}
+
 			switch input.Request.Verb {
-			case "get":
-				filterGet(ctx, client, rel, input, authzData)
 			case "list":
-				filterList(ctx, client, rel, input, authzData)
+				filterList(ctx, client, filter, input, authzData)
 			case "watch":
-				filterWatch(ctx, client, watchClient, rel, input, authzData)
+				filterWatch(ctx, client, watchClient, filter, input, authzData)
 			}
 		}
 	}
 	return nil
 }
 
-func filterGet(ctx context.Context, client v1.PermissionsServiceClient, rel *rules.ResolvedRel, input *rules.ResolveInput, authzData *AuthzData) {
-	go func() {
-		cr, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
-			Consistency: &v1.Consistency{
-				Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
-			},
-			Resource: &v1.ObjectReference{
-				ObjectType: rel.ResourceType,
-				ObjectId:   rel.ResourceID,
-			},
-			Permission: rel.ResourceRelation,
-			Subject: &v1.SubjectReference{
-				Object: &v1.ObjectReference{
-					ObjectType: rel.SubjectType,
-					ObjectId:   rel.SubjectID,
-				},
-				OptionalRelation: rel.SubjectRelation,
-			},
-		})
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		fmt.Println(cr.Permissionship)
-		// TODO: this will mark an object that matches any filter as allowed, should
-		//   probably change to check all filters.
-		if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
-			// namespace requests have name and namespace set to the namespace,
-			// this normalizes it to match other cluster-scoped objects
-			namespace := input.Request.Namespace
-			if input.Request.Resource == "namespaces" {
-				namespace = ""
-			}
-			authzData.allowedNNC <- types.NamespacedName{Name: input.Request.Name, Namespace: namespace}
-		}
-		close(authzData.allowedNNC)
-	}()
-	go func() {
-		authzData.Lock()
-		defer authzData.Unlock()
-		for n := range authzData.allowedNNC {
-			authzData.allowedNN[n] = struct{}{}
-		}
-	}()
+func authorizeGet(input *rules.ResolveInput, authzData *AuthzData) {
+	if input.Request.Verb != "get" {
+		return
+	}
+	close(authzData.allowedNNC)
+	authzData.Lock()
+	defer authzData.Unlock()
+	// gets aren't really filtered, but we add them to the allowed list so that
+	// downstream can know it's passed all configured checks.
+	authzData.allowedNN[types.NamespacedName{Name: input.Request.Name, Namespace: normalizedNamespace(input.Request)}] = struct{}{}
 }
 
-func filterList(ctx context.Context, client v1.PermissionsServiceClient, rel *rules.ResolvedRel, input *rules.ResolveInput, authzData *AuthzData) {
+type wrapper struct {
+	Response *v1.LookupResourcesResponse `json:"response"`
+}
+
+func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
 	// TODO: filter should handle LS as well
 	go func() {
 		lr, err := client.LookupResources(ctx, &v1.LookupResourcesRequest{
 			Consistency: &v1.Consistency{
 				Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 			},
-			ResourceObjectType: rel.ResourceType,
-			Permission:         rel.ResourceRelation,
+			ResourceObjectType: filter.Rel.ResourceType,
+			Permission:         filter.Rel.ResourceRelation,
 			Subject: &v1.SubjectReference{
 				Object: &v1.ObjectReference{
-					ObjectType: rel.SubjectType,
-					ObjectId:   rel.SubjectID,
+					ObjectType: filter.Rel.SubjectType,
+					ObjectId:   filter.Rel.SubjectID,
 				},
-				OptionalRelation: rel.SubjectRelation,
+				OptionalRelation: filter.Rel.SubjectRelation,
 			},
 		})
 		if err != nil {
@@ -380,13 +358,35 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, rel *ru
 			// TODO: this will mark an object that matches any filter as allowed, should
 			//   probably change to check all filters.
 
-			// namespace requests have name and namespace set to the namespace,
-			// this normalizes it to match other cluster-scoped objects
-			namespace := input.Request.Namespace
-			if input.Request.Resource == "namespaces" {
+			byteIn, err := json.Marshal(wrapper{Response: resp})
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			var data any
+			if err := json.Unmarshal(byteIn, &data); err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			name, err := filter.Name.Search(data)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			if name == nil || len(name.(string)) == 0 {
+				return
+			}
+			namespace, err := filter.Namespace.Search(data)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			if namespace == nil {
 				namespace = ""
 			}
-			authzData.allowedNNC <- types.NamespacedName{Name: resp.ResourceObjectId, Namespace: namespace}
+
+			authzData.allowedNNC <- types.NamespacedName{Name: name.(string), Namespace: namespace.(string)}
 			fmt.Println("allowed", resp.ResourceObjectId)
 		}
 		close(authzData.allowedNNC)
@@ -400,10 +400,11 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, rel *ru
 	}()
 }
 
-func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, rel *rules.ResolvedRel, input *rules.ResolveInput, authzData *AuthzData) {
+func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
 	go func() {
+		// TODO: watch subjects if in subject mode
 		watchNs, err := watchClient.Watch(ctx, &v1.WatchRequest{
-			OptionalObjectTypes: []string{rel.ResourceType},
+			OptionalObjectTypes: []string{filter.Rel.ResourceType},
 		})
 		if err != nil {
 			fmt.Println(err)
@@ -430,17 +431,17 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 							// Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 						},
 						Resource: &v1.ObjectReference{
-							ObjectType: rel.ResourceType,
-							// TODO: how should this be specified in the filter spec?
+							ObjectType: filter.Rel.ResourceType,
+							// TODO: should swap out subject id if in subject mode
 							ObjectId: u.Relationship.Resource.ObjectId,
 						},
-						Permission: rel.ResourceRelation,
+						Permission: filter.Rel.ResourceRelation,
 						Subject: &v1.SubjectReference{
 							Object: &v1.ObjectReference{
-								ObjectType: rel.SubjectType,
-								ObjectId:   rel.SubjectID,
+								ObjectType: filter.Rel.SubjectType,
+								ObjectId:   filter.Rel.SubjectID,
 							},
-							OptionalRelation: rel.SubjectRelation,
+							OptionalRelation: filter.Rel.SubjectRelation,
 						},
 					})
 					if err != nil {
@@ -450,23 +451,27 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					// TODO: this will mark an object that matches any filter as allowed, should
 					//   probably change to check all filters.
 
-					// namespace requests have name and namespace set to the namespace,
-					// this normalizes it to match other cluster-scoped objects
-					namespace := input.Request.Namespace
-					if input.Request.Resource == "namespaces" {
-						namespace = ""
-					}
-
 					fmt.Println(u.Relationship.Resource.ObjectId, cr.Permissionship)
 					if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
 						fmt.Println("sending allowed name", u.Relationship.Resource.ObjectId)
-						authzData.allowedNNC <- types.NamespacedName{Name: u.Relationship.Resource.ObjectId, Namespace: namespace}
+						authzData.allowedNNC <- types.NamespacedName{Name: u.Relationship.Resource.ObjectId, Namespace: normalizedNamespace(input.Request)}
 					}
 				}
 			}
 		}
 		close(authzData.allowedNNC)
 	}()
+}
+
+// normalizedNamespace returns the namespace for the request. Namespace requests
+// have name and namespace set to the namespace, this normalizes it to match
+// other cluster-scoped objects
+func normalizedNamespace(info *request.RequestInfo) string {
+	namespace := info.Namespace
+	if info.Resource == "namespaces" {
+		namespace = ""
+	}
+	return namespace
 }
 
 type requestAuthzData int

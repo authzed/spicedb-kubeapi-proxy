@@ -157,8 +157,11 @@ match:
 - apiVersion: authzed.com/v1alpha1
   resource: spicedbclusters
   verbs: ["list"]
-filter:
-- tpl: "org:{{.metadata.labels.org}}#audit-cluster@user:{{.request.user}}"
+prefilter:
+- name: response.ResourceObjectID
+  namespace: request.Namespace
+  byResource:
+    tpl: "spicedbclusters:*#view@user:{{request.user}}"
 `,
 			expectRules: []Config{{
 				TypeMeta: v1alpha1ProxyRule,
@@ -187,8 +190,10 @@ filter:
 						Resource:     "spicedbclusters",
 						Verbs:        []string{"list"},
 					}},
-					Filter: []StringOrTemplate{{
-						Template: "org:{{.metadata.labels.org}}#audit-cluster@user:{{.request.user}}",
+					PreFilters: []PreFilter{{
+						Name:       "response.ResourceObjectID",
+						Namespace:  "request.Namespace",
+						ByResource: &StringOrTemplate{Template: "spicedbclusters:*#view@user:{{request.user}}"},
 					}},
 				},
 			}},

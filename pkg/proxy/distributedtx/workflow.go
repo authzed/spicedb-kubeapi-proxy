@@ -304,14 +304,6 @@ func resourceLockDoesNotExist(lockRel *v1.Relationship) *v1.Precondition {
 }
 
 func WorkflowForLockMode(lockMode string) (any, error) {
-	if lockMode == "" {
-		return nil, fmt.Errorf("lock mode is undefined")
-	}
-
-	if !(lockMode == StrategyPessimisticWriteToSpiceDBAndKube || lockMode == StrategyOptimisticWriteToSpiceDBAndKube) {
-		return nil, fmt.Errorf("unexpected lock mode: %s", lockMode)
-	}
-
 	f := PessimisticWriteToSpiceDBAndKube
 	if lockMode == StrategyOptimisticWriteToSpiceDBAndKube {
 		f = OptimisticWriteToSpiceDBAndKube

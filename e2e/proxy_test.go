@@ -87,10 +87,10 @@ var _ = Describe("Proxy", func() {
 
 		JustBeforeEach(func(ctx context.Context) {
 			// before every test, assert no access
-			Expect(k8serrors.IsNotFound(GetNamespace(ctx, paulClient, paulNamespace))).To(BeTrue())
-			Expect(k8serrors.IsNotFound(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
-			Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, paulNamespace))).To(BeTrue())
-			Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+			Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, paulNamespace))).To(BeTrue())
+			Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
+			Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, paulNamespace))).To(BeTrue())
+			Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
 		})
 
 		AssertDualWriteBehavior := func() {
@@ -104,8 +104,8 @@ var _ = Describe("Proxy", func() {
 				Expect(GetNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
 
 				// neither can get each other's namespace
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, paulNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, paulNamespace))).To(BeTrue())
 
 				// neither can see each other's namespace in the list
 				paulList := ListNamespaces(ctx, paulClient)
@@ -167,7 +167,7 @@ var _ = Describe("Proxy", func() {
 				Expect(k8serrors.IsConflict(err) || k8serrors.IsAlreadyExists(err)).To(BeTrue())
 
 				// Chani can't get her namespace - paul created it first and hasn't shared it
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
 			})
 
 			It("prevents ownership stealing when retrying second write", func(ctx context.Context) {
@@ -180,7 +180,7 @@ var _ = Describe("Proxy", func() {
 				Expect(k8serrors.IsConflict(err) || k8serrors.IsAlreadyExists(err)).To(BeTrue())
 
 				// Chani can't get her namespace - paul created it first and hasn't shared it
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
 			})
 
 			It("recovers when there are spicedb write failures", func(ctx context.Context) {
@@ -222,7 +222,7 @@ var _ = Describe("Proxy", func() {
 
 				// check that chani can't get her namespace, indirectly showing
 				// that the spicedb write was rolled back
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
 
 				// confirm the relationship doesn't exist
 				Expect(len(GetAllTuples(ctx, &v1.RelationshipFilter{
@@ -293,72 +293,74 @@ var _ = Describe("Proxy", func() {
 	})
 })
 
+var (
+	createNamespace = func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "namespaces",
+				Verbs:        []string{"create"},
+			}},
+			Writes: []proxyrule.StringOrTemplate{{
+				Template: "namespace:{{object.metadata.name}}#creator@user:{{user.Name}}",
+			}, {
+				Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
+			}},
+		}}
+	}
+
+	getNamespace = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "namespaces",
+				Verbs:        []string{"get"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "namespace:{{request.Name}}#view@user:{{user.Name}}",
+			}},
+		},
+	}
+
+	listWatchNamespace = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "namespaces",
+				Verbs:        []string{"list", "watch"},
+			}},
+			PreFilters: []proxyrule.PreFilter{{
+				Name:       "response.resource_object_id",
+				ByResource: &proxyrule.StringOrTemplate{Template: "namespace:*#view@user:{{user.Name}}"},
+			}},
+		},
+	}
+)
+
 func testOptimisticMatcher() rules.MapMatcher {
 	matcher, err := rules.NewMapMatcher([]proxyrule.Config{
-		{
-			Spec: proxyrule.Spec{
-				Locking: proxyrule.OptimisticLockMode,
-				Matches: []proxyrule.Match{{
-					GroupVersion: "v1",
-					Resource:     "namespaces",
-					Verbs:        []string{"create"},
-				}},
-				Writes: []proxyrule.StringOrTemplate{{
-					Template: "namespace:{{object.metadata.name}}#creator@user:{{user.Name}}",
-				}, {
-					Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
-				}},
-			},
-		},
-		{
-			Spec: proxyrule.Spec{
-				Matches: []proxyrule.Match{{
-					GroupVersion: "v1",
-					Resource:     "namespaces",
-					Verbs:        []string{"get", "list", "watch"},
-				}},
-				Filter: []proxyrule.StringOrTemplate{{
-					Template: "namespace:{{request.Name}}#view@user:{{user.Name}}",
-				}},
-			},
-		},
+		createNamespace(),
+		getNamespace,
+		listWatchNamespace,
 	})
 	Expect(err).To(Succeed())
 	return matcher
 }
 
 func testPessimisticMatcher() rules.MapMatcher {
+	pessimisticCreateNamespace := createNamespace()
+	pessimisticCreateNamespace.MustNot = []proxyrule.StringOrTemplate{{
+		Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
+	}}
+	pessimisticCreateNamespace.Locking = proxyrule.PessimisticLockMode
+
 	matcher, err := rules.NewMapMatcher([]proxyrule.Config{
-		{
-			Spec: proxyrule.Spec{
-				Locking: proxyrule.PessimisticLockMode,
-				Matches: []proxyrule.Match{{
-					GroupVersion: "v1",
-					Resource:     "namespaces",
-					Verbs:        []string{"create"},
-				}},
-				MustNot: []proxyrule.StringOrTemplate{{
-					Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
-				}},
-				Writes: []proxyrule.StringOrTemplate{{
-					Template: "namespace:{{object.metadata.name}}#creator@user:{{user.Name}}",
-				}, {
-					Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
-				}},
-			},
-		},
-		{
-			Spec: proxyrule.Spec{
-				Matches: []proxyrule.Match{{
-					GroupVersion: "v1",
-					Resource:     "namespaces",
-					Verbs:        []string{"get", "list", "watch"},
-				}},
-				Filter: []proxyrule.StringOrTemplate{{
-					Template: "namespace:{{request.Name}}#view@user:{{user.Name}}",
-				}},
-			},
-		},
+		pessimisticCreateNamespace,
+		getNamespace,
+		listWatchNamespace,
 	})
 	Expect(err).To(Succeed())
 	return matcher

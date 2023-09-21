@@ -181,12 +181,37 @@ func ResolveRel(expr *RelExpr, input *ResolveInput) (*ResolvedRel, error) {
 // RunnableRule is a set of checks, writes, and filters with fully compiled
 // expressions for building and matching relationships.
 type RunnableRule struct {
-	LockMode proxyrule.LockMode
-	Checks   []*RelExpr
-	Must     []*RelExpr
-	MustNot  []*RelExpr
-	Writes   []*RelExpr
-	Filter   []*RelExpr
+	LockMode  proxyrule.LockMode
+	Checks    []*RelExpr
+	Must      []*RelExpr
+	MustNot   []*RelExpr
+	Writes    []*RelExpr
+	PreFilter []*PreFilter
+}
+
+// LookupType defines whether an LR or LS request is made for a filter
+type LookupType uint8
+
+const (
+	LookupTypeResource = iota
+	LookupTypeSubject
+)
+
+// PreFilter defines a filter that returns values that will be used to filter
+// the name/namespace of the kube objects.
+type PreFilter struct {
+	LookupType
+	Name, Namespace *jmespath.JMESPath
+	Rel             *RelExpr
+}
+
+// ResolvedPreFilter contains a resolved Rel that determines how to make the
+// LR / LS request. Name and Namespace are still jmespath expressions because
+// the operate over the LR / LS response.
+type ResolvedPreFilter struct {
+	LookupType
+	Name, Namespace *jmespath.JMESPath
+	Rel             *ResolvedRel
 }
 
 // Compile creates a RunnableRule from a passed in config object. String
@@ -213,10 +238,42 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	runnable.Filter, err = compileStringOrObjTemplates(config.Filter)
-	if err != nil {
-		return nil, err
+	for _, f := range config.PreFilters {
+		name, err := jmespath.Compile(f.Name)
+		if err != nil {
+			return nil, err
+		}
+		if f.Namespace == "" {
+			// this will compile to the jmespath expression returning ""
+			f.Namespace = "''"
+		}
+		namespace, err := jmespath.Compile(f.Namespace)
+		if err != nil {
+			return nil, err
+		}
+		filter := &PreFilter{
+			Name:      name,
+			Namespace: namespace,
+		}
+		if f.ByResource != nil {
+			byResource, err := compileStringOrObjTemplates([]proxyrule.StringOrTemplate{*f.ByResource})
+			if err != nil {
+				return nil, err
+			}
+			filter.Rel = byResource[0]
+			filter.LookupType = LookupTypeResource
+		}
+		if f.BySubject != nil {
+			bySubject, err := compileStringOrObjTemplates([]proxyrule.StringOrTemplate{*f.BySubject})
+			if err != nil {
+				return nil, err
+			}
+			filter.Rel = bySubject[0]
+			filter.LookupType = LookupTypeSubject
+		}
+		runnable.PreFilter = append(runnable.PreFilter, filter)
 	}
+
 	return runnable, nil
 }
 

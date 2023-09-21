@@ -167,6 +167,9 @@ func TestCompile(t *testing.T) {
 		"request": {
           "user": "testUser",
           "group": "testGroup"
+        }, 
+        "response": {
+          "ResourceObjectID": "foo"
         }
 	}`)
 	var testData any
@@ -175,7 +178,7 @@ func TestCompile(t *testing.T) {
 	type result struct {
 		checks  []ResolvedRel
 		writes  []ResolvedRel
-		filters []ResolvedRel
+		filters []ResolvedPreFilter
 	}
 
 	mustSearch := func(path *jmespath.JMESPath) any {
@@ -194,6 +197,15 @@ func TestCompile(t *testing.T) {
 			if c.SubjectRelation != nil {
 				require.Equal(t, res[i].SubjectRelation, mustSearch(c.SubjectRelation))
 			}
+		}
+	}
+
+	requireFilterEqualUnderTestData := func(t *testing.T, filter []*PreFilter, res []ResolvedPreFilter) {
+		for i, f := range filter {
+			require.Equal(t, f.LookupType, res[i].LookupType)
+			require.Equal(t, mustSearch(res[i].Name), mustSearch(f.Name))
+			require.Equal(t, mustSearch(res[i].Namespace), mustSearch(f.Namespace))
+			requireEqualUnderTestData([]*RelExpr{f.Rel}, []ResolvedRel{*res[i].Rel})
 		}
 	}
 
@@ -242,7 +254,7 @@ func TestCompile(t *testing.T) {
 					SubjectType:      "user",
 					SubjectID:        "testUser",
 				}},
-				filters: []ResolvedRel{},
+				filters: []ResolvedPreFilter{},
 			},
 		},
 		{
@@ -257,16 +269,19 @@ func TestCompile(t *testing.T) {
 				Checks: []proxyrule.StringOrTemplate{{
 					Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{request.group}}#member",
 				}},
-				Filter: []proxyrule.StringOrTemplate{{
-					RelationshipTemplate: &proxyrule.RelationshipTemplate{
-						Resource: proxyrule.ObjectTemplate{
-							Type:     "wardles",
-							ID:       "{{metadata.name}}",
-							Relation: "view",
-						},
-						Subject: proxyrule.ObjectTemplate{
-							Type: "user",
-							ID:   "{{request.user}}",
+				PreFilters: []proxyrule.PreFilter{{
+					Name: "response.ResourceObjectID",
+					ByResource: &proxyrule.StringOrTemplate{
+						RelationshipTemplate: &proxyrule.RelationshipTemplate{
+							Resource: proxyrule.ObjectTemplate{
+								Type:     "wardles",
+								ID:       "*",
+								Relation: "view",
+							},
+							Subject: proxyrule.ObjectTemplate{
+								Type: "user",
+								ID:   "{{request.user}}",
+							},
 						},
 					},
 				}},
@@ -280,12 +295,17 @@ func TestCompile(t *testing.T) {
 					SubjectID:        "testGroup",
 					SubjectRelation:  "member",
 				}},
-				filters: []ResolvedRel{{
-					ResourceType:     "wardles",
-					ResourceID:       "testName",
-					ResourceRelation: "view",
-					SubjectType:      "user",
-					SubjectID:        "testUser",
+				filters: []ResolvedPreFilter{{
+					LookupType: LookupTypeResource,
+					Name:       jmespath.MustCompile("response.ResourceObjectID"),
+					Namespace:  jmespath.MustCompile("''"),
+					Rel: &ResolvedRel{
+						ResourceType:     "wardles",
+						ResourceID:       "*",
+						ResourceRelation: "view",
+						SubjectType:      "user",
+						SubjectID:        "testUser",
+					},
 				}},
 			},
 		},
@@ -297,7 +317,7 @@ func TestCompile(t *testing.T) {
 
 			requireEqualUnderTestData(got.Checks, tt.want.checks)
 			requireEqualUnderTestData(got.Writes, tt.want.writes)
-			requireEqualUnderTestData(got.Filter, tt.want.filters)
+			requireFilterEqualUnderTestData(t, got.PreFilter, tt.want.filters)
 		})
 	}
 }
@@ -328,16 +348,19 @@ func TestMapMatcherMatch(t *testing.T) {
 		Checks: []proxyrule.StringOrTemplate{{
 			Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{request.group}}#member",
 		}},
-		Filter: []proxyrule.StringOrTemplate{{
-			RelationshipTemplate: &proxyrule.RelationshipTemplate{
-				Resource: proxyrule.ObjectTemplate{
-					Type:     "wardles",
-					ID:       "{{metadata.name}}",
-					Relation: "view",
-				},
-				Subject: proxyrule.ObjectTemplate{
-					Type: "user",
-					ID:   "{{request.user}}",
+		PreFilters: []proxyrule.PreFilter{{
+			Name: "response.ResourceObjectID",
+			ByResource: &proxyrule.StringOrTemplate{
+				RelationshipTemplate: &proxyrule.RelationshipTemplate{
+					Resource: proxyrule.ObjectTemplate{
+						Type:     "wardles",
+						ID:       "*",
+						Relation: "view",
+					},
+					Subject: proxyrule.ObjectTemplate{
+						Type: "user",
+						ID:   "{{request.user}}",
+					},
 				},
 			},
 		}},
@@ -402,7 +425,7 @@ func TestMapMatcherMatch(t *testing.T) {
 			for _, r := range got {
 				totalCheck += len(r.Checks)
 				totalWrite += len(r.Writes)
-				totalFilter += len(r.Filter)
+				totalFilter += len(r.PreFilter)
 			}
 			require.Equal(t, tt.wantChecks, totalCheck)
 			require.Equal(t, tt.wantWrites, totalWrite)

@@ -75,8 +75,6 @@ func TestRemoteSpiceDB(t *testing.T) {
 }
 
 func TestRuleConfig(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-
 	opts := optionsForTesting(t)
 	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
@@ -89,7 +87,7 @@ func TestRuleConfig(t *testing.T) {
 		Verb:       "list",
 	})
 	require.Len(t, rules, 1)
-	require.Len(t, rules[0].Filter, 1)
+	require.Len(t, rules[0].PreFilter, 1)
 	require.Len(t, rules[0].Checks, 0)
 	require.Len(t, rules[0].Writes, 0)
 
@@ -102,8 +100,10 @@ match:
 - apiVersion: authzed.com/v1alpha1
   resource: spicedbclusters
   verbs: ["list"]
-filter:
-- tpl: "org:{{.metadata.labels.org}}#audit-cluster@user:{{request.user}}"
+prefilter:
+- name: .request.name
+  byResource:
+    tpl: "org:*#audit-cluster@user:{{request.user}}"
 `)
 	errConfigFile := path.Join(t.TempDir(), "rulesbad.yaml")
 	require.NoError(t, os.WriteFile(errConfigFile, errConfigBytes, 0o600))
@@ -111,7 +111,7 @@ filter:
 	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	opts.RuleConfigFile = errConfigFile
 	require.Empty(t, opts.Validate())
-	require.ErrorContains(t, opts.Complete(context.Background()), `error compiling resource id "{{.metadata.labels.org}}"`)
+	require.ErrorContains(t, opts.Complete(context.Background()), "SyntaxError")
 }
 
 func optionsForTesting(t *testing.T) *Options {
@@ -197,8 +197,10 @@ match:
 - apiVersion: authzed.com/v1alpha1
   resource: spicedbclusters 
   verbs: ["list"]
-filter:
-- tpl: "org:{{metadata.labels.org}}#audit-cluster@user:{{request.user}}"
+prefilter:
+- name: request.name
+  byResource:
+    tpl: "org:*#audit-cluster@user:{{request.user}}"
 `)
 	configFile := path.Join(t.TempDir(), "rules.yaml")
 	require.NoError(t, os.WriteFile(configFile, configBytes, 0o600))
