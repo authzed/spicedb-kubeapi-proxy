@@ -33,21 +33,20 @@ const (
 	kubeCfgClusterName            = "kind-" + clusterName
 	kubeconfigPath                = clusterName + ".kubeconfig"
 	developmentKubeConfigFileName = "dev.kubeconfig"
+
+	kubeContextLocalProxy      = "local"
+	kubeContextClusterProxy    = "proxy"
+	kubeContextUpstreamCluster = "admin"
 )
 
 // Run runs the proxy locally against the development cluster - requires dev:up
-func (d Dev) Run(_ context.Context) error {
+func (d Dev) Run() error {
 	return sh.RunV("go", "run",
 		"./cmd/spicedb-kubeapi-proxy/main.go",
 		"--bind-address=127.0.0.1",
 		"--secure-port=8443",
 		"--backend-kubeconfig", "spicedb-kubeapi-proxy.kubeconfig",
 		"--client-ca-file", "client-ca.crt",
-		"--requestheader-client-ca-file", "client-ca.crt",
-		"--requestheader-allowed-names", "rakis",
-		"--requestheader-extra-headers-prefix", "X-Remote-Extra-",
-		"--requestheader-group-headers", "X-Remote-Group",
-		"--requestheader-username-headers", "X-Remote-User",
 		"--spicedb-endpoint", "embedded://")
 }
 
@@ -88,10 +87,15 @@ func (d Dev) Up(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Printf("✅  development environment ready! example request: kubectl --kubeconfig $(pwd)/%s --context proxy get namespace\n", developmentKubeConfigFileName)
+	fmt.Println("✅  development environment ready! To talk to the proxy with kubectl:")
+	fmt.Printf("  export KUBECONFIG=$(pwd)/%s\n", developmentKubeConfigFileName)
+	fmt.Println("  kubectx proxy")
+	fmt.Println("  kubectl --context proxy get namespace")
 	fmt.Println("ℹ️ you can also run the proxy locally with:")
-	fmt.Println("👉 go run ./cmd/spicedb-kubeapi-proxy/main.go --bind-address=127.0.0.1 --secure-port=8443 --backend-kubeconfig $(pwd)/spicedb-kubeapi-proxy.kubeconfig --client-ca-file $(pwd)/client-ca.crt --requestheader-client-ca-file $(pwd)/client-ca.crt --requestheader-allowed-names rakis --requestheader-extra-headers-prefix X-Remote-Extra- --requestheader-group-headers X-Remote-Group --requestheader-username-headers X-Remote-User --spicedb-endpoint embedded://")
-	fmt.Println("👉 to target it: kubectl --insecure-skip-tls-verify --kubeconfig $(pwd)/dev.kubeconfig --context local get namespace")
+	fmt.Println("  go run ./cmd/spicedb-kubeapi-proxy/main.go --bind-address=127.0.0.1 --secure-port=8443 --backend-kubeconfig $(pwd)/spicedb-kubeapi-proxy.kubeconfig --client-ca-file $(pwd)/client-ca.crt --spicedb-endpoint embedded://")
+	fmt.Printf("  export KUBECONFIG=$(pwd)/%s\n", developmentKubeConfigFileName)
+	fmt.Println("  kubectx local")
+	fmt.Println("  kubectl --insecure-skip-tls-verify get namespace")
 	return nil
 }
 
@@ -114,7 +118,7 @@ func generateDevKubeconfig(ctx context.Context, proxyHost string) error {
 		return err
 	}
 
-	serverCACertBytes, err := getBytesFromSecretField(ctx, clientset, "spicedb-kubeapi-proxy", "spicedb-kubeapi-proxy-http-cert", "ca.crt")
+	serverCACertBytes, err := getBytesFromSecretField(ctx, clientset, "spicedb-kubeapi-proxy", "spicedb-kubeapi-proxy-server-cert", "ca.crt")
 	if err != nil {
 		return err
 	}
@@ -141,45 +145,41 @@ func generateDevKubeconfig(ctx context.Context, proxyHost string) error {
 		return err
 	}
 
-	const (
-		proxyCtxName = "proxy"
-		adminCtxName = "admin"
-	)
-
 	developmentKubeConfig := clientcmdapi.NewConfig()
 	proxyCluster := clientcmdapi.NewCluster()
 	proxyCluster.CertificateAuthorityData = serverCACertBytes
 	proxyCluster.Server = proxyHost
-	developmentKubeConfig.Clusters[proxyCtxName] = proxyCluster
+	developmentKubeConfig.Clusters[kubeContextClusterProxy] = proxyCluster
 	localCluster := clientcmdapi.NewCluster()
 	localCluster.CertificateAuthorityData = serverCACertBytes
 	localCluster.Server = "https://127.0.0.1:8443"
-	developmentKubeConfig.Clusters["local"] = localCluster
+	developmentKubeConfig.Clusters[kubeContextLocalProxy] = localCluster
 	user := clientcmdapi.NewAuthInfo()
 	user.ClientCertificateData = clientCertBytes
 	user.ClientKeyData = clientKeyBytes
-	developmentKubeConfig.AuthInfos[proxyCtxName] = user
+	developmentKubeConfig.AuthInfos[kubeContextClusterProxy] = user
 	kubeCtx := clientcmdapi.NewContext()
-	kubeCtx.Cluster = proxyCtxName
-	kubeCtx.AuthInfo = proxyCtxName
-	developmentKubeConfig.Contexts[proxyCtxName] = kubeCtx
-	developmentKubeConfig.CurrentContext = proxyCtxName
+	kubeCtx.Cluster = kubeContextClusterProxy
+	kubeCtx.AuthInfo = kubeContextClusterProxy
+	developmentKubeConfig.Contexts[kubeContextClusterProxy] = kubeCtx
+	developmentKubeConfig.CurrentContext = kubeContextClusterProxy
 	localCtx := clientcmdapi.NewContext()
-	localCtx.Cluster = "local"
-	localCtx.AuthInfo = proxyCtxName
-	developmentKubeConfig.Contexts["local"] = localCtx
+	localCtx.Cluster = kubeContextLocalProxy
+	localCtx.AuthInfo = kubeContextClusterProxy
+	developmentKubeConfig.Contexts[kubeContextLocalProxy] = localCtx
 
 	// add admin config to the same kubeconfig (easier to switch)
 	adminConfig, err := clientcmd.LoadFromFile(kubeconfigPath)
 	if err != nil {
 		return err
 	}
-	developmentKubeConfig.Clusters[adminCtxName] = adminConfig.Clusters[kubeCfgClusterName]
-	developmentKubeConfig.AuthInfos[adminCtxName] = adminConfig.AuthInfos[kubeCfgClusterName]
+
+	developmentKubeConfig.Clusters[kubeContextUpstreamCluster] = adminConfig.Clusters[kubeCfgClusterName]
+	developmentKubeConfig.AuthInfos[kubeContextUpstreamCluster] = adminConfig.AuthInfos[kubeCfgClusterName]
 	adminCtx := clientcmdapi.NewContext()
-	adminCtx.Cluster = adminCtxName
-	adminCtx.AuthInfo = adminCtxName
-	developmentKubeConfig.Contexts[adminCtxName] = adminCtx
+	adminCtx.Cluster = kubeContextUpstreamCluster
+	adminCtx.AuthInfo = kubeContextUpstreamCluster
+	developmentKubeConfig.Contexts[kubeContextUpstreamCluster] = adminCtx
 
 	if err := clientcmd.WriteToFile(*developmentKubeConfig, developmentKubeConfigFileName); err != nil {
 		return err

@@ -2,12 +2,12 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: spicedb-kubeapi-proxy-http-cert
+  name: spicedb-kubeapi-proxy-server-cert
   namespace: spicedb-kubeapi-proxy
 spec:
   isCA: false
   commonName: spicedb-kubeapi-proxy
-  secretName: spicedb-kubeapi-proxy-http-cert
+  secretName: spicedb-kubeapi-proxy-server-cert
   duration: 17520h0m0s   # 2y
   renewBefore: 8760h0m0s # 1y
   dnsNames:

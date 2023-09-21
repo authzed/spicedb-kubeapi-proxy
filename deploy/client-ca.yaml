@@ -10,8 +10,8 @@ spec:
   isCA: true
   commonName: spicedb-kubeapi-proxy
   secretName: spicedb-kubeapi-proxy-client-ca-cert
-  duration: 17520h0m0s   # 2y
-  renewBefore: 8760h0m0s # 1y
+  duration: 87600h0m0s   # 10y
+  renewBefore: 78840h0m0s # 9y
   privateKey:
     algorithm: ECDSA
     size: 256

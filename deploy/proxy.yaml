@@ -78,7 +78,7 @@ spec:
             secretName: rebac-proxy-kubeconfig
         - name: certs
           secret:
-            secretName: spicedb-kubeapi-proxy-http-cert
+            secretName: spicedb-kubeapi-proxy-server-cert
         - name: client-ca
           secret:
             secretName: spicedb-kubeapi-proxy-client-ca-cert

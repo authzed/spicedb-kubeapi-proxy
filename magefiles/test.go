@@ -11,8 +11,8 @@ type Test mg.Namespace
 
 // All runs both unit and e2e tests
 func (t Test) All() error {
-
 	mg.Deps(t.Unit, t.E2e)
+
 	return nil
 }
 
