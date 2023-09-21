@@ -1,0 +1,8 @@
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+  - gvr: authzed.com/v1alpha1/spicedbclusters
+    verbs: ["list"]
+filter:
+  - tpl: "org:{{metadata.labels.org}}#audit-cluster@user:{{request.user}}"

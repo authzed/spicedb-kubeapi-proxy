@@ -12,6 +12,7 @@ require (
 	github.com/cschleiden/go-workflows v0.16.2
 	github.com/dustin/go-humanize v1.0.1
 	github.com/google/uuid v1.3.0
+	github.com/jmespath/go-jmespath v0.4.0
 	github.com/spf13/cobra v1.7.0
 	github.com/spf13/pflag v1.0.6-0.20210604193023-d5e0c0615ace
 	github.com/stretchr/testify v1.8.4

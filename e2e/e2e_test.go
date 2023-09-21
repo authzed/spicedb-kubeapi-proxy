@@ -105,6 +105,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 
 	opts := proxy.NewOptions()
 	opts.BackendConfig = backendCfg
+	opts.RuleConfigFile = "rules.yaml"
 	opts.SecureServing.BindPort = port
 	opts.SpiceDBEndpoint = proxy.EmbeddedSpiceDBEndpoint
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
