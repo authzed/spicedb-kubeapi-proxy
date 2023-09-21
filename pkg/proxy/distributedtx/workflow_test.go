@@ -23,7 +23,7 @@ import (
 )
 
 func TestWorkflow(t *testing.T) {
-	for name, workflowFunc := range map[string]func(ctx workflow.Context, input *CreateObjInput) (*KubeResp, error){
+	for name, workflowFunc := range map[string]func(ctx workflow.Context, input *WriteObjInput) (*KubeResp, error){
 		StrategyPessimisticWriteToSpiceDBAndKube: PessimisticWriteToSpiceDBAndKube,
 		StrategyOptimisticWriteToSpiceDBAndKube:  OptimisticWriteToSpiceDBAndKube,
 	} {
@@ -66,11 +66,22 @@ func TestWorkflow(t *testing.T) {
 
 			id, err := workflowClient.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{
 				InstanceID: uuid.NewString(),
-			}, workflowFunc, &CreateObjInput{
+			}, workflowFunc, &WriteObjInput{
 				RequestInfo: &request.RequestInfo{},
 				UserInfo:    &user.DefaultInfo{Name: "janedoe"},
 				ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
-				Body:        []byte("{}"),
+				Rels: []*v1.Relationship{{
+					Resource: &v1.ObjectReference{
+						ObjectType: "namespace",
+						ObjectId:   "my_object_meta",
+					},
+					Relation: "creator",
+					Subject: &v1.SubjectReference{Object: &v1.ObjectReference{
+						ObjectType: "user",
+						ObjectId:   "janedoe",
+					}},
+				}},
+				Body: []byte("{}"),
 			})
 			require.NoError(t, err)
 

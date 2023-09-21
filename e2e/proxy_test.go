@@ -17,14 +17,17 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/failpoints"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
 var _ = Describe("Proxy", func() {
 	When("there are two users", func() {
 		var paulClient, chaniClient, adminClient kubernetes.Interface
 		var paulNamespace, chaniNamespace string
+		var lockMode proxyrule.LockMode
 
 		BeforeEach(func() {
 			paulRestConfig, err := clientcmd.NewDefaultClientConfig(
@@ -119,7 +122,7 @@ var _ = Describe("Proxy", func() {
 
 				// make kube write fail for chani's namespace, spicedb write will have
 				// succeeded
-				if proxySrv.LockMode == distributedtx.StrategyPessimisticWriteToSpiceDBAndKube {
+				if lockMode == proxyrule.PessimisticLockMode {
 					// the locking version retries if the connection fails
 					failpoints.EnableFailPoint("panicKubeWrite", distributedtx.MaxKubeAttempts+1)
 				} else {
@@ -276,16 +279,87 @@ var _ = Describe("Proxy", func() {
 
 		When("optimistic locking is used", func() {
 			BeforeEach(func() {
-				proxySrv.LockMode = distributedtx.StrategyOptimisticWriteToSpiceDBAndKube
+				*proxySrv.Matcher = testOptimisticMatcher()
 			})
 			AssertDualWriteBehavior()
 		})
 
 		When("pessimistic locking is used", func() {
 			BeforeEach(func() {
-				proxySrv.LockMode = distributedtx.StrategyPessimisticWriteToSpiceDBAndKube
+				*proxySrv.Matcher = testPessimisticMatcher()
 			})
 			AssertDualWriteBehavior()
 		})
 	})
 })
+
+func testOptimisticMatcher() rules.MapMatcher {
+	matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+		{
+			Spec: proxyrule.Spec{
+				Locking: proxyrule.OptimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "namespaces",
+					Verbs:        []string{"create"},
+				}},
+				Writes: []proxyrule.StringOrTemplate{{
+					Template: "namespace:{{object.metadata.name}}#creator@user:{{user.Name}}",
+				}, {
+					Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
+				}},
+			},
+		},
+		{
+			Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "namespaces",
+					Verbs:        []string{"get", "list", "watch"},
+				}},
+				Filter: []proxyrule.StringOrTemplate{{
+					Template: "namespace:{{request.Name}}#view@user:{{user.Name}}",
+				}},
+			},
+		},
+	})
+	Expect(err).To(Succeed())
+	return matcher
+}
+
+func testPessimisticMatcher() rules.MapMatcher {
+	matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+		{
+			Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "namespaces",
+					Verbs:        []string{"create"},
+				}},
+				MustNot: []proxyrule.StringOrTemplate{{
+					Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
+				}},
+				Writes: []proxyrule.StringOrTemplate{{
+					Template: "namespace:{{object.metadata.name}}#creator@user:{{user.Name}}",
+				}, {
+					Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
+				}},
+			},
+		},
+		{
+			Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "namespaces",
+					Verbs:        []string{"get", "list", "watch"},
+				}},
+				Filter: []proxyrule.StringOrTemplate{{
+					Template: "namespace:{{request.Name}}#view@user:{{user.Name}}",
+				}},
+			},
+		},
+	})
+	Expect(err).To(Succeed())
+	return matcher
+}

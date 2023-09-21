@@ -7,6 +7,11 @@ import (
 	"strings"
 
 	"github.com/jmespath/go-jmespath"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/endpoints/request"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 )
@@ -14,8 +19,10 @@ import (
 // RequestMeta uniquely identifies the type of request, and is used to find
 // matching rules.
 type RequestMeta struct {
-	GVR  string
-	Verb string
+	Verb       string
+	APIGroup   string
+	APIVersion string
+	Resource   string
 }
 
 // A Matcher holds a set of matching rules in memory for fast matching against
@@ -23,7 +30,7 @@ type RequestMeta struct {
 // Currently there is only a hash map implementation; you could imagine
 // more interesting ways of matching requests.
 type Matcher interface {
-	Match(match RequestMeta) []*RunnableRule
+	Match(match *request.RequestInfo) []*RunnableRule
 }
 
 // MapMatcher stores rules in a map keyed on GVR and Verb
@@ -35,9 +42,15 @@ func NewMapMatcher(configRules []proxyrule.Config) (MapMatcher, error) {
 	for _, r := range configRules {
 		for _, m := range r.Matches {
 			for _, v := range m.Verbs {
+				gv, err := schema.ParseGroupVersion(m.GroupVersion)
+				if err != nil {
+					return nil, fmt.Errorf("couldn't parse gv %q: %w", m.GroupVersion, err)
+				}
 				meta := RequestMeta{
-					GVR:  m.GVR,
-					Verb: v,
+					APIGroup:   gv.Group,
+					APIVersion: gv.Version,
+					Resource:   m.Resource,
+					Verb:       v,
 				}
 				if _, ok := matchingRules[meta]; !ok {
 					matchingRules[meta] = make([]*RunnableRule, 0)
@@ -53,8 +66,13 @@ func NewMapMatcher(configRules []proxyrule.Config) (MapMatcher, error) {
 	return matchingRules, nil
 }
 
-func (m MapMatcher) Match(match RequestMeta) []*RunnableRule {
-	return m[match]
+func (m MapMatcher) Match(match *request.RequestInfo) []*RunnableRule {
+	return m[RequestMeta{
+		Verb:       match.Verb,
+		APIGroup:   match.APIGroup,
+		APIVersion: match.APIVersion,
+		Resource:   match.Resource,
+	}]
 }
 
 // UncompiledRelExpr represents a relationship template expression that hasn't
@@ -79,21 +97,115 @@ type RelExpr struct {
 	SubjectRelation  *jmespath.JMESPath
 }
 
+// ResolvedRel holds values after all expressions have been evaluated.
+// It has the same structure as string templates in UncompiledRelExpr, but
+// with resolved values.
+type ResolvedRel UncompiledRelExpr
+
+// ResolveInput is the data fed into RelExpr to be evaluated.
+type ResolveInput struct {
+	Request *request.RequestInfo          `json:"request"`
+	User    *user.DefaultInfo             `json:"user"`
+	Object  *metav1.PartialObjectMetadata `json:"object"`
+}
+
+func ResolveRel(expr *RelExpr, input *ResolveInput) (*ResolvedRel, error) {
+	// It would be nice to not have to marshal/unmarshal this data, it might
+	// be saner to document a nested map format and use it directly as input.
+	byteIn, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("error converting input: %w", err)
+	}
+	var data any
+	if err := json.Unmarshal(byteIn, &data); err != nil {
+		return nil, fmt.Errorf("error converting input: %w", err)
+	}
+
+	rt, err := expr.ResourceType.Search(data)
+	if err != nil {
+		return nil, fmt.Errorf("error resolving relationship: %w", err)
+	}
+	if rt == nil {
+		return nil, fmt.Errorf("error resolving relationship: empty resource type")
+	}
+	ri, err := expr.ResourceID.Search(data)
+	if err != nil {
+		return nil, fmt.Errorf("error resolving relationship: %w", err)
+	}
+	if ri == nil {
+		return nil, fmt.Errorf("error resolving relationship: empty resource id")
+	}
+	rr, err := expr.ResourceRelation.Search(data)
+	if err != nil {
+		return nil, fmt.Errorf("error resolving relationship: %w", err)
+	}
+	if rr == nil {
+		return nil, fmt.Errorf("error resolving relationship: empty relation")
+	}
+	st, err := expr.SubjectType.Search(data)
+	if err != nil {
+		return nil, fmt.Errorf("error resolving relationship: %w", err)
+	}
+	if st == nil {
+		return nil, fmt.Errorf("error resolving relationship: empty subject type")
+	}
+	si, err := expr.SubjectID.Search(data)
+	if err != nil {
+		return nil, fmt.Errorf("error resolving relationship: %w", err)
+	}
+	if si == nil {
+		return nil, fmt.Errorf("error resolving relationship: empty subject id")
+	}
+
+	rel := &ResolvedRel{
+		ResourceType:     rt.(string),
+		ResourceID:       ri.(string),
+		ResourceRelation: rr.(string),
+		SubjectType:      st.(string),
+		SubjectID:        si.(string),
+	}
+	if expr.SubjectRelation != nil {
+		sr, err := expr.SubjectRelation.Search(data)
+		if err != nil {
+			return nil, fmt.Errorf("error resolving relationship: %w", err)
+		}
+		if sr == nil {
+			return nil, fmt.Errorf("error resolving relationship: empty subject relation")
+		}
+		rel.SubjectRelation = sr.(string)
+	}
+
+	return rel, nil
+}
+
 // RunnableRule is a set of checks, writes, and filters with fully compiled
 // expressions for building and matching relationships.
 type RunnableRule struct {
-	Checks []*RelExpr
-	Writes []*RelExpr
-	Filter []*RelExpr
+	LockMode proxyrule.LockMode
+	Checks   []*RelExpr
+	Must     []*RelExpr
+	MustNot  []*RelExpr
+	Writes   []*RelExpr
+	Filter   []*RelExpr
 }
 
 // Compile creates a RunnableRule from a passed in config object. String
 // templates are parsed into relationship template expressions and any
 // jmespath expressions are pre-compiled and stored.
 func Compile(config proxyrule.Config) (*RunnableRule, error) {
-	runnable := &RunnableRule{}
+	runnable := &RunnableRule{
+		LockMode: config.Locking,
+	}
 	var err error
 	runnable.Checks, err = compileStringOrObjTemplates(config.Checks)
+	if err != nil {
+		return nil, err
+	}
+	runnable.Must, err = compileStringOrObjTemplates(config.Must)
+	if err != nil {
+		return nil, err
+	}
+	runnable.MustNot, err = compileStringOrObjTemplates(config.MustNot)
 	if err != nil {
 		return nil, err
 	}

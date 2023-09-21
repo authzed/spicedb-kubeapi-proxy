@@ -9,9 +9,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sync"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/client"
@@ -27,12 +31,7 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 )
 
-func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient client.Client, lockMode *string) (http.Handler, error) {
-	workflow, err := distributedtx.WorkflowForLockMode(*lockMode)
-	if err != nil {
-		return nil, err
-	}
-
+func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient client.Client, matcher *rules.Matcher) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -54,55 +53,148 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 			return
 		}
 
-		// CREATE namespace
-		if requestInfo.Resource == "namespaces" &&
-			requestInfo.Verb == "create" &&
-			requestInfo.APIVersion == "v1" &&
-			requestInfo.APIGroup == "" {
+		input := &rules.ResolveInput{
+			Request: requestInfo,
+			User:    userInfo.(*user.DefaultInfo),
+		}
 
-			body, err := io.ReadAll(req.Body)
+		// create/update requests should contain an object body, parse it and
+		// include in the input
+		var body []byte
+		if slices.Contains([]string{"create", "update", "patch"}, requestInfo.Verb) {
+			pom := metav1.PartialObjectMetadata{}
+			var err error
+			body, err = io.ReadAll(req.Body)
 			if err != nil {
 				failed.ServeHTTP(w, req)
 				return
 			}
-
-			pom := metav1.PartialObjectMetadata{}
 			decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(body), 100)
 			if err := decoder.Decode(&pom); err != nil {
 				failed.ServeHTTP(w, req)
 				return
 			}
+			input.Object = &pom
+		}
 
-			id, err := workflowClient.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{
-				InstanceID: uuid.NewString(),
-			}, workflow, &distributedtx.CreateObjInput{
-				RequestInfo: requestInfo,
-				UserInfo:    userInfo.(*user.DefaultInfo),
-				ObjectMeta:  &pom.ObjectMeta,
-				Body:        body,
-			})
+		matchingRules := (*matcher).Match(requestInfo)
+
+		if err := check(ctx, matchingRules, input, permissionsClient); err != nil {
+			failed.ServeHTTP(w, req)
+			return
+		}
+
+		// do a write
+		// TODO/NOTE: this assumes all `writes` are dual writes; i.e. we only
+		//  write into spicedb when there is a corresponding write to kube.
+		//  There may be use cases for writes to spicedb on kube reads, which
+		//  would require a different path here.
+		for _, r := range matchingRules {
+			if len(r.Writes) == 0 {
+				break
+			}
+			writeRels := make([]*v1.Relationship, 0, len(r.Writes))
+			for _, c := range r.Writes {
+				rel, err := rules.ResolveRel(c, input)
+				if err != nil {
+					failed.ServeHTTP(w, req)
+					return
+				}
+				writeRels = append(writeRels, &v1.Relationship{
+					Resource: &v1.ObjectReference{
+						ObjectType: rel.ResourceType,
+						ObjectId:   rel.ResourceID,
+					},
+					Relation: rel.ResourceRelation,
+					Subject: &v1.SubjectReference{
+						Object: &v1.ObjectReference{
+							ObjectType: rel.SubjectType,
+							ObjectId:   rel.SubjectID,
+						},
+						OptionalRelation: rel.SubjectRelation,
+					},
+				})
+			}
+			preconditions := make([]*v1.Precondition, 0, len(r.Must)+len(r.MustNot))
+
+			preconditionFromRel := func(rel *rules.ResolvedRel) *v1.Precondition {
+				p := &v1.Precondition{
+					Filter: &v1.RelationshipFilter{
+						ResourceType: rel.ResourceType,
+					},
+				}
+				if rel.ResourceID != "*" {
+					p.Filter.OptionalResourceId = rel.ResourceID
+				}
+				if rel.ResourceRelation != "*" {
+					p.Filter.OptionalRelation = rel.ResourceRelation
+				}
+				if rel.SubjectType != "*" || rel.SubjectID != "*" || rel.SubjectRelation != "*" {
+					p.Filter.OptionalSubjectFilter = &v1.SubjectFilter{}
+				}
+				if rel.SubjectType != "*" {
+					p.Filter.OptionalSubjectFilter.SubjectType = rel.SubjectType
+				}
+				if rel.SubjectID != "*" {
+					p.Filter.OptionalSubjectFilter.OptionalSubjectId = rel.SubjectID
+				}
+				if rel.SubjectRelation != "*" && rel.SubjectRelation != "" {
+					p.Filter.OptionalSubjectFilter.OptionalRelation = &v1.SubjectFilter_RelationFilter{
+						Relation: rel.SubjectRelation,
+					}
+				}
+				return p
+			}
+			for _, c := range r.Must {
+				rel, err := rules.ResolveRel(c, input)
+				if err != nil {
+					failed.ServeHTTP(w, req)
+					return
+				}
+				p := preconditionFromRel(rel)
+				p.Operation = v1.Precondition_OPERATION_MUST_MATCH
+				preconditions = append(preconditions, p)
+			}
+			for _, c := range r.MustNot {
+				rel, err := rules.ResolveRel(c, input)
+				if err != nil {
+					failed.ServeHTTP(w, req)
+					return
+				}
+				p := preconditionFromRel(rel)
+				p.Operation = v1.Precondition_OPERATION_MUST_NOT_MATCH
+				preconditions = append(preconditions, p)
+			}
+
+			dualWrite := func() (*distributedtx.KubeResp, error) {
+				workflow, err := distributedtx.WorkflowForLockMode(string(r.LockMode))
+				if err != nil {
+					return nil, err
+				}
+				id, err := workflowClient.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{
+					InstanceID: uuid.NewString(),
+				}, workflow, &distributedtx.WriteObjInput{
+					RequestInfo:   requestInfo,
+					UserInfo:      userInfo.(*user.DefaultInfo),
+					ObjectMeta:    &input.Object.ObjectMeta,
+					Rels:          writeRels,
+					Preconditions: preconditions,
+					Body:          body,
+				})
+				if err != nil {
+					return nil, err
+				}
+				resp, err := client.GetWorkflowResult[distributedtx.KubeResp](ctx, workflowClient, id, distributedtx.DefaultWorkflowTimeout)
+				if err != nil {
+					return nil, err
+				}
+				return &resp, nil
+			}
+			resp, err := dualWrite()
 			if err != nil {
-				fmt.Println(err)
 				failed.ServeHTTP(w, req)
 				return
 			}
-
-			resp, err := client.GetWorkflowResult[distributedtx.KubeResp](ctx, workflowClient, id, distributedtx.DefaultWorkflowTimeout)
-			if err != nil {
-				fmt.Println(err)
-				failed.ServeHTTP(w, req)
-				return
-			}
-			req.Body = io.NopCloser(bytes.NewBuffer(body))
-
-			fmt.Println("pom", pom)
-
-			allowed := make(chan string)
-			req = req.WithContext(WithAuthzData(req.Context(), &AuthzData{
-				allowedNameC: allowed,
-				allowedNames: map[string]struct{}{pom.ObjectMeta.Name: {}},
-			}))
-			close(allowed)
 
 			// this can happen if there are un-recoverable failures in the
 			// workflow execution
@@ -111,6 +203,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				return
 			}
 
+			// we can only do one dual-write per request without some way of
+			// marking some writes async.
 			w.Header().Set("Content-Type", resp.ContentType)
 			w.WriteHeader(resp.StatusCode)
 			if _, err := w.Write(resp.Body); err != nil {
@@ -118,176 +212,261 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				failed.ServeHTTP(w, req)
 				return
 			}
+
+			// TODO: are there any use-cases for running the filter step
+			//  after a write?
 			return
 		}
 
-		authzData := AuthzData{
-			allowedNameC: make(chan string),
-			allowedNames: map[string]struct{}{},
+		authzData := &AuthzData{
+			allowedNNC: make(chan types.NamespacedName),
+			allowedNN:  map[types.NamespacedName]struct{}{},
 		}
 
-		// GET namespace
-		if requestInfo.Resource == "namespaces" &&
-			requestInfo.Verb == "get" &&
-			requestInfo.APIVersion == "v1" &&
-			requestInfo.APIGroup == "" &&
-			requestInfo.Name != "" {
-			go func() {
-				cr, err := permissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
+		if err := filter(ctx, matchingRules, input, authzData, permissionsClient, watchClient); err != nil {
+			failed.ServeHTTP(w, req)
+			return
+		}
+
+		req = req.WithContext(WithAuthzData(req.Context(), authzData))
+
+		handler.ServeHTTP(w, req)
+	}), nil
+}
+
+func check(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, client v1.PermissionsServiceClient) error {
+	var checkGroup errgroup.Group
+
+	// issue checks for all matching rules
+	for _, r := range matchingRules {
+		for _, c := range r.Checks {
+			checkGroup.Go(func() error {
+				rel, err := rules.ResolveRel(c, input)
+				if err != nil {
+					return err
+				}
+				resp, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
+					// TODO: other consistency options require a way to input revisions;
+					//  perhaps as an annotation on the kube object?
 					Consistency: &v1.Consistency{
 						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 					},
 					Resource: &v1.ObjectReference{
-						ObjectType: "namespace",
-						ObjectId:   requestInfo.Name,
+						ObjectType: rel.ResourceType,
+						ObjectId:   rel.ResourceID,
 					},
-					Permission: "view",
+					Permission: rel.ResourceRelation,
 					Subject: &v1.SubjectReference{
 						Object: &v1.ObjectReference{
-							ObjectType: "user",
-							ObjectId:   userInfo.GetName(),
+							ObjectType: rel.SubjectType,
+							ObjectId:   rel.SubjectID,
 						},
+						OptionalRelation: rel.SubjectRelation,
 					},
 				})
 				if err != nil {
-					fmt.Println(err)
-					failed.ServeHTTP(w, req)
-					return
+					return err
 				}
-				fmt.Println(cr.Permissionship)
-				if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
-					authzData.allowedNameC <- requestInfo.Name
+				if resp.Permissionship != v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
+					return fmt.Errorf("failed check for %v", rel)
 				}
-				close(authzData.allowedNameC)
-			}()
-			go func() {
-				authzData.Lock()
-				defer authzData.Unlock()
-				for n := range authzData.allowedNameC {
-					authzData.allowedNames[n] = struct{}{}
-				}
-			}()
+				return nil
+			})
 		}
+	}
+	return checkGroup.Wait()
+}
 
-		// LIST namespace
-		if requestInfo.Resource == "namespaces" &&
-			requestInfo.Verb == "list" &&
-			requestInfo.APIVersion == "v1" &&
-			requestInfo.APIGroup == "" {
+func filter(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, authzData *AuthzData, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient) error {
+	// filter responses by fetching a list of allowed objects in parallel with
+	// the request
+	for _, r := range matchingRules {
+		for _, f := range r.Filter {
+			rel, err := rules.ResolveRel(f, input)
+			if err != nil {
+				return err
+			}
 
-			go func() {
-				lr, err := permissionsClient.LookupResources(ctx, &v1.LookupResourcesRequest{
-					Consistency: &v1.Consistency{
-						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
-					},
-					ResourceObjectType: "namespace",
-					Permission:         "view",
-					Subject: &v1.SubjectReference{
-						Object: &v1.ObjectReference{
-							ObjectType: "user",
-							ObjectId:   userInfo.GetName(),
+			switch input.Request.Verb {
+			case "get":
+				filterGet(ctx, client, rel, input, authzData)
+			case "list":
+				filterList(ctx, client, rel, input, authzData)
+			case "watch":
+				filterWatch(ctx, client, watchClient, rel, input, authzData)
+			}
+		}
+	}
+	return nil
+}
+
+func filterGet(ctx context.Context, client v1.PermissionsServiceClient, rel *rules.ResolvedRel, input *rules.ResolveInput, authzData *AuthzData) {
+	go func() {
+		cr, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
+			Consistency: &v1.Consistency{
+				Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
+			},
+			Resource: &v1.ObjectReference{
+				ObjectType: rel.ResourceType,
+				ObjectId:   rel.ResourceID,
+			},
+			Permission: rel.ResourceRelation,
+			Subject: &v1.SubjectReference{
+				Object: &v1.ObjectReference{
+					ObjectType: rel.SubjectType,
+					ObjectId:   rel.SubjectID,
+				},
+				OptionalRelation: rel.SubjectRelation,
+			},
+		})
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		fmt.Println(cr.Permissionship)
+		// TODO: this will mark an object that matches any filter as allowed, should
+		//   probably change to check all filters.
+		if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
+			// namespace requests have name and namespace set to the namespace,
+			// this normalizes it to match other cluster-scoped objects
+			namespace := input.Request.Namespace
+			if input.Request.Resource == "namespaces" {
+				namespace = ""
+			}
+			authzData.allowedNNC <- types.NamespacedName{Name: input.Request.Name, Namespace: namespace}
+		}
+		close(authzData.allowedNNC)
+	}()
+	go func() {
+		authzData.Lock()
+		defer authzData.Unlock()
+		for n := range authzData.allowedNNC {
+			authzData.allowedNN[n] = struct{}{}
+		}
+	}()
+}
+
+func filterList(ctx context.Context, client v1.PermissionsServiceClient, rel *rules.ResolvedRel, input *rules.ResolveInput, authzData *AuthzData) {
+	// TODO: filter should handle LS as well
+	go func() {
+		lr, err := client.LookupResources(ctx, &v1.LookupResourcesRequest{
+			Consistency: &v1.Consistency{
+				Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
+			},
+			ResourceObjectType: rel.ResourceType,
+			Permission:         rel.ResourceRelation,
+			Subject: &v1.SubjectReference{
+				Object: &v1.ObjectReference{
+					ObjectType: rel.SubjectType,
+					ObjectId:   rel.SubjectID,
+				},
+				OptionalRelation: rel.SubjectRelation,
+			},
+		})
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		for {
+			resp, err := lr.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			// TODO: this will mark an object that matches any filter as allowed, should
+			//   probably change to check all filters.
+
+			// namespace requests have name and namespace set to the namespace,
+			// this normalizes it to match other cluster-scoped objects
+			namespace := input.Request.Namespace
+			if input.Request.Resource == "namespaces" {
+				namespace = ""
+			}
+			authzData.allowedNNC <- types.NamespacedName{Name: resp.ResourceObjectId, Namespace: namespace}
+			fmt.Println("allowed", resp.ResourceObjectId)
+		}
+		close(authzData.allowedNNC)
+	}()
+	go func() {
+		authzData.Lock()
+		defer authzData.Unlock()
+		for n := range authzData.allowedNNC {
+			authzData.allowedNN[n] = struct{}{}
+		}
+	}()
+}
+
+func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, rel *rules.ResolvedRel, input *rules.ResolveInput, authzData *AuthzData) {
+	go func() {
+		watchNs, err := watchClient.Watch(ctx, &v1.WatchRequest{
+			OptionalObjectTypes: []string{rel.ResourceType},
+		})
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		for {
+			resp, err := watchNs.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			for _, u := range resp.Updates {
+				if u.Operation == v1.RelationshipUpdate_OPERATION_TOUCH || u.Operation == v1.RelationshipUpdate_OPERATION_CREATE {
+					// do a check
+					cr, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
+						Consistency: &v1.Consistency{
+							Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
+							// TODO
+							// Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 						},
-					},
-				})
-				if err != nil {
-					fmt.Println(err)
-					failed.ServeHTTP(w, req)
-					return
-				}
-				for {
-					resp, err := lr.Recv()
-					if errors.Is(err, io.EOF) {
-						break
-					}
-
+						Resource: &v1.ObjectReference{
+							ObjectType: rel.ResourceType,
+							// TODO: how should this be specified in the filter spec?
+							ObjectId: u.Relationship.Resource.ObjectId,
+						},
+						Permission: rel.ResourceRelation,
+						Subject: &v1.SubjectReference{
+							Object: &v1.ObjectReference{
+								ObjectType: rel.SubjectType,
+								ObjectId:   rel.SubjectID,
+							},
+							OptionalRelation: rel.SubjectRelation,
+						},
+					})
 					if err != nil {
 						fmt.Println(err)
-						failed.ServeHTTP(w, req)
 						return
 					}
-					authzData.allowedNameC <- resp.ResourceObjectId
-					fmt.Println("allowed", resp.ResourceObjectId)
+					// TODO: this will mark an object that matches any filter as allowed, should
+					//   probably change to check all filters.
+
+					// namespace requests have name and namespace set to the namespace,
+					// this normalizes it to match other cluster-scoped objects
+					namespace := input.Request.Namespace
+					if input.Request.Resource == "namespaces" {
+						namespace = ""
+					}
+
+					fmt.Println(u.Relationship.Resource.ObjectId, cr.Permissionship)
+					if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
+						fmt.Println("sending allowed name", u.Relationship.Resource.ObjectId)
+						authzData.allowedNNC <- types.NamespacedName{Name: u.Relationship.Resource.ObjectId, Namespace: namespace}
+					}
 				}
-				close(authzData.allowedNameC)
-			}()
-			go func() {
-				authzData.Lock()
-				defer authzData.Unlock()
-				for n := range authzData.allowedNameC {
-					authzData.allowedNames[n] = struct{}{}
-				}
-			}()
+			}
 		}
-
-		// WATCH namespaces
-		if requestInfo.Resource == "namespaces" &&
-			requestInfo.Verb == "watch" &&
-			requestInfo.APIVersion == "v1" &&
-			requestInfo.APIGroup == "" {
-
-			go func() {
-				watchNs, err := watchClient.Watch(ctx, &v1.WatchRequest{
-					OptionalObjectTypes: []string{"namespace"},
-				})
-				if err != nil {
-					fmt.Println(err)
-					failed.ServeHTTP(w, req)
-					return
-				}
-				for {
-					resp, err := watchNs.Recv()
-					if errors.Is(err, io.EOF) {
-						break
-					}
-
-					if err != nil {
-						fmt.Println(err)
-						failed.ServeHTTP(w, req)
-						return
-					}
-
-					for _, u := range resp.Updates {
-						if u.Operation == v1.RelationshipUpdate_OPERATION_TOUCH || u.Operation == v1.RelationshipUpdate_OPERATION_CREATE {
-							// do a check
-							cr, err := permissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
-								Consistency: &v1.Consistency{
-									Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
-									// TODO
-									// Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
-								},
-								Resource: &v1.ObjectReference{
-									ObjectType: "namespace",
-									ObjectId:   u.Relationship.Resource.ObjectId,
-								},
-								Permission: "view",
-								Subject: &v1.SubjectReference{
-									Object: &v1.ObjectReference{
-										ObjectType: "user",
-										ObjectId:   userInfo.GetName(),
-									},
-								},
-							})
-							if err != nil {
-								fmt.Println(err)
-								failed.ServeHTTP(w, req)
-								return
-							}
-							fmt.Println(u.Relationship.Resource.ObjectId, cr.Permissionship)
-							if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
-								fmt.Println("sending allowed name", u.Relationship.Resource.ObjectId)
-								authzData.allowedNameC <- u.Relationship.Resource.ObjectId
-							}
-						}
-					}
-				}
-				close(authzData.allowedNameC)
-			}()
-		}
-
-		req = req.WithContext(WithAuthzData(req.Context(), &authzData))
-
-		handler.ServeHTTP(w, req)
-	}), nil
+		close(authzData.allowedNNC)
+	}()
 }
 
 type requestAuthzData int
@@ -307,9 +486,8 @@ func AuthzDataFrom(ctx context.Context) (*AuthzData, bool) {
 
 type AuthzData struct {
 	sync.RWMutex
-	allowedNameC chan string
-	allowedNames map[string]struct{}
-	// TODO: may need to include namespace info
+	allowedNNC chan types.NamespacedName
+	allowedNN  map[types.NamespacedName]struct{}
 }
 
 type listOrObjectMeta struct {
@@ -481,7 +659,7 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 			return nil
 		}
 
-		bufferedEvents := make(map[string][]byte, 0)
+		bufferedEvents := make(map[types.NamespacedName][]byte, 0)
 		for {
 			select {
 			case chunk := <-events:
@@ -516,7 +694,7 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 								break
 							}
 							d.RLock()
-							_, ok := d.allowedNames[pom.ObjectMeta.Name]
+							_, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]
 							d.RUnlock()
 
 							fmt.Println("found in allowed:", pom.ObjectMeta.Name, ok)
@@ -525,25 +703,25 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 									break
 								}
 							} else {
-								bufferedEvents[pom.Name] = chunk
+								bufferedEvents[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}] = chunk
 							}
 						}
 					}
 				}
-			case name := <-d.allowedNameC:
-				fmt.Println("recv allowed name", name)
-				fmt.Println("bufferedEvents on name recv", bufferedEvents)
+			case nn := <-d.allowedNNC:
+				fmt.Println("recv allowed", nn)
+				fmt.Println("bufferedEvents on nn recv", bufferedEvents)
 
 				d.Lock()
-				d.allowedNames[name] = struct{}{}
+				d.allowedNN[nn] = struct{}{}
 				d.Unlock()
 
-				if chunk, ok := bufferedEvents[name]; ok {
+				if chunk, ok := bufferedEvents[nn]; ok {
 					err := writeChunk(chunk)
 					if err != nil {
 						break
 					} else {
-						delete(bufferedEvents, name)
+						delete(bufferedEvents, nn)
 					}
 				}
 			case <-resp.Request.Context().Done():
@@ -575,7 +753,7 @@ func (d *AuthzData) FilterTable(body []byte) ([]byte, error) {
 			fmt.Println(err)
 			return nil, err
 		}
-		if _, ok := d.allowedNames[pom.ObjectMeta.Name]; ok {
+		if _, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]; ok {
 			allowedRows = append(allowedRows, r)
 		}
 	}
@@ -604,7 +782,7 @@ func (d *AuthzData) FilterList(body []byte) ([]byte, error) {
 			fmt.Println(err)
 			return nil, err
 		}
-		if _, ok := d.allowedNames[pom.ObjectMeta.Name]; ok {
+		if _, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]; ok {
 			allowedItems = append(allowedItems, item)
 		}
 	}
@@ -616,11 +794,11 @@ func (d *AuthzData) FilterList(body []byte) ([]byte, error) {
 
 func (d *AuthzData) FilterObject(pom *metav1.PartialObjectMetadata, body []byte) ([]byte, error) {
 	// wait for all allowednames to be synced
-	<-d.allowedNameC
+	<-d.allowedNNC
 	d.RLock()
 	defer d.RUnlock()
 
-	if _, ok := d.allowedNames[pom.Name]; ok {
+	if _, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]; ok {
 		return body, nil
 	}
 	return nil, fmt.Errorf("unauthorized")

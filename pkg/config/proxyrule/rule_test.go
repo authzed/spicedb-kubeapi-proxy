@@ -21,50 +21,52 @@ apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
 lock: Pessimistic
 match:
-- gvr: authzed.com/v1alpha1/spicedbclusters
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters
   verbs: ["create"]
 check:
 - resource:
     type: org
-    id: .metadata.labels.org
+    id: metadata.labels.org
     relation: manage-cluster
   subject:
     type: user
-    id: .request.user
+    id: request.user
 write:
 - resource:
     type: spicedbclusters
-    id: .metadata.name
+    id: metadata.name
     relation: org
   subject:
     type: org
-    id: .metadata.labels.org
+    id: metadata.labels.org
 - resource:
     type: spicedbclusters
-    id: .metadata.name
+    id: metadata.name
     relation: creator
   subject:
     type: user
-    id: .request.user
+    id: request.user
 `,
 			expectRules: []Config{{
 				TypeMeta: v1alpha1ProxyRule,
 				Spec: Spec{
 					Locking: PessimisticLockMode,
 					Matches: []Match{{
-						GVR:   "authzed.com/v1alpha1/spicedbclusters",
-						Verbs: []string{"create"},
+						GroupVersion: "authzed.com/v1alpha1",
+						Resource:     "spicedbclusters",
+						Verbs:        []string{"create"},
 					}},
 					Checks: []StringOrTemplate{{
 						RelationshipTemplate: &RelationshipTemplate{
 							Resource: ObjectTemplate{
 								Type:     "org",
-								ID:       ".metadata.labels.org",
+								ID:       "metadata.labels.org",
 								Relation: "manage-cluster",
 							},
 							Subject: ObjectTemplate{
 								Type: "user",
-								ID:   ".request.user",
+								ID:   "request.user",
 							},
 						},
 					}},
@@ -72,24 +74,24 @@ write:
 						RelationshipTemplate: &RelationshipTemplate{
 							Resource: ObjectTemplate{
 								Type:     "spicedbclusters",
-								ID:       ".metadata.name",
+								ID:       "metadata.name",
 								Relation: "org",
 							},
 							Subject: ObjectTemplate{
 								Type: "org",
-								ID:   ".metadata.labels.org",
+								ID:   "metadata.labels.org",
 							},
 						},
 					}, {
 						RelationshipTemplate: &RelationshipTemplate{
 							Resource: ObjectTemplate{
 								Type:     "spicedbclusters",
-								ID:       ".metadata.name",
+								ID:       "metadata.name",
 								Relation: "creator",
 							},
 							Subject: ObjectTemplate{
 								Type: "user",
-								ID:   ".request.user",
+								ID:   "request.user",
 							},
 						},
 					}},
@@ -103,7 +105,8 @@ apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
 lock: Pessimistic 
 match:
-- gvr: authzed.com/v1alpha1/spicedbclusters
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters
   verbs: ["create"]
 check:
 - tpl: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}"
@@ -116,8 +119,9 @@ write:
 				Spec: Spec{
 					Locking: PessimisticLockMode,
 					Matches: []Match{{
-						GVR:   "authzed.com/v1alpha1/spicedbclusters",
-						Verbs: []string{"create"},
+						GroupVersion: "authzed.com/v1alpha1",
+						Resource:     "spicedbclusters",
+						Verbs:        []string{"create"},
 					}},
 					Checks: []StringOrTemplate{{
 						Template: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}",
@@ -137,7 +141,8 @@ apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
 lock: Pessimistic 
 match:
-- gvr: authzed.com/v1alpha1/spicedbclusters
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters
   verbs: ["create"]
 check:
 - tpl: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}"
@@ -149,7 +154,8 @@ apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
 lock: Pessimistic 
 match:
-- gvr: authzed.com/v1alpha1/spicedbclusters
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters
   verbs: ["list"]
 filter:
 - tpl: "org:{{.metadata.labels.org}}#audit-cluster@user:{{.request.user}}"
@@ -159,8 +165,9 @@ filter:
 				Spec: Spec{
 					Locking: PessimisticLockMode,
 					Matches: []Match{{
-						GVR:   "authzed.com/v1alpha1/spicedbclusters",
-						Verbs: []string{"create"},
+						GroupVersion: "authzed.com/v1alpha1",
+						Resource:     "spicedbclusters",
+						Verbs:        []string{"create"},
 					}},
 					Checks: []StringOrTemplate{{
 						Template: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}",
@@ -176,8 +183,9 @@ filter:
 				Spec: Spec{
 					Locking: PessimisticLockMode,
 					Matches: []Match{{
-						GVR:   "authzed.com/v1alpha1/spicedbclusters",
-						Verbs: []string{"list"},
+						GroupVersion: "authzed.com/v1alpha1",
+						Resource:     "spicedbclusters",
+						Verbs:        []string{"list"},
 					}},
 					Filter: []StringOrTemplate{{
 						Template: "org:{{.metadata.labels.org}}#audit-cluster@user:{{.request.user}}",

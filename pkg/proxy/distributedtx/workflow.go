@@ -2,11 +2,12 @@ package distributedtx
 
 import (
 	"fmt"
+	"net/http"
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
-	"net/http"
-	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cespare/xxhash/v2"
@@ -23,8 +24,8 @@ const (
 	workflowResourceType                     = "workflow"
 	MaxKubeAttempts                          = 5
 	DefaultLockMode                          = StrategyPessimisticWriteToSpiceDBAndKube
-	StrategyOptimisticWriteToSpiceDBAndKube  = "OptimisticWriteToSpiceDBAndKube"
-	StrategyPessimisticWriteToSpiceDBAndKube = "PessimisticWriteToSpiceDBAndKube"
+	StrategyOptimisticWriteToSpiceDBAndKube  = "Optimistic"
+	StrategyPessimisticWriteToSpiceDBAndKube = "Pessimistic"
 	DefaultWorkflowTimeout                   = time.Second * 30
 )
 
@@ -35,14 +36,16 @@ var KubeBackoff = wait.Backoff{
 	Steps:    MaxKubeAttempts,
 }
 
-type CreateObjInput struct {
-	RequestInfo *request.RequestInfo
-	UserInfo    *user.DefaultInfo
-	ObjectMeta  *metav1.ObjectMeta
-	Body        []byte
+type WriteObjInput struct {
+	RequestInfo   *request.RequestInfo
+	UserInfo      *user.DefaultInfo
+	ObjectMeta    *metav1.ObjectMeta
+	Rels          []*v1.Relationship
+	Preconditions []*v1.Precondition
+	Body          []byte
 }
 
-func (input *CreateObjInput) validate() error {
+func (input *WriteObjInput) validate() error {
 	if input.UserInfo.GetName() == "" {
 		return fmt.Errorf("missing user info in CreateObjectInput")
 	}
@@ -56,7 +59,7 @@ func (input *CreateObjInput) validate() error {
 	return nil
 }
 
-func (input *CreateObjInput) toKubeReqInput() *KubeReqInput {
+func (input *WriteObjInput) toKubeReqInput() *KubeReqInput {
 	return &KubeReqInput{
 		RequestInfo: input.RequestInfo,
 		ObjectMeta:  input.ObjectMeta,
@@ -104,16 +107,12 @@ func (r *RollbackRelationships) Cleanup(ctx workflow.Context) {
 // PessimisticWriteToSpiceDBAndKube ensures that a write exists in both SpiceDB
 // and kube, or neither, using locks. It prevents multiple users from writing
 // the same object/fields at the same time
-func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *CreateObjInput) (*KubeResp, error) {
+func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput) (*KubeResp, error) {
 	if err := input.validate(); err != nil {
 		return nil, fmt.Errorf("invalid input to PessimisticWriteToSpiceDBAndKube: %w", err)
 	}
 
 	instance := workflow.WorkflowInstance(ctx)
-	// this is hardcoded for namespaces for now; should be configurable and
-	// come from the workflow input
-	resourceRel := SpiceDBNamespaceRel(input)
-	clusterRel := SpiceDBClusterRel(input)
 	resourceLockRel := ResourceLockRel(input, instance.InstanceID)
 
 	// tuples to remove when the workflow is complete.
@@ -121,21 +120,25 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *CreateObjInpu
 	// the lock when complete.
 	rollback := NewRollbackRelationships(resourceLockRel)
 
+	preconditions := []*v1.Precondition{
+		resourceLockDoesNotExist(resourceLockRel),
+	}
+	preconditions = append(preconditions, input.Preconditions...)
+	updates := []*v1.RelationshipUpdate{{
+		Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
+		Relationship: resourceLockRel,
+	}}
+	for _, r := range input.Rels {
+		updates = append(updates, &v1.RelationshipUpdate{
+			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
+			Relationship: r,
+		})
+	}
+
 	arg := &v1.WriteRelationshipsRequest{
-		OptionalPreconditions: []*v1.Precondition{
-			resourceLockDoesNotExist(resourceLockRel),
-			clusterLockDoesNotExist(clusterRel),
-		},
-		Updates: []*v1.RelationshipUpdate{{
-			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
-			Relationship: resourceRel,
-		}, {
-			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
-			Relationship: resourceLockRel,
-		}, {
-			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
-			Relationship: clusterRel,
-		}}}
+		OptionalPreconditions: preconditions,
+		Updates:               updates,
+	}
 
 	_, err := workflow.ExecuteActivity[*v1.WriteRelationshipsResponse](ctx,
 		workflow.DefaultActivityOptions,
@@ -145,7 +148,7 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *CreateObjInpu
 		// request failed for some reason
 		fmt.Println("spicedb write failed", err)
 
-		rollback.WithRels(resourceRel, clusterRel).Cleanup(ctx)
+		rollback.WithRels(input.Rels...).Cleanup(ctx)
 
 		// if the spicedb write fails, report it as a kube conflict error
 		// we return this for any error, not just lock conflicts, so that the
@@ -187,43 +190,40 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *CreateObjInpu
 
 		// some other status code is some other type of error, remove
 		// the original tuple and the lock tuple
-		rollback.WithRels(resourceRel, clusterRel).Cleanup(ctx)
+		rollback.WithRels(input.Rels...).Cleanup(ctx)
 		return out, nil
 	}
 
-	rollback.WithRels(resourceRel, clusterRel).Cleanup(ctx)
+	rollback.WithRels(input.Rels...).Cleanup(ctx)
 	return nil, fmt.Errorf("failed to communicate with kubernetes after %d attempts", MaxKubeAttempts)
 }
 
 // OptimisticWriteToSpiceDBAndKube ensures that a write exists in both SpiceDB and kube,
 // or neither. It attempts to perform the writes and rolls back if errors are
 // encountered, leaving the user to retry on write conflicts.
-func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *CreateObjInput) (*KubeResp, error) {
+func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput) (*KubeResp, error) {
 	if err := input.validate(); err != nil {
 		return nil, fmt.Errorf("invalid input to PessimisticWriteToSpiceDBAndKube: %w", err)
 	}
 
 	// TODO: this could optionally use dry-run to preflight the kube request
 
-	// this is hardcoded for namespaces for now; should be configurable and
-	// come from the workflow input
-	spiceDBRelationship := SpiceDBNamespaceRel(input)
-	clusterRelationship := SpiceDBClusterRel(input)
-	rollback := NewRollbackRelationships(spiceDBRelationship, clusterRelationship)
+	rollback := NewRollbackRelationships(input.Rels...)
 
-	arg := &v1.WriteRelationshipsRequest{
-		Updates: []*v1.RelationshipUpdate{{
+	updates := make([]*v1.RelationshipUpdate, 0, len(input.Rels))
+	for _, r := range input.Rels {
+		updates = append(updates, &v1.RelationshipUpdate{
 			Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
-			Relationship: spiceDBRelationship,
-		}, {
-			Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
-			Relationship: clusterRelationship,
-		}},
+			Relationship: r,
+		})
 	}
+
 	_, err := workflow.ExecuteActivity[*v1.WriteRelationshipsResponse](ctx,
 		workflow.DefaultActivityOptions,
 		activityHandler.WriteToSpiceDB,
-		arg).Get(ctx)
+		&v1.WriteRelationshipsRequest{
+			Updates: updates,
+		}).Get(ctx)
 	if err != nil {
 		rollback.Cleanup(ctx)
 		fmt.Println("SpiceDB WRITE ERR", err)
@@ -259,7 +259,7 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *CreateObjInput
 
 // ResourceLockRel generates a relationship representing a worfklow's lock over a
 // specific resource in kube.
-func ResourceLockRel(input *CreateObjInput, workflowID string) *v1.Relationship {
+func ResourceLockRel(input *WriteObjInput, workflowID string) *v1.Relationship {
 	lockKey := input.RequestInfo.Path + "/" + input.ObjectMeta.GetName() + "/" + input.RequestInfo.Verb
 	lockHash := fmt.Sprintf("%x", xxhash.Sum64String(lockKey))
 	return &v1.Relationship{
@@ -277,47 +277,9 @@ func ResourceLockRel(input *CreateObjInput, workflowID string) *v1.Relationship 
 	}
 }
 
-// SpiceDBNamespaceRel returns a tuple to write when creating a namespace.
-// This is hardcoded for namespaces for now; should be configurable and
-// come from the workflow input
-func SpiceDBNamespaceRel(input *CreateObjInput) *v1.Relationship {
-	return &v1.Relationship{
-		Resource: &v1.ObjectReference{
-			ObjectType: "namespace",
-			ObjectId:   input.ObjectMeta.Name,
-		},
-		Relation: "creator",
-		Subject: &v1.SubjectReference{
-			Object: &v1.ObjectReference{
-				ObjectType: "user",
-				ObjectId:   input.UserInfo.GetName(),
-			},
-		},
-	}
-}
-
-// SpiceDBClusterRel returns a tuple to write when creating a namespace.
-// This is hardcoded for namespaces for now; should be configurable and
-// come from the workflow input
-func SpiceDBClusterRel(input *CreateObjInput) *v1.Relationship {
-	return &v1.Relationship{
-		Resource: &v1.ObjectReference{
-			ObjectType: "namespace",
-			ObjectId:   input.ObjectMeta.Name,
-		},
-		Relation: "cluster",
-		Subject: &v1.SubjectReference{
-			Object: &v1.ObjectReference{
-				ObjectType: "cluster",
-				ObjectId:   "cluster", // only one cluster
-			},
-		},
-	}
-}
-
 // KubeConflict wraps an error and turns it into a standard kube conflict
 // response.
-func KubeConflict(err error, input *CreateObjInput) *KubeResp {
+func KubeConflict(err error, input *WriteObjInput) *KubeResp {
 	var out KubeResp
 	statusError := k8serrors.NewConflict(schema.GroupResource{
 		Group:    input.RequestInfo.APIGroup,
@@ -337,21 +299,6 @@ func resourceLockDoesNotExist(lockRel *v1.Relationship) *v1.Precondition {
 			OptionalResourceId:    lockRel.Resource.ObjectId,
 			OptionalRelation:      lockRelationName,
 			OptionalSubjectFilter: &v1.SubjectFilter{SubjectType: workflowResourceType},
-		},
-	}
-}
-
-func clusterLockDoesNotExist(clusterRelationship *v1.Relationship) *v1.Precondition {
-	return &v1.Precondition{
-		Operation: v1.Precondition_OPERATION_MUST_NOT_MATCH,
-		Filter: &v1.RelationshipFilter{
-			ResourceType:       clusterRelationship.Resource.ObjectType,
-			OptionalResourceId: clusterRelationship.Resource.ObjectId,
-			OptionalRelation:   clusterRelationship.Relation,
-			OptionalSubjectFilter: &v1.SubjectFilter{
-				SubjectType:       clusterRelationship.Subject.Object.ObjectType,
-				OptionalSubjectId: clusterRelationship.Subject.Object.ObjectType,
-			},
 		},
 	}
 }

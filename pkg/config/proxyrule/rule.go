@@ -38,14 +38,17 @@ type Spec struct {
 	Locking LockMode           `json:"lock,omitempty"`
 	Matches []Match            `json:"match"`
 	Checks  []StringOrTemplate `json:"check,omitempty"`
+	Must    []StringOrTemplate `json:"must,omitempty"`
+	MustNot []StringOrTemplate `json:"mustNot,omitempty"`
 	Writes  []StringOrTemplate `json:"write,omitempty"`
 	Filter  []StringOrTemplate `json:"filter,omitempty"`
 }
 
 // Match determines which requests the rule applies to
 type Match struct {
-	GVR   string   `json:"gvr"`
-	Verbs []string `json:"verbs"`
+	GroupVersion string   `json:"apiVersion"`
+	Resource     string   `json:"resource"`
+	Verbs        []string `json:"verbs"`
 }
 
 // StringOrTemplate either contains a string representing a relationship

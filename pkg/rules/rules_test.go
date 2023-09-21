@@ -2,11 +2,15 @@ package rules
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/jmespath/go-jmespath"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/endpoints/request"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 )
@@ -168,11 +172,10 @@ func TestCompile(t *testing.T) {
 	var testData any
 	require.NoError(t, json.Unmarshal(testDataBytes, &testData))
 
-	type resultRel UncompiledRelExpr
 	type result struct {
-		checks  []resultRel
-		writes  []resultRel
-		filters []resultRel
+		checks  []ResolvedRel
+		writes  []ResolvedRel
+		filters []ResolvedRel
 	}
 
 	mustSearch := func(path *jmespath.JMESPath) any {
@@ -181,7 +184,7 @@ func TestCompile(t *testing.T) {
 		return val
 	}
 
-	requireEqualUnderTestData := func(exprs []*RelExpr, res []resultRel) {
+	requireEqualUnderTestData := func(exprs []*RelExpr, res []ResolvedRel) {
 		for i, c := range exprs {
 			require.Equal(t, res[i].ResourceType, mustSearch(c.ResourceType))
 			require.Equal(t, res[i].ResourceID, mustSearch(c.ResourceID))
@@ -205,8 +208,9 @@ func TestCompile(t *testing.T) {
 			config: proxyrule.Config{Spec: proxyrule.Spec{
 				Locking: proxyrule.PessimisticLockMode,
 				Matches: []proxyrule.Match{{
-					GVR:   "example.com/v1alpha1/wardles",
-					Verbs: []string{"create"},
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"create"},
 				}},
 				Checks: []proxyrule.StringOrTemplate{{
 					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{request.user}}",
@@ -218,14 +222,14 @@ func TestCompile(t *testing.T) {
 				}},
 			}},
 			want: result{
-				checks: []resultRel{{
+				checks: []ResolvedRel{{
 					ResourceType:     "org",
 					ResourceID:       "testOrg",
 					ResourceRelation: "manage-wardles",
 					SubjectType:      "user",
 					SubjectID:        "testUser",
 				}},
-				writes: []resultRel{{
+				writes: []ResolvedRel{{
 					ResourceType:     "wardles",
 					ResourceID:       "testName",
 					ResourceRelation: "org",
@@ -238,7 +242,7 @@ func TestCompile(t *testing.T) {
 					SubjectType:      "user",
 					SubjectID:        "testUser",
 				}},
-				filters: []resultRel{},
+				filters: []ResolvedRel{},
 			},
 		},
 		{
@@ -246,8 +250,9 @@ func TestCompile(t *testing.T) {
 			config: proxyrule.Config{Spec: proxyrule.Spec{
 				Locking: proxyrule.PessimisticLockMode,
 				Matches: []proxyrule.Match{{
-					GVR:   "example.com/v1alpha1/wardles",
-					Verbs: []string{"list"},
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"list"},
 				}},
 				Checks: []proxyrule.StringOrTemplate{{
 					Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{request.group}}#member",
@@ -267,7 +272,7 @@ func TestCompile(t *testing.T) {
 				}},
 			}},
 			want: result{
-				checks: []resultRel{{
+				checks: []ResolvedRel{{
 					ResourceType:     "org",
 					ResourceID:       "testOrg",
 					ResourceRelation: "audit-wardles",
@@ -275,7 +280,7 @@ func TestCompile(t *testing.T) {
 					SubjectID:        "testGroup",
 					SubjectRelation:  "member",
 				}},
-				filters: []resultRel{{
+				filters: []ResolvedRel{{
 					ResourceType:     "wardles",
 					ResourceID:       "testName",
 					ResourceRelation: "view",
@@ -301,8 +306,9 @@ func TestMapMatcherMatch(t *testing.T) {
 	m, err := NewMapMatcher([]proxyrule.Config{{Spec: proxyrule.Spec{
 		Locking: proxyrule.PessimisticLockMode,
 		Matches: []proxyrule.Match{{
-			GVR:   "example.com/v1alpha1/wardles",
-			Verbs: []string{"create"},
+			GroupVersion: "example.com/v1alpha1",
+			Resource:     "wardles",
+			Verbs:        []string{"create"},
 		}},
 		Checks: []proxyrule.StringOrTemplate{{
 			Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{request.user}}",
@@ -315,8 +321,9 @@ func TestMapMatcherMatch(t *testing.T) {
 	}}, {Spec: proxyrule.Spec{
 		Locking: proxyrule.PessimisticLockMode,
 		Matches: []proxyrule.Match{{
-			GVR:   "example.com/v1alpha1/wardles",
-			Verbs: []string{"list", "watch"},
+			GroupVersion: "example.com/v1alpha1",
+			Resource:     "wardles",
+			Verbs:        []string{"list", "watch"},
 		}},
 		Checks: []proxyrule.StringOrTemplate{{
 			Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{request.group}}#member",
@@ -340,41 +347,49 @@ func TestMapMatcherMatch(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		match       RequestMeta
+		match       *request.RequestInfo
 		wantChecks  int
 		wantWrites  int
 		wantFilters int
 	}{
 		{
 			name: "matching create request",
-			match: RequestMeta{
-				GVR:  "example.com/v1alpha1/wardles",
-				Verb: "create",
+			match: &request.RequestInfo{
+				APIGroup:   "example.com",
+				APIVersion: "v1alpha1",
+				Resource:   "wardles",
+				Verb:       "create",
 			},
 			wantChecks: 1,
 			wantWrites: 2,
 		},
 		{
 			name: "non-matching create request",
-			match: RequestMeta{
-				GVR:  "example.com/v1alpha1/foobars",
-				Verb: "create",
+			match: &request.RequestInfo{
+				APIGroup:   "example.com",
+				APIVersion: "v1alpha1",
+				Resource:   "foobars",
+				Verb:       "create",
 			},
 		},
 		{
 			name: "matching list request",
-			match: RequestMeta{
-				GVR:  "example.com/v1alpha1/wardles",
-				Verb: "list",
+			match: &request.RequestInfo{
+				APIGroup:   "example.com",
+				APIVersion: "v1alpha1",
+				Resource:   "wardles",
+				Verb:       "list",
 			},
 			wantChecks:  1,
 			wantFilters: 1,
 		},
 		{
 			name: "matching watch request",
-			match: RequestMeta{
-				GVR:  "example.com/v1alpha1/wardles",
-				Verb: "watch",
+			match: &request.RequestInfo{
+				APIGroup:   "example.com",
+				APIVersion: "v1alpha1",
+				Resource:   "wardles",
+				Verb:       "watch",
 			},
 			wantChecks:  1,
 			wantFilters: 1,
@@ -392,6 +407,89 @@ func TestMapMatcherMatch(t *testing.T) {
 			require.Equal(t, tt.wantChecks, totalCheck)
 			require.Equal(t, tt.wantWrites, totalWrite)
 			require.Equal(t, tt.wantFilters, totalFilter)
+		})
+	}
+}
+
+func TestResolveRel(t *testing.T) {
+	tests := []struct {
+		name    string
+		expr    *UncompiledRelExpr
+		input   *ResolveInput
+		want    *ResolvedRel
+		wantErr error
+	}{
+		{
+			name: "basic",
+			expr: &UncompiledRelExpr{
+				ResourceType: "{{user.Name}}",
+			},
+			input: &ResolveInput{
+				Request: nil,
+				User:    &user.DefaultInfo{Name: "testUser"},
+				Object:  nil,
+			},
+			want: &ResolvedRel{
+				ResourceType: "testUser",
+			},
+		},
+		{
+			name: "field not found",
+			expr: &UncompiledRelExpr{
+				ResourceType: "{{object.foo}}",
+			},
+			input: &ResolveInput{
+				Request: nil,
+				User:    &user.DefaultInfo{Name: "testUser"},
+				Object:  nil,
+			},
+			wantErr: fmt.Errorf("error resolving relationship: empty resource type"),
+		},
+		{
+			name: "fully templated",
+			expr: &UncompiledRelExpr{
+				ResourceType:     "{{request.Resource}}",
+				ResourceID:       "{{object.metadata.name}}",
+				ResourceRelation: "{{object.metadata.labels.rel}}",
+				SubjectType:      "{{object.metadata.labels.usertype}}",
+				SubjectID:        "{{user.Name}}",
+				SubjectRelation:  "{{object.metadata.labels.sr}}",
+			},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Resource: "foobars"},
+				User:    &user.DefaultInfo{Name: "testUser"},
+				Object: &metav1.PartialObjectMetadata{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "testfoo",
+						Labels: map[string]string{
+							"usertype": "user",
+							"rel":      "testrel",
+							"sr":       "testsubjectrel",
+						}},
+				},
+			},
+			want: &ResolvedRel{
+				ResourceType:     "foobars",
+				ResourceID:       "testfoo",
+				ResourceRelation: "testrel",
+				SubjectType:      "user",
+				SubjectID:        "testUser",
+				SubjectRelation:  "testsubjectrel",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr, err := compileUnparsedRelExpr(tt.expr)
+			require.NoError(t, err)
+
+			got, err := ResolveRel(expr, tt.input)
+			if tt.wantErr != nil {
+				require.ErrorContains(t, err, tt.wantErr.Error())
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.want, got)
 		})
 	}
 }

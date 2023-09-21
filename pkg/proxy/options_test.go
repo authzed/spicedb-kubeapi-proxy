@@ -16,11 +16,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/clientcmd"
 	logsv1 "k8s.io/component-base/logs/api/v1"
-
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
 func TestKubeConfig(t *testing.T) {
@@ -83,9 +82,11 @@ func TestRuleConfig(t *testing.T) {
 	require.Empty(t, opts.Validate())
 	require.NoError(t, opts.Complete(context.Background()))
 
-	rules := opts.Matcher.Match(rules.RequestMeta{
-		GVR:  "authzed.com/v1alpha1/spicedbclusters",
-		Verb: "list",
+	rules := opts.Matcher.Match(&request.RequestInfo{
+		APIGroup:   "authzed.com",
+		APIVersion: "v1alpha1",
+		Resource:   "spicedbclusters",
+		Verb:       "list",
 	})
 	require.Len(t, rules, 1)
 	require.Len(t, rules[0].Filter, 1)
@@ -98,7 +99,8 @@ apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
 lock: Pessimistic 
 match:
-- gvr: authzed.com/v1alpha1/spicedbclusters
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters
   verbs: ["list"]
 filter:
 - tpl: "org:{{.metadata.labels.org}}#audit-cluster@user:{{request.user}}"
@@ -192,7 +194,8 @@ apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
 lock: Pessimistic 
 match:
-- gvr: authzed.com/v1alpha1/spicedbclusters
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters 
   verbs: ["list"]
 filter:
 - tpl: "org:{{metadata.labels.org}}#audit-cluster@user:{{request.user}}"

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
-
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -27,6 +25,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/klog/v2"
+
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
 type Server struct {
@@ -34,17 +35,12 @@ type Server struct {
 	Handler        http.Handler
 	WorkflowWorker *distributedtx.Worker
 	KubeClient     *kubernetes.Clientset
-
-	// LockMode references the name of the workflow to run for dual writes
-	// This is very temporary, and should be replaced with per-request
-	// configuration.
-	LockMode string
+	Matcher        *rules.Matcher
 }
 
 func NewServer(ctx context.Context, o Options) (*Server, error) {
 	s := &Server{
-		opts:     o,
-		LockMode: distributedtx.DefaultLockMode,
+		opts: o,
 	}
 
 	restConfig, err := clientcmd.NewDefaultClientConfig(*s.opts.BackendConfig, nil).ClientConfig()
@@ -117,7 +113,8 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	}
 	s.WorkflowWorker = worker
 
-	handler, err := WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, &s.LockMode)
+	s.Matcher = &s.opts.Matcher
+	handler, err := WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
 	}
