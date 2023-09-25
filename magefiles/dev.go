@@ -4,22 +4,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	_ "embed"
-	"encoding/pem"
 	"fmt"
-	"math/big"
-	"net"
 	"os"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
@@ -38,15 +28,30 @@ import (
 type Dev mg.Namespace
 
 const (
-	proxyNodePort           = 30443
-	clusterName             = "spicedb-kubeapi-proxy"
-	kubeCfgClusterName      = "kind-" + clusterName
-	kubeconfigPath          = clusterName + ".kubeconfig"
-	generatedKubeConfigPath = "proxy.kubeconfig"
+	proxyNodePort                 = 30443
+	clusterName                   = "spicedb-kubeapi-proxy"
+	kubeCfgClusterName            = "kind-" + clusterName
+	kubeconfigPath                = clusterName + ".kubeconfig"
+	developmentKubeConfigFileName = "dev.kubeconfig"
+
+	kubeContextLocalProxy      = "local"
+	kubeContextClusterProxy    = "proxy"
+	kubeContextUpstreamCluster = "admin"
 )
 
+// Run runs the proxy locally against the development cluster - requires dev:up
+func (d Dev) Run() error {
+	return sh.RunV("go", "run",
+		"./cmd/spicedb-kubeapi-proxy/main.go",
+		"--bind-address=127.0.0.1",
+		"--secure-port=8443",
+		"--backend-kubeconfig", "spicedb-kubeapi-proxy.kubeconfig",
+		"--client-ca-file", "client-ca.crt",
+		"--spicedb-endpoint", "embedded://")
+}
+
 // Up brings up a dev cluster with the proxy installed.
-func (Dev) Up(ctx context.Context) error {
+func (d Dev) Up(ctx context.Context) error {
 	var proxyHostPort int32
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		proxyHostPort, err = GetFreePort("localhost")
@@ -57,8 +62,15 @@ func (Dev) Up(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(kubeconfigPath)
+
+		fmt.Println("Generated kubeconfig for Kind cluster: " + kubeconfigPath)
 	}
+
+	fmt.Println("Writing Kubeconfig for generated Kind cluster as Secret, will be used by the proxy")
+	if err := writeUpstreamKubeconfigAsSecret(ctx, kubeconfigPath); err != nil {
+		return err
+	}
+
 	imageName, err := makeGoKindImage(ctx, clusterName, "spicedb-kubeapi-proxy", ".", "./cmd/spicedb-kubeapi-proxy")
 	if err != nil {
 		return err
@@ -67,16 +79,132 @@ func (Dev) Up(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := os.Stat(generatedKubeConfigPath); err != nil {
-		fmt.Println("no proxy kubeconfig found, generating")
-		if err := generateCertsAndKubeConfig(ctx, kubeconfigPath, proxyHostPort); err != nil {
-			return err
-		}
-	} else {
-		fmt.Println("proxy kubeconfig found, skipping generation")
+	if err := apply(); err != nil {
+		return err
 	}
 
+	if err := generateDevKubeconfig(ctx, fmt.Sprintf("https://127.0.0.1:%d", proxyHostPort)); err != nil {
+		return err
+	}
+
+	fmt.Println("✅  development environment ready! To talk to the proxy with kubectl:")
+	fmt.Printf("  export KUBECONFIG=$(pwd)/%s\n", developmentKubeConfigFileName)
+	fmt.Println("  kubectx proxy")
+	fmt.Println("  kubectl --context proxy get namespace")
+	fmt.Println("ℹ️ you can also run the proxy locally with:")
+	fmt.Println("  go run ./cmd/spicedb-kubeapi-proxy/main.go --bind-address=127.0.0.1 --secure-port=8443 --backend-kubeconfig $(pwd)/spicedb-kubeapi-proxy.kubeconfig --client-ca-file $(pwd)/client-ca.crt --spicedb-endpoint embedded://")
+	fmt.Printf("  export KUBECONFIG=$(pwd)/%s\n", developmentKubeConfigFileName)
+	fmt.Println("  kubectx local")
+	fmt.Println("  kubectl --insecure-skip-tls-verify get namespace")
+	return nil
+}
+
+// apply applies kubernetes manifest to an existing running environment, and blocks until all resources are ready
+func apply() error {
 	return sh.RunV("kustomizer", "apply", "inventory", "spicedb-kubeapi-proxy", "-k", "./deploy", "--prune", "--wait")
+}
+
+// generateDevKubeconfig writes locally a kubeconfig for development purposes, containing context to have kube clients
+// either talk to the Kind Kubernetes API server, or to the spicedb-kubeapi-proxy server.
+func generateDevKubeconfig(ctx context.Context, proxyHost string) error {
+	if _, err := os.Stat(developmentKubeConfigFileName); err == nil {
+		fmt.Println("development kubeconfig found, skipping generation")
+		return nil
+	}
+
+	fmt.Println("no development kubeconfig found, generating with proxy listening at " + proxyHost)
+	clientset, err := clientSetForKubeConfig(kubeconfigPath)
+	if err != nil {
+		return err
+	}
+
+	serverCACertBytes, err := getBytesFromSecretField(ctx, clientset, "spicedb-kubeapi-proxy", "spicedb-kubeapi-proxy-server-cert", "ca.crt")
+	if err != nil {
+		return err
+	}
+
+	clientCACertBytes, err := getBytesFromSecretField(ctx, clientset, "spicedb-kubeapi-proxy", "rakis-client-cert", "ca.crt")
+	if err != nil {
+		return err
+	}
+
+	// write it locally in case we need to run the proxy locally with the same CA cert as the dev env
+	wd, err := os.Getwd()
+	caPath := path.Join(wd, "client-ca.crt")
+	if err := os.WriteFile(caPath, clientCACertBytes, 0o600); err != nil {
+		fmt.Printf("unable to cache proxy client CA certificate in host machine: %s\n", err.Error())
+	}
+
+	clientCertBytes, err := getBytesFromSecretField(ctx, clientset, "spicedb-kubeapi-proxy", "rakis-client-cert", "tls.crt")
+	if err != nil {
+		return err
+	}
+
+	clientKeyBytes, err := getBytesFromSecretField(ctx, clientset, "spicedb-kubeapi-proxy", "rakis-client-cert", "tls.key")
+	if err != nil {
+		return err
+	}
+
+	developmentKubeConfig := clientcmdapi.NewConfig()
+	proxyCluster := clientcmdapi.NewCluster()
+	proxyCluster.CertificateAuthorityData = serverCACertBytes
+	proxyCluster.Server = proxyHost
+	developmentKubeConfig.Clusters[kubeContextClusterProxy] = proxyCluster
+	localCluster := clientcmdapi.NewCluster()
+	localCluster.CertificateAuthorityData = serverCACertBytes
+	localCluster.Server = "https://127.0.0.1:8443"
+	developmentKubeConfig.Clusters[kubeContextLocalProxy] = localCluster
+	user := clientcmdapi.NewAuthInfo()
+	user.ClientCertificateData = clientCertBytes
+	user.ClientKeyData = clientKeyBytes
+	developmentKubeConfig.AuthInfos[kubeContextClusterProxy] = user
+	kubeCtx := clientcmdapi.NewContext()
+	kubeCtx.Cluster = kubeContextClusterProxy
+	kubeCtx.AuthInfo = kubeContextClusterProxy
+	developmentKubeConfig.Contexts[kubeContextClusterProxy] = kubeCtx
+	developmentKubeConfig.CurrentContext = kubeContextClusterProxy
+	localCtx := clientcmdapi.NewContext()
+	localCtx.Cluster = kubeContextLocalProxy
+	localCtx.AuthInfo = kubeContextClusterProxy
+	developmentKubeConfig.Contexts[kubeContextLocalProxy] = localCtx
+
+	// add admin config to the same kubeconfig (easier to switch)
+	adminConfig, err := clientcmd.LoadFromFile(kubeconfigPath)
+	if err != nil {
+		return err
+	}
+
+	developmentKubeConfig.Clusters[kubeContextUpstreamCluster] = adminConfig.Clusters[kubeCfgClusterName]
+	developmentKubeConfig.AuthInfos[kubeContextUpstreamCluster] = adminConfig.AuthInfos[kubeCfgClusterName]
+	adminCtx := clientcmdapi.NewContext()
+	adminCtx.Cluster = kubeContextUpstreamCluster
+	adminCtx.AuthInfo = kubeContextUpstreamCluster
+	developmentKubeConfig.Contexts[kubeContextUpstreamCluster] = adminCtx
+
+	if err := clientcmd.WriteToFile(*developmentKubeConfig, developmentKubeConfigFileName); err != nil {
+		return err
+	}
+
+	fmt.Println("development kubeconfig generated as " + developmentKubeConfigFileName)
+	return nil
+}
+
+// getBytesFromSecretField retrieves the data bytes from a secret with the speficied namespace, secret name and field names.
+// Since all certs are generated in the development kind cluster by certmanager, this is used to retrieve what's needed
+// to generate both proxy and development kubeconfigs
+func getBytesFromSecretField(ctx context.Context, clientset *kubernetes.Clientset, namespace, secretName, field string) ([]byte, error) {
+	secret, err := clientset.CoreV1().
+		Secrets(namespace).
+		Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	fieldData, ok := secret.Data[field]
+	if !ok {
+		return nil, fmt.Errorf("could not get %s from secret %s", field, secret)
+	}
+	return fieldData, nil
 }
 
 // Clean deletes the dev stack cluster.
@@ -88,10 +216,12 @@ func (d Dev) Clean() error {
 		return err
 	}
 	_ = os.Remove(kubeconfigPath)
-	_ = os.Remove(generatedKubeConfigPath)
+	_ = os.Remove(developmentKubeConfigFileName)
+	_ = os.Remove("client-ca.crt")
 	return nil
 }
 
+// updateKustomizationImageTags is used to update the development kustomization with a newly built proxy image SHA
 func updateKustomizationImageTags(image string) error {
 	kustomizeFile, err := os.Open("deploy/kustomization.yaml")
 	if err != nil {
@@ -120,16 +250,10 @@ func updateKustomizationImageTags(image string) error {
 	return os.WriteFile("deploy/kustomization.yaml", kustomizationBytes, 0o600)
 }
 
-func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, proxyHostPort int32) error {
-	fmt.Println("generating certs")
-	// use the current context in kubeconfig
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-	if err != nil {
-		return err
-	}
-
-	// create the clientset
-	clientset, err := kubernetes.NewForConfig(config)
+// writeUpstreamKubeconfigAsSecret writes the generated Kind cluster kubeconfig into the cluster as a Secret. This
+// is necessary for the proxy to be able to auth against the upstream Kube API
+func writeUpstreamKubeconfigAsSecret(ctx context.Context, kubeconfigPath string) error {
+	clientset, err := clientSetForKubeConfig(kubeconfigPath)
 	if err != nil {
 		return err
 	}
@@ -139,255 +263,31 @@ func generateCertsAndKubeConfig(ctx context.Context, kubeconfigPath string, prox
 	if err != nil {
 		return err
 	}
-	_, err = clientset.CoreV1().Secrets("kube-system").Apply(ctx,
-		applycorev1.Secret("rebac-proxy-kubeconfig", "kube-system").
+	_, err = clientset.CoreV1().Namespaces().Apply(ctx,
+		applycorev1.Namespace("spicedb-kubeapi-proxy"),
+		metav1.ApplyOptions{FieldManager: "localdev", Force: true})
+	if err != nil {
+		return err
+	}
+
+	_, err = clientset.CoreV1().Secrets("spicedb-kubeapi-proxy").Apply(ctx,
+		applycorev1.Secret("rebac-proxy-kubeconfig", "spicedb-kubeapi-proxy").
 			WithStringData(map[string]string{
 				"kubeconfig": string(kubeconfigBytes),
 			}),
 		metav1.ApplyOptions{FieldManager: "localdev", Force: true})
+
+	return err
+}
+
+// clientSetForKubeConfig returns a kube client based on a provided kubeconfig path
+func clientSetForKubeConfig(kubeconfigPath string) (*kubernetes.Clientset, error) {
+	// use the current context in kubeconfig
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// create the serving CA - this will sign the proxy's TLS certs and is
-	// what goes in the CA data in the proxy's kubeconfig entry
-	serverCA := &x509.Certificate{
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(1, 1, 1),
-		SerialNumber:          big.NewInt(0),
-		Subject:               pkix.Name{Organization: []string{"authzed rebac proxy"}, CommonName: "authzed rebac"},
-		IsCA:                  true,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-	}
-	serverCaPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return err
-	}
-	serverCaPublicKey := &serverCaPrivateKey.PublicKey
-	serverCaCertBytes, err := x509.CreateCertificate(rand.Reader, serverCA, serverCA, serverCaPublicKey, serverCaPrivateKey)
-	if err != nil {
-		return err
-	}
-	serverCaCert, err := x509.ParseCertificate(serverCaCertBytes)
-	if err != nil {
-		return err
-	}
-
-	var serverCaPem bytes.Buffer
-	err = pem.Encode(&serverCaPem, &pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: serverCaCert.Raw,
-	})
-	if err != nil {
-		return err
-	}
-
-	// create the server keypair, the certs the proxy uses to serve requests
-	serverCertData := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(1, 1, 1),
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost", "node"},
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
-	}
-	serverCertPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return err
-	}
-	serverCertPublicKey := &serverCertPrivateKey.PublicKey
-	serverCertBytes, err := x509.CreateCertificate(rand.Reader, serverCertData, serverCaCert, serverCertPublicKey, serverCaPrivateKey)
-	if err != nil {
-		return err
-	}
-	serverCert, err := x509.ParseCertificate(serverCertBytes)
-	if err != nil {
-		return err
-	}
-
-	serverKeyBytes, err := x509.MarshalECPrivateKey(serverCertPrivateKey)
-	if err != nil {
-		return err
-	}
-
-	var serverKeyPem bytes.Buffer
-	err = pem.Encode(&serverKeyPem, &pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: serverKeyBytes,
-	})
-	if err != nil {
-		return err
-	}
-
-	wd, err := os.Getwd()
-	proxyKeyPath := path.Join(wd, "proxy.key")
-	if err := os.WriteFile(proxyKeyPath, serverKeyPem.Bytes(), 0o600); err != nil {
-		fmt.Printf("unable to cache proxy private key in host machine: %s\n", err.Error())
-	}
-
-	var serverCertPem bytes.Buffer
-	err = pem.Encode(&serverCertPem, &pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: serverCert.Raw,
-	})
-	if err != nil {
-		return err
-	}
-
-	proxyCertPath := path.Join(wd, "proxy.crt")
-	if err := os.WriteFile(proxyCertPath, serverCertPem.Bytes(), 0o600); err != nil {
-		fmt.Printf("unable to cache proxy public certificate in host machine: %s\n", err.Error())
-	}
-
-	_, err = clientset.CoreV1().Secrets("kube-system").Apply(ctx,
-		applycorev1.Secret("rebac-proxy-tls", "kube-system").
-			WithStringData(map[string]string{
-				"proxy.crt": serverCertPem.String(),
-				"proxy.key": serverKeyPem.String(),
-			}),
-		metav1.ApplyOptions{FieldManager: "localdev", Force: true})
-	if err != nil {
-		return err
-	}
-
-	// create the client CA - this is used to authenticate proxy users using
-	// client cert auth
-	clientCA := &x509.Certificate{
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(1, 1, 1),
-		SerialNumber:          big.NewInt(0),
-		Subject:               pkix.Name{Organization: []string{"authzed rebac proxy"}, CommonName: "authzed rebac"},
-		IsCA:                  true,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-	}
-	clientCaPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return err
-	}
-	clientCaPublicKey := &clientCaPrivateKey.PublicKey
-	clientCaCertBytes, err := x509.CreateCertificate(rand.Reader, clientCA, clientCA, clientCaPublicKey, clientCaPrivateKey)
-	if err != nil {
-		return err
-	}
-	clientCaCert, err := x509.ParseCertificate(clientCaCertBytes)
-	if err != nil {
-		return err
-	}
-
-	var clientCaPem bytes.Buffer
-	err = pem.Encode(&clientCaPem, &pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: clientCaCert.Raw,
-	})
-	if err != nil {
-		return err
-	}
-
-	caPath := path.Join(wd, "client-ca.crt")
-	if err := os.WriteFile(caPath, clientCaPem.Bytes(), 0o600); err != nil {
-		fmt.Printf("unable to cache proxy client CA certificate in host machine: %s\n", err.Error())
-	}
-
-	_, err = clientset.CoreV1().Secrets("kube-system").Apply(ctx,
-		applycorev1.Secret("rebac-proxy-request-client-ca", "kube-system").
-			WithStringData(map[string]string{
-				"ca.crt": clientCaPem.String(),
-			}),
-		metav1.ApplyOptions{FieldManager: "localdev", Force: true})
-	if err != nil {
-		return err
-	}
-
-	// generate client certs - this is used to authenticate a proxy client
-	// with the proxy. The `CommonName` of the cert is treated as the username.
-	rakisUserCertData := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{"authzed"},
-			CommonName:   "rakis",
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(1, 1, 1),
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"rakis"},
-	}
-	rootUserPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return err
-	}
-	rootUserPublicKey := &rootUserPrivateKey.PublicKey
-	rootUserCertBytes, err := x509.CreateCertificate(rand.Reader, rakisUserCertData, clientCaCert, rootUserPublicKey, clientCaPrivateKey)
-	if err != nil {
-		return err
-	}
-	rootUserCert, err := x509.ParseCertificate(rootUserCertBytes)
-	if err != nil {
-		return err
-	}
-
-	var clientKeyPem bytes.Buffer
-	rootKeyBytes, err := x509.MarshalECPrivateKey(rootUserPrivateKey)
-	if err != nil {
-		return err
-	}
-	err = pem.Encode(&clientKeyPem, &pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: rootKeyBytes,
-	})
-	if err != nil {
-		return err
-	}
-
-	var clientCertPem bytes.Buffer
-	err = pem.Encode(&clientCertPem, &pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: rootUserCert.Raw,
-	})
-	if err != nil {
-		return err
-	}
-
-	const (
-		proxyCtxName = "proxy"
-		adminCtxName = "admin"
-	)
-	proxyConfig := clientcmdapi.NewConfig()
-	cluster := clientcmdapi.NewCluster()
-	cluster.CertificateAuthorityData = serverCaPem.Bytes()
-	cluster.Server = fmt.Sprintf("https://127.0.0.1:%d", proxyHostPort)
-	proxyConfig.Clusters[proxyCtxName] = cluster
-	user := clientcmdapi.NewAuthInfo()
-	user.ClientCertificateData = clientCertPem.Bytes()
-	user.ClientKeyData = clientKeyPem.Bytes()
-	proxyConfig.AuthInfos[proxyCtxName] = user
-	kubeCtx := clientcmdapi.NewContext()
-	kubeCtx.Cluster = proxyCtxName
-	kubeCtx.AuthInfo = proxyCtxName
-	proxyConfig.Contexts[proxyCtxName] = kubeCtx
-	proxyConfig.CurrentContext = proxyCtxName
-
-	// add admin config to the same kubeconfig (easier to switch)
-	adminConfig, err := clientcmd.LoadFromFile(kubeconfigPath)
-	if err != nil {
-		return err
-	}
-	proxyConfig.Clusters[adminCtxName] = adminConfig.Clusters[kubeCfgClusterName]
-	proxyConfig.AuthInfos[adminCtxName] = adminConfig.AuthInfos[kubeCfgClusterName]
-	adminCtx := clientcmdapi.NewContext()
-	adminCtx.Cluster = adminCtxName
-	adminCtx.AuthInfo = adminCtxName
-	proxyConfig.Contexts[adminCtxName] = adminCtx
-
-	if err := clientcmd.WriteToFile(*proxyConfig, generatedKubeConfigPath); err != nil {
-		return err
-	}
-	return nil
+	// create the clientset
+	return kubernetes.NewForConfig(config)
 }

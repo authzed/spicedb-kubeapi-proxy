@@ -9,6 +9,13 @@ import (
 
 type Test mg.Namespace
 
+// All runs both unit and e2e tests
+func (t Test) All() error {
+	mg.Deps(t.Unit, t.E2e)
+
+	return nil
+}
+
 // Unit runs the unit tests.
 func (Test) Unit() error {
 	return RunSh("go", WithV())("test", "./...")

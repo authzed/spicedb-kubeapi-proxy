@@ -284,7 +284,7 @@ func (c *ClientCA) GenerateUserConfig(user string) *clientcmdapi.Config {
 	// TODO: instead of hardcoding this path, just generate serving certs
 	// in a tempdir and pass the path. This is where the apiserver generates
 	// self-signed certs if you don't pass any in.
-	cluster.CertificateAuthority = "apiserver.local.config/certificates/proxy.crt"
+	cluster.CertificateAuthority = "apiserver.local.config/certificates/tls.crt"
 	cluster.Server = fmt.Sprintf("https://%s:%d", c.host, c.port)
 	proxyConfig.Clusters[user] = cluster
 	userInfo := clientcmdapi.NewAuthInfo()

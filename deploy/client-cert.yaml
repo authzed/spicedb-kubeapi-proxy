@@ -1,0 +1,22 @@
+# This is the client certificate that must be presented when talking
+# to the proxy. This is an example where rakis is the client
+# The common name will be used as the client username, which is included in an allowlist in the proxy
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: rakis-cert
+  namespace: spicedb-kubeapi-proxy
+spec:
+  isCA: false
+  commonName: rakis
+  secretName: rakis-client-cert
+  duration: 17520h0m0s   # 2y
+  renewBefore: 8760h0m0s # 1y
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    name: spicedb-kubeapi-proxy-client-ca-issuer
+    kind: Issuer
+    group: cert-manager.io

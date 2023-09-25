@@ -62,6 +62,8 @@ type Options struct {
 	LockMode             string
 }
 
+const tlsCertificatePairName = "tls"
+
 func NewOptions() *Options {
 	o := &Options{
 		SecureServing:  *apiserveroptions.NewSecureServingOptions().WithLoopback(),
@@ -70,7 +72,7 @@ func NewOptions() *Options {
 	}
 	o.Logs.Verbosity = logsv1.VerbosityLevel(2)
 	o.SecureServing.BindPort = 443
-	o.SecureServing.ServerCert.PairName = "proxy"
+	o.SecureServing.ServerCert.PairName = tlsCertificatePairName
 	return o
 }
 
