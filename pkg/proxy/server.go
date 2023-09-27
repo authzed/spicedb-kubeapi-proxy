@@ -11,6 +11,7 @@ import (
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"golang.org/x/sync/errgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -137,40 +138,37 @@ func (s *Server) PermissionClient() v1.PermissionsServiceClient {
 
 func (s *Server) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	// TODO: errgroup
+	var g errgroup.Group
 
 	if s.opts.EmbeddedSpiceDB != nil {
-		go func() {
-			if err := s.opts.EmbeddedSpiceDB.Run(ctx); err != nil {
-				klog.FromContext(ctx).Error(err, "failed to run spicedb")
-				cancel()
-				return
-			}
-			klog.FromContext(ctx).Info("embedded SpiceDB stopped")
-		}()
+		g.Go(func() error {
+			return s.opts.EmbeddedSpiceDB.Run(ctx)
+		})
 	}
+	g.Go(func() error {
+		return s.WorkflowWorker.Start(ctx)
+	})
 
-	go func() {
-		if err := s.WorkflowWorker.Start(ctx); err != nil {
-			klog.FromContext(ctx).Error(err, "failed to run workflow worker")
-			cancel()
-			return
+	g.Go(func() error {
+		done, _, err := s.opts.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
+		if err != nil {
+			return err
 		}
-		klog.FromContext(ctx).Info("workflow worker started")
-	}()
-	doneCh, _, err := s.opts.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
-	if err != nil {
+		<-done
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
+		defer cancel()
+		if err := s.WorkflowWorker.Shutdown(ctx); err != nil {
+			return err
+		}
 		return err
 	}
 
-	<-doneCh
-
-	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
-	defer cancel()
-	if err := s.WorkflowWorker.Shutdown(ctx); err != nil {
-		return err
-	}
 	return nil
 }
 
