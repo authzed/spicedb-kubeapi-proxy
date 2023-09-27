@@ -12,10 +12,11 @@ require (
 	github.com/cschleiden/go-workflows v0.16.2
 	github.com/dustin/go-humanize v1.0.1
 	github.com/google/uuid v1.3.0
-	github.com/jmespath/go-jmespath v0.4.0
+	github.com/kyverno/go-jmespath v0.4.1-0.20230705123211-d067dc3d6613
 	github.com/spf13/cobra v1.7.0
 	github.com/spf13/pflag v1.0.6-0.20210604193023-d5e0c0615ace
 	github.com/stretchr/testify v1.8.4
+	golang.org/x/sync v0.3.0
 	google.golang.org/grpc v1.56.2
 	k8s.io/apimachinery v0.28.0
 	k8s.io/apiserver v0.28.0
@@ -194,7 +195,6 @@ require (
 	golang.org/x/mod v0.12.0 // indirect
 	golang.org/x/net v0.13.0 // indirect
 	golang.org/x/oauth2 v0.10.0 // indirect
-	golang.org/x/sync v0.3.0 // indirect
 	golang.org/x/sys v0.10.0 // indirect
 	golang.org/x/term v0.10.0 // indirect
 	golang.org/x/text v0.11.0 // indirect

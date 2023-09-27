@@ -12,14 +12,11 @@ import (
 	"slices"
 	"sync"
 
-	"golang.org/x/sync/errgroup"
-
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
-
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/client"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -29,6 +26,9 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
+
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
 func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient client.Client, matcher *rules.Matcher) (http.Handler, error) {
@@ -53,16 +53,11 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 			return
 		}
 
-		input := &rules.ResolveInput{
-			Request: requestInfo,
-			User:    userInfo.(*user.DefaultInfo),
-		}
-
 		// create/update requests should contain an object body, parse it and
 		// include in the input
 		var body []byte
+		var object *metav1.PartialObjectMetadata
 		if slices.Contains([]string{"create", "update", "patch"}, requestInfo.Verb) {
-			pom := metav1.PartialObjectMetadata{}
 			var err error
 			body, err = io.ReadAll(req.Body)
 			if err != nil {
@@ -70,12 +65,14 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				return
 			}
 			decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(body), 100)
+			var pom metav1.PartialObjectMetadata
 			if err := decoder.Decode(&pom); err != nil {
 				failed.ServeHTTP(w, req)
 				return
 			}
-			input.Object = &pom
+			object = &pom
 		}
+		input := rules.NewResolveInput(requestInfo, userInfo.(*user.DefaultInfo), object)
 
 		matchingRules := (*matcher).Match(requestInfo)
 
@@ -165,6 +162,17 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				preconditions = append(preconditions, p)
 			}
 
+			writeInput := &distributedtx.WriteObjInput{
+				RequestInfo:   requestInfo,
+				UserInfo:      userInfo.(*user.DefaultInfo),
+				Header:        req.Header.Clone(),
+				Rels:          writeRels,
+				Preconditions: preconditions,
+				Body:          body,
+			}
+			if input.Object != nil {
+				writeInput.ObjectMeta = &input.Object.ObjectMeta
+			}
 			dualWrite := func() (*distributedtx.KubeResp, error) {
 				workflow, err := distributedtx.WorkflowForLockMode(string(r.LockMode))
 				if err != nil {
@@ -172,14 +180,7 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				}
 				id, err := workflowClient.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{
 					InstanceID: uuid.NewString(),
-				}, workflow, &distributedtx.WriteObjInput{
-					RequestInfo:   requestInfo,
-					UserInfo:      userInfo.(*user.DefaultInfo),
-					ObjectMeta:    &input.Object.ObjectMeta,
-					Rels:          writeRels,
-					Preconditions: preconditions,
-					Body:          body,
-				})
+				}, workflow, writeInput)
 				if err != nil {
 					return nil, err
 				}
@@ -212,19 +213,18 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				return
 			}
 
-			// TODO: are there any use-cases for running the filter step
-			//  after a write?
 			return
 		}
 
 		authzData := &AuthzData{
 			allowedNNC: make(chan types.NamespacedName),
+			removedNNC: make(chan types.NamespacedName),
 			allowedNN:  map[types.NamespacedName]struct{}{},
 		}
 
 		authorizeGet(input, authzData)
 
-		if err := filter(ctx, matchingRules, input, authzData, permissionsClient, watchClient); err != nil {
+		if err := filterResponse(ctx, matchingRules, input, authzData, permissionsClient, watchClient); err != nil {
 			failed.ServeHTTP(w, req)
 			return
 		}
@@ -276,9 +276,9 @@ func check(ctx context.Context, matchingRules []*rules.RunnableRule, input *rule
 	return checkGroup.Wait()
 }
 
-func filter(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, authzData *AuthzData, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient) error {
-	// filter responses by fetching a list of allowed objects in parallel with
-	// the request
+// filterResponse filters responses by fetching a list of allowed objects in
+// parallel with the request
+func filterResponse(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, authzData *AuthzData, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient) error {
 	for _, r := range matchingRules {
 		for _, f := range r.PreFilter {
 
@@ -296,7 +296,7 @@ func filter(ctx context.Context, matchingRules []*rules.RunnableRule, input *rul
 
 			switch input.Request.Verb {
 			case "list":
-				filterList(ctx, client, filter, input, authzData)
+				filterList(ctx, client, filter, authzData)
 			case "watch":
 				filterWatch(ctx, client, watchClient, filter, input, authzData)
 			}
@@ -305,28 +305,30 @@ func filter(ctx context.Context, matchingRules []*rules.RunnableRule, input *rul
 	return nil
 }
 
-// TODO: should derive a filter from the rule for get
 func authorizeGet(input *rules.ResolveInput, authzData *AuthzData) {
 	if input.Request.Verb != "get" {
 		return
 	}
 	close(authzData.allowedNNC)
+	close(authzData.removedNNC)
 	authzData.Lock()
 	defer authzData.Unlock()
 	// gets aren't really filtered, but we add them to the allowed list so that
 	// downstream can know it's passed all configured checks.
-	authzData.allowedNN[types.NamespacedName{Name: input.Request.Name, Namespace: normalizedNamespace(input.Request)}] = struct{}{}
+	authzData.allowedNN[types.NamespacedName{Name: input.Name, Namespace: input.Namespace}] = struct{}{}
 }
 
 type wrapper struct {
-	Response *v1.LookupResourcesResponse `json:"response"`
+	ResourceID string `json:"resourceId"`
+	SubjectID  string `json:"subjectId"`
 }
 
-func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
+func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter *rules.ResolvedPreFilter, authzData *AuthzData) {
 	go func() {
 		authzData.Lock()
 		defer authzData.Unlock()
 		defer close(authzData.allowedNNC)
+		defer close(authzData.removedNNC)
 
 		lr, err := client.LookupResources(ctx, &v1.LookupResourcesRequest{
 			Consistency: &v1.Consistency{
@@ -356,10 +358,10 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				fmt.Println(err)
 				return
 			}
-			// TODO: this will mark an object that matches any filter as allowed, should
+			// TODO: this will mark an object that matches any filterResponse as allowed, should
 			//   probably change to check all filters.
 
-			byteIn, err := json.Marshal(wrapper{Response: resp})
+			byteIn, err := json.Marshal(wrapper{ResourceID: resp.ResourceObjectId})
 			if err != nil {
 				fmt.Println(err)
 				return
@@ -370,6 +372,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				return
 			}
 
+			fmt.Println("GOT WATCH FILTER EVENT", string(byteIn))
 			name, err := filter.Name.Search(data)
 			if err != nil {
 				fmt.Println(err)
@@ -386,7 +389,9 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 			if namespace == nil {
 				namespace = ""
 			}
+			fmt.Println("NAMENS", name, namespace)
 
+			// TODO: check permissionship?
 			authzData.allowedNN[types.NamespacedName{
 				Name:      name.(string),
 				Namespace: namespace.(string),
@@ -399,6 +404,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
 	go func() {
 		defer close(authzData.allowedNNC)
+		defer close(authzData.removedNNC)
 
 		watchResource, err := watchClient.Watch(ctx, &v1.WatchRequest{
 			OptionalObjectTypes: []string{filter.Rel.ResourceType},
@@ -419,38 +425,71 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 			}
 
 			for _, u := range resp.Updates {
-				if u.Operation == v1.RelationshipUpdate_OPERATION_TOUCH || u.Operation == v1.RelationshipUpdate_OPERATION_CREATE {
-					// do a check
-					cr, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
-						Consistency: &v1.Consistency{
-							Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
+				cr, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
+					Consistency: &v1.Consistency{
+						Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
+					},
+					Resource: &v1.ObjectReference{
+						ObjectType: filter.Rel.ResourceType,
+						// TODO: should swap out subject id if in subject mode
+						ObjectId: u.Relationship.Resource.ObjectId,
+					},
+					Permission: filter.Rel.ResourceRelation,
+					Subject: &v1.SubjectReference{
+						Object: &v1.ObjectReference{
+							ObjectType: filter.Rel.SubjectType,
+							ObjectId:   filter.Rel.SubjectID,
 						},
-						Resource: &v1.ObjectReference{
-							ObjectType: filter.Rel.ResourceType,
-							// TODO: should swap out subject id if in subject mode
-							ObjectId: u.Relationship.Resource.ObjectId,
-						},
-						Permission: filter.Rel.ResourceRelation,
-						Subject: &v1.SubjectReference{
-							Object: &v1.ObjectReference{
-								ObjectType: filter.Rel.SubjectType,
-								ObjectId:   filter.Rel.SubjectID,
-							},
-							OptionalRelation: filter.Rel.SubjectRelation,
-						},
-					})
-					if err != nil {
-						fmt.Println(err)
-						return
-					}
-					// TODO: this will mark an object that matches any filter as allowed, should
-					//   probably change to check all filters.
+						OptionalRelation: filter.Rel.SubjectRelation,
+					},
+				})
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				// TODO: this will mark an object that matches any filterResponse as allowed, should
+				//   probably change to check all filters.
 
-					fmt.Println(u.Relationship.Resource.ObjectId, cr.Permissionship)
-					if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
-						fmt.Println("sending allowed name", u.Relationship.Resource.ObjectId)
-						authzData.allowedNNC <- types.NamespacedName{Name: u.Relationship.Resource.ObjectId, Namespace: normalizedNamespace(input.Request)}
-					}
+				byteIn, err := json.Marshal(wrapper{ResourceID: u.Relationship.Resource.ObjectId, SubjectID: u.Relationship.Subject.Object.ObjectId})
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				var data any
+				if err := json.Unmarshal(byteIn, &data); err != nil {
+					fmt.Println(err)
+					return
+				}
+				fmt.Println(data)
+				fmt.Println("RESPONSE", string(byteIn))
+
+				name, err := filter.Name.Search(data)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				fmt.Println("GOT NAME", name)
+				if name == nil || len(name.(string)) == 0 {
+					return
+				}
+				namespace, err := filter.Namespace.Search(data)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				fmt.Println("GOT NAMESPACE", namespace)
+				if namespace == nil {
+					namespace = ""
+				}
+				nn := types.NamespacedName{Name: name.(string), Namespace: namespace.(string)}
+
+				// TODO: this should really be over a single channel to prevent
+				//  races on add/remove
+				fmt.Println(u.Relationship.Resource.ObjectId, cr.Permissionship)
+				if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
+					authzData.allowedNNC <- nn
+				} else {
+					authzData.removedNNC <- nn
 				}
 			}
 		}
@@ -486,6 +525,7 @@ func AuthzDataFrom(ctx context.Context) (*AuthzData, bool) {
 type AuthzData struct {
 	sync.RWMutex
 	allowedNNC chan types.NamespacedName
+	removedNNC chan types.NamespacedName
 	allowedNN  map[types.NamespacedName]struct{}
 }
 
@@ -524,13 +564,17 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 	case pom.IsList():
 		filtered, err = d.FilterList(body)
 	default:
-		// filter single object
+		// filterResponse single object
 		filtered, err = d.FilterObject(pom.ToPartialObjectMetadata(), body)
 	}
 
 	if err != nil {
-		fmt.Println(err)
-		return err
+		var merr error
+		filtered, merr = json.Marshal(k8serrors.NewUnauthorized(err.Error()))
+		if merr != nil {
+			return merr
+		}
+		resp.StatusCode = http.StatusUnauthorized
 	}
 
 	resp.Body = io.NopCloser(bytes.NewBuffer(filtered))
@@ -548,7 +592,6 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 
 	go func() {
 		fmt.Println("running watcher")
-
 		events := make(chan []byte)
 		go func() {
 			fmt.Println("watching for chunks")
@@ -584,7 +627,7 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 			return nil
 		}
 
-		bufferedEvents := make(map[types.NamespacedName][]byte, 0)
+		bufferedEvents := make(map[types.NamespacedName][]byte)
 		for {
 			select {
 			case chunk := <-events:
@@ -593,7 +636,6 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 					fmt.Println(err)
 					fmt.Println(string(chunk))
 				}
-				// TODO: Deletes?
 				if event.Type == string(watch.Added) || event.Type == string(watch.Modified) {
 					pom := metav1.PartialObjectMetadata{}
 
@@ -639,9 +681,6 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 
 				}
 			case nn := <-d.allowedNNC:
-				fmt.Println("recv allowed", nn)
-				fmt.Println("bufferedEvents on nn recv", bufferedEvents)
-
 				d.Lock()
 				d.allowedNN[nn] = struct{}{}
 				d.Unlock()
@@ -653,6 +692,14 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 					} else {
 						delete(bufferedEvents, nn)
 					}
+				}
+			case nn := <-d.removedNNC:
+				d.Lock()
+				delete(d.allowedNN, nn)
+				d.Unlock()
+
+				if _, ok := bufferedEvents[nn]; ok {
+					delete(bufferedEvents, nn)
 				}
 			case <-resp.Request.Context().Done():
 				fmt.Println("request canceled")

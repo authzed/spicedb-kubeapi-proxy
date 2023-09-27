@@ -6,9 +6,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/jmespath/go-jmespath"
+	"github.com/kyverno/go-jmespath"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -104,9 +105,51 @@ type ResolvedRel UncompiledRelExpr
 
 // ResolveInput is the data fed into RelExpr to be evaluated.
 type ResolveInput struct {
-	Request *request.RequestInfo          `json:"request"`
-	User    *user.DefaultInfo             `json:"user"`
-	Object  *metav1.PartialObjectMetadata `json:"object"`
+	Name           string                        `json:"name"`
+	Namespace      string                        `json:"namespace"`
+	NamespacedName string                        `json:"namespacedName"`
+	Request        *request.RequestInfo          `json:"request"`
+	User           *user.DefaultInfo             `json:"user"`
+	Object         *metav1.PartialObjectMetadata `json:"object"`
+}
+
+// NewResolveInput creates a ResolveInput with normalized fields.
+func NewResolveInput(req *request.RequestInfo, user *user.DefaultInfo, object *metav1.PartialObjectMetadata) *ResolveInput {
+	var name, namespace, namespacedName string
+
+	// default to object
+	if object != nil {
+		name = object.Name
+		namespace = object.Namespace
+	}
+	// fallback to request
+	if len(name) == 0 {
+		name = req.Name
+	}
+	if len(namespace) == 0 {
+		namespace = req.Namespace
+	}
+
+	// the request on a namespace resource has both name and namespace set to
+	// the namespace name, clear out the namespace so it matches other cluster
+	// scoped objects.
+	if req.Resource == "namespaces" {
+		namespace = ""
+	}
+
+	if len(namespace) > 0 {
+		namespacedName = types.NamespacedName{Name: name, Namespace: namespace}.String()
+	} else {
+		namespacedName = name
+	}
+	return &ResolveInput{
+		Name:           name,
+		Namespace:      namespace,
+		NamespacedName: namespacedName,
+		Request:        req,
+		User:           user,
+		Object:         object,
+	}
 }
 
 func ResolveRel(expr *RelExpr, input *ResolveInput) (*ResolvedRel, error) {
@@ -243,11 +286,15 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 		if err != nil {
 			return nil, err
 		}
+		name.Register(splitName)
+		name.Register(splitNamespace)
 		if f.Namespace == "" {
 			// this will compile to the jmespath expression returning ""
 			f.Namespace = "''"
 		}
 		namespace, err := jmespath.Compile(f.Namespace)
+		namespace.Register(splitName)
+		namespace.Register(splitNamespace)
 		if err != nil {
 			return nil, err
 		}
@@ -380,4 +427,32 @@ func ParseRelSring(tpl string) (*UncompiledRelExpr, error) {
 		parsed.SubjectRelation = groups[subjectRelIndex]
 	}
 	return &parsed, nil
+}
+
+var splitName = jmespath.FunctionEntry{
+	Name: "splitName",
+	Arguments: []jmespath.ArgSpec{
+		{Types: []jmespath.JpType{jmespath.JpString}},
+	},
+	Handler: func(arguments []any) (any, error) {
+		_, name, ok := strings.Cut(arguments[0].(string), "/")
+		if !ok {
+			return arguments[0].(string), nil
+		}
+		return name, nil
+	},
+}
+
+var splitNamespace = jmespath.FunctionEntry{
+	Name: "splitNamespace",
+	Arguments: []jmespath.ArgSpec{
+		{Types: []jmespath.JpType{jmespath.JpString}},
+	},
+	Handler: func(arguments []any) (any, error) {
+		namespace, _, ok := strings.Cut(arguments[0].(string), "/")
+		if !ok {
+			return "", nil
+		}
+		return namespace, nil
+	},
 }

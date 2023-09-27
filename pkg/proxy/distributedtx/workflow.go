@@ -23,7 +23,6 @@ const (
 	lockRelationName                         = "workflow"
 	workflowResourceType                     = "workflow"
 	MaxKubeAttempts                          = 5
-	DefaultLockMode                          = StrategyPessimisticWriteToSpiceDBAndKube
 	StrategyOptimisticWriteToSpiceDBAndKube  = "Optimistic"
 	StrategyPessimisticWriteToSpiceDBAndKube = "Pessimistic"
 	DefaultWorkflowTimeout                   = time.Second * 30
@@ -38,6 +37,7 @@ var KubeBackoff = wait.Backoff{
 
 type WriteObjInput struct {
 	RequestInfo   *request.RequestInfo
+	Header        http.Header
 	UserInfo      *user.DefaultInfo
 	ObjectMeta    *metav1.ObjectMeta
 	Rels          []*v1.Relationship
@@ -50,42 +50,50 @@ func (input *WriteObjInput) validate() error {
 		return fmt.Errorf("missing user info in CreateObjectInput")
 	}
 
-	if input.ObjectMeta.Name == "" {
-		return fmt.Errorf("missing object meta in CreateObjectInput")
-	}
-
-	// TODO more validation
-
 	return nil
 }
 
 func (input *WriteObjInput) toKubeReqInput() *KubeReqInput {
 	return &KubeReqInput{
 		RequestInfo: input.RequestInfo,
+		Header:      input.Header,
 		ObjectMeta:  input.ObjectMeta,
 		Body:        input.Body,
 	}
 }
 
-type RollbackRelationships []*v1.Relationship
+type RollbackRelationships []*v1.RelationshipUpdate
 
-func NewRollbackRelationships(rels ...*v1.Relationship) *RollbackRelationships {
+func NewRollbackRelationships(rels ...*v1.RelationshipUpdate) *RollbackRelationships {
 	r := RollbackRelationships(rels)
 	return &r
 }
 
-func (r *RollbackRelationships) WithRels(relationships ...*v1.Relationship) *RollbackRelationships {
+func (r *RollbackRelationships) WithRels(relationships ...*v1.RelationshipUpdate) *RollbackRelationships {
 	*r = append(*r, relationships...)
 	return r
 }
 
 func (r *RollbackRelationships) Cleanup(ctx workflow.Context) {
+
+	invert := func(op v1.RelationshipUpdate_Operation) v1.RelationshipUpdate_Operation {
+		switch op {
+		case v1.RelationshipUpdate_OPERATION_CREATE:
+			fallthrough
+		case v1.RelationshipUpdate_OPERATION_TOUCH:
+			return v1.RelationshipUpdate_OPERATION_DELETE
+		case v1.RelationshipUpdate_OPERATION_DELETE:
+			return v1.RelationshipUpdate_OPERATION_TOUCH
+		}
+		return v1.RelationshipUpdate_OPERATION_UNSPECIFIED
+	}
+
 	updates := make([]*v1.RelationshipUpdate, 0, len(*r))
 	for _, rel := range *r {
 		rel := rel
 		updates = append(updates, &v1.RelationshipUpdate{
-			Operation:    v1.RelationshipUpdate_OPERATION_DELETE,
-			Relationship: rel,
+			Operation:    invert(rel.Operation),
+			Relationship: rel.Relationship,
 		})
 	}
 
@@ -96,7 +104,7 @@ func (r *RollbackRelationships) Cleanup(ctx workflow.Context) {
 			&v1.WriteRelationshipsRequest{Updates: updates})
 
 		if _, err := f.Get(ctx); err != nil {
-			fmt.Println("error deleting lock tuple", err)
+			fmt.Println("error rolling back tuples", err)
 			continue
 		}
 		// no error, delete succeeded, exit loop
@@ -121,23 +129,26 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 	rollback := NewRollbackRelationships(resourceLockRel)
 
 	preconditions := []*v1.Precondition{
-		resourceLockDoesNotExist(resourceLockRel),
+		resourceLockDoesNotExist(resourceLockRel.Relationship),
 	}
 	preconditions = append(preconditions, input.Preconditions...)
-	updates := []*v1.RelationshipUpdate{{
-		Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
-		Relationship: resourceLockRel,
-	}}
+
+	operation := v1.RelationshipUpdate_OPERATION_TOUCH
+	if input.RequestInfo.Verb == "delete" {
+		operation = v1.RelationshipUpdate_OPERATION_DELETE
+	}
+
+	updates := make([]*v1.RelationshipUpdate, 0, len(input.Rels))
 	for _, r := range input.Rels {
 		updates = append(updates, &v1.RelationshipUpdate{
-			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
+			Operation:    operation,
 			Relationship: r,
 		})
 	}
 
 	arg := &v1.WriteRelationshipsRequest{
 		OptionalPreconditions: preconditions,
-		Updates:               updates,
+		Updates:               append(updates, resourceLockRel),
 	}
 
 	_, err := workflow.ExecuteActivity[*v1.WriteRelationshipsResponse](ctx,
@@ -148,7 +159,7 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 		// request failed for some reason
 		fmt.Println("spicedb write failed", err)
 
-		rollback.WithRels(input.Rels...).Cleanup(ctx)
+		rollback.WithRels(updates...).Cleanup(ctx)
 
 		// if the spicedb write fails, report it as a kube conflict error
 		// we return this for any error, not just lock conflicts, so that the
@@ -183,18 +194,18 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 			continue
 		}
 
-		if out.StatusCode == http.StatusConflict || out.StatusCode == http.StatusCreated {
+		if out.StatusCode == http.StatusConflict || out.StatusCode == http.StatusCreated || out.StatusCode == http.StatusOK {
 			rollback.Cleanup(ctx)
 			return out, nil
 		}
 
 		// some other status code is some other type of error, remove
 		// the original tuple and the lock tuple
-		rollback.WithRels(input.Rels...).Cleanup(ctx)
+		rollback.WithRels(updates...).Cleanup(ctx)
 		return out, nil
 	}
 
-	rollback.WithRels(input.Rels...).Cleanup(ctx)
+	rollback.WithRels(updates...).Cleanup(ctx)
 	return nil, fmt.Errorf("failed to communicate with kubernetes after %d attempts", MaxKubeAttempts)
 }
 
@@ -207,17 +218,20 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 	}
 
 	// TODO: this could optionally use dry-run to preflight the kube request
-
-	rollback := NewRollbackRelationships(input.Rels...)
+	operation := v1.RelationshipUpdate_OPERATION_CREATE
+	if input.RequestInfo.Verb == "delete" {
+		operation = v1.RelationshipUpdate_OPERATION_DELETE
+	}
 
 	updates := make([]*v1.RelationshipUpdate, 0, len(input.Rels))
 	for _, r := range input.Rels {
 		updates = append(updates, &v1.RelationshipUpdate{
-			Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
+			Operation:    operation,
 			Relationship: r,
 		})
 	}
 
+	rollback := NewRollbackRelationships(updates...)
 	_, err := workflow.ExecuteActivity[*v1.WriteRelationshipsResponse](ctx,
 		workflow.DefaultActivityOptions,
 		activityHandler.WriteToSpiceDB,
@@ -259,19 +273,29 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 
 // ResourceLockRel generates a relationship representing a worfklow's lock over a
 // specific resource in kube.
-func ResourceLockRel(input *WriteObjInput, workflowID string) *v1.Relationship {
-	lockKey := input.RequestInfo.Path + "/" + input.ObjectMeta.GetName() + "/" + input.RequestInfo.Verb
+func ResourceLockRel(input *WriteObjInput, workflowID string) *v1.RelationshipUpdate {
+	// Delete names come from the request, Create names come from the object
+	// TODO: this could benefit from an objectid helper shared with jmespath
+	name := input.RequestInfo.Name
+	if input.ObjectMeta != nil {
+		name = input.ObjectMeta.Name
+	}
+
+	lockKey := input.RequestInfo.Path + "/" + name + "/" + input.RequestInfo.Verb
 	lockHash := fmt.Sprintf("%x", xxhash.Sum64String(lockKey))
-	return &v1.Relationship{
-		Resource: &v1.ObjectReference{
-			ObjectType: lockResourceType,
-			ObjectId:   lockHash,
-		},
-		Relation: lockRelationName,
-		Subject: &v1.SubjectReference{
-			Object: &v1.ObjectReference{
-				ObjectType: workflowResourceType,
-				ObjectId:   workflowID,
+	return &v1.RelationshipUpdate{
+		Operation: v1.RelationshipUpdate_OPERATION_CREATE,
+		Relationship: &v1.Relationship{
+			Resource: &v1.ObjectReference{
+				ObjectType: lockResourceType,
+				ObjectId:   lockHash,
+			},
+			Relation: lockRelationName,
+			Subject: &v1.SubjectReference{
+				Object: &v1.ObjectReference{
+					ObjectType: workflowResourceType,
+					ObjectId:   workflowID,
+				},
 			},
 		},
 	}
