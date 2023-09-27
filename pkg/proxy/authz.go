@@ -84,8 +84,7 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 			return
 		}
 
-		// do a write
-		// TODO/NOTE: this assumes all `writes` are dual writes; i.e. we only
+		// NOTE: this assumes all `writes` are dual writes; i.e. we only
 		//  write into spicedb when there is a corresponding write to kube.
 		//  There may be use cases for writes to spicedb on kube reads, which
 		//  would require a different path here.
@@ -248,8 +247,6 @@ func check(ctx context.Context, matchingRules []*rules.RunnableRule, input *rule
 					return err
 				}
 				resp, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
-					// TODO: other consistency options require a way to input revisions;
-					//  perhaps as an annotation on the kube object?
 					Consistency: &v1.Consistency{
 						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 					},
@@ -308,6 +305,7 @@ func filter(ctx context.Context, matchingRules []*rules.RunnableRule, input *rul
 	return nil
 }
 
+// TODO: should derive a filter from the rule for get
 func authorizeGet(input *rules.ResolveInput, authzData *AuthzData) {
 	if input.Request.Verb != "get" {
 		return
@@ -325,8 +323,11 @@ type wrapper struct {
 }
 
 func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
-	// TODO: filter should handle LS as well
 	go func() {
+		authzData.Lock()
+		defer authzData.Unlock()
+		defer close(authzData.allowedNNC)
+
 		lr, err := client.LookupResources(ctx, &v1.LookupResourcesRequest{
 			Consistency: &v1.Consistency{
 				Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
@@ -386,24 +387,20 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				namespace = ""
 			}
 
-			authzData.allowedNNC <- types.NamespacedName{Name: name.(string), Namespace: namespace.(string)}
+			authzData.allowedNN[types.NamespacedName{
+				Name:      name.(string),
+				Namespace: namespace.(string),
+			}] = struct{}{}
 			fmt.Println("allowed", resp.ResourceObjectId)
-		}
-		close(authzData.allowedNNC)
-	}()
-	go func() {
-		authzData.Lock()
-		defer authzData.Unlock()
-		for n := range authzData.allowedNNC {
-			authzData.allowedNN[n] = struct{}{}
 		}
 	}()
 }
 
 func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
 	go func() {
-		// TODO: watch subjects if in subject mode
-		watchNs, err := watchClient.Watch(ctx, &v1.WatchRequest{
+		defer close(authzData.allowedNNC)
+
+		watchResource, err := watchClient.Watch(ctx, &v1.WatchRequest{
 			OptionalObjectTypes: []string{filter.Rel.ResourceType},
 		})
 		if err != nil {
@@ -411,7 +408,7 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 			return
 		}
 		for {
-			resp, err := watchNs.Recv()
+			resp, err := watchResource.Recv()
 			if errors.Is(err, io.EOF) {
 				break
 			}
@@ -427,8 +424,6 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					cr, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
 						Consistency: &v1.Consistency{
 							Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
-							// TODO
-							// Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 						},
 						Resource: &v1.ObjectReference{
 							ObjectType: filter.Rel.ResourceType,
@@ -459,7 +454,6 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 				}
 			}
 		}
-		close(authzData.allowedNNC)
 	}()
 }
 
@@ -493,78 +487,6 @@ type AuthzData struct {
 	sync.RWMutex
 	allowedNNC chan types.NamespacedName
 	allowedNN  map[types.NamespacedName]struct{}
-}
-
-type listOrObjectMeta struct {
-	ResourceVersion            string                      `json:"resourceVersion,omitempty" protobuf:"bytes,2,opt,name=resourceVersion"`
-	Continue                   string                      `json:"continue,omitempty" protobuf:"bytes,3,opt,name=continue"`
-	RemainingItemCount         *int64                      `json:"remainingItemCount,omitempty" protobuf:"bytes,4,opt,name=remainingItemCount"`
-	Name                       string                      `json:"name,omitempty" protobuf:"bytes,1,opt,name=name"`
-	GenerateName               string                      `json:"generateName,omitempty" protobuf:"bytes,2,opt,name=generateName"`
-	Namespace                  string                      `json:"namespace,omitempty" protobuf:"bytes,3,opt,name=namespace"`
-	SelfLink                   string                      `json:"selfLink,omitempty" protobuf:"bytes,4,opt,name=selfLink"`
-	UID                        types.UID                   `json:"uid,omitempty" protobuf:"bytes,5,opt,name=uid,casttype=k8s.io/kubernetes/pkg/types.UID"`
-	Generation                 int64                       `json:"generation,omitempty" protobuf:"varint,7,opt,name=generation"`
-	CreationTimestamp          metav1.Time                 `json:"creationTimestamp,omitempty" protobuf:"bytes,8,opt,name=creationTimestamp"`
-	DeletionTimestamp          *metav1.Time                `json:"deletionTimestamp,omitempty" protobuf:"bytes,9,opt,name=deletionTimestamp"`
-	DeletionGracePeriodSeconds *int64                      `json:"deletionGracePeriodSeconds,omitempty" protobuf:"varint,10,opt,name=deletionGracePeriodSeconds"`
-	Labels                     map[string]string           `json:"labels,omitempty" protobuf:"bytes,11,rep,name=labels"`
-	Annotations                map[string]string           `json:"annotations,omitempty" protobuf:"bytes,12,rep,name=annotations"`
-	OwnerReferences            []metav1.OwnerReference     `json:"ownerReferences,omitempty" patchStrategy:"merge" patchMergeKey:"uid" protobuf:"bytes,13,rep,name=ownerReferences"`
-	Finalizers                 []string                    `json:"finalizers,omitempty" patchStrategy:"merge" protobuf:"bytes,14,rep,name=finalizers"`
-	ManagedFields              []metav1.ManagedFieldsEntry `json:"managedFields,omitempty" protobuf:"bytes,17,rep,name=managedFields"`
-}
-
-func (m *listOrObjectMeta) ToListMeta() metav1.ListMeta {
-	return metav1.ListMeta{
-		ResourceVersion:    m.ResourceVersion,
-		Continue:           m.Continue,
-		RemainingItemCount: m.RemainingItemCount,
-	}
-}
-
-func (m *listOrObjectMeta) ToObjectMeta() metav1.ObjectMeta {
-	return metav1.ObjectMeta{
-		Name:                       m.Name,
-		GenerateName:               m.GenerateName,
-		Namespace:                  m.Namespace,
-		UID:                        m.UID,
-		ResourceVersion:            m.ResourceVersion,
-		Generation:                 m.Generation,
-		CreationTimestamp:          m.CreationTimestamp,
-		DeletionTimestamp:          m.DeletionTimestamp,
-		DeletionGracePeriodSeconds: m.DeletionGracePeriodSeconds,
-		Labels:                     m.Labels,
-		Annotations:                m.Annotations,
-		OwnerReferences:            m.OwnerReferences,
-		Finalizers:                 m.Finalizers,
-		ManagedFields:              m.ManagedFields,
-	}
-}
-
-type partialObjectOrList struct {
-	metav1.TypeMeta  `json:",inline"`
-	listOrObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
-	Items            []metav1.PartialObjectMetadata `json:"items" protobuf:"bytes,2,rep,name=items"`
-}
-
-func (p *partialObjectOrList) IsList() bool {
-	return p.Items != nil
-}
-
-func (p *partialObjectOrList) ToPartialObjectMetadata() *metav1.PartialObjectMetadata {
-	return &metav1.PartialObjectMetadata{
-		TypeMeta:   p.TypeMeta,
-		ObjectMeta: p.ToObjectMeta(),
-	}
-}
-
-func (p *partialObjectOrList) ToPartialObjectMetadataList() *metav1.PartialObjectMetadataList {
-	return &metav1.PartialObjectMetadataList{
-		TypeMeta: p.TypeMeta,
-		ListMeta: p.ToListMeta(),
-		Items:    p.Items,
-	}
 }
 
 func (d *AuthzData) FilterResp(resp *http.Response) error {
@@ -606,10 +528,9 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 		filtered, err = d.FilterObject(pom.ToPartialObjectMetadata(), body)
 	}
 
-	// FIXME we are not returning the err here, and if added, no e2e test passes because "FilterObject"
-	// returns "unauthorized" error
 	if err != nil {
 		fmt.Println(err)
+		return err
 	}
 
 	resp.Body = io.NopCloser(bytes.NewBuffer(filtered))
@@ -636,22 +557,21 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 					fmt.Println("context canceled, stopping chunk watch")
 					break
 				}
-				// TODO: isprefix?
 				chunk, _, err := bufio.NewReader(originalRespBody).ReadLine()
 				fmt.Println(string(chunk))
 				if err != nil {
 					fmt.Println(err)
 					break
 				}
-				fmt.Println("sending chunk")
+				fmt.Printf("sending chunk, %s\n", string(chunk))
 				events <- chunk
 				fmt.Println()
 			}
 		}()
 
 		type Event struct {
-			Type   string
-			Object ejson.RawMessage
+			Type   string           `json:"type"`
+			Object ejson.RawMessage `json:"object"`
 		}
 
 		writeChunk := func(chunk []byte) error {
@@ -671,7 +591,9 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 				event := Event{}
 				if err := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(chunk), 100).Decode(&event); err != nil {
 					fmt.Println(err)
+					fmt.Println(string(chunk))
 				}
+				// TODO: Deletes?
 				if event.Type == string(watch.Added) || event.Type == string(watch.Modified) {
 					pom := metav1.PartialObjectMetadata{}
 
@@ -682,36 +604,39 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 
 					fmt.Println("got watch event", pom)
 
-					// TODO: non-table
-					switch pom.GroupVersionKind().GroupKind() {
-					case schema.GroupKind{Group: "meta.k8s.io", Kind: "Table"}:
+					// unwrap object if the response is a Table
+					gk := pom.GroupVersionKind().GroupKind()
+					if gk.Group == "meta.k8s.io" && gk.Kind == "Table" {
 						table := metav1.Table{}
 						if err := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(event.Object), 100).Decode(&table); err != nil {
 							fmt.Println(err)
 							break
 						}
-
 						for _, r := range table.Rows {
-							pom := metav1.PartialObjectMetadata{}
+							rowpom := metav1.PartialObjectMetadata{}
 							decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(r.Object.Raw), 100)
-							if err := decoder.Decode(&pom); err != nil {
+							if err := decoder.Decode(&rowpom); err != nil {
 								fmt.Println(err)
 								break
 							}
-							d.RLock()
-							_, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]
-							d.RUnlock()
-
-							fmt.Println("found in allowed:", pom.ObjectMeta.Name, ok)
-							if ok {
-								if err := writeChunk(chunk); err != nil {
-									break
-								}
-							} else {
-								bufferedEvents[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}] = chunk
-							}
+							pom = rowpom
+							break
 						}
 					}
+
+					d.RLock()
+					_, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]
+					d.RUnlock()
+
+					fmt.Println("found in allowed:", pom.ObjectMeta.Name, ok)
+					if ok {
+						if err := writeChunk(chunk); err != nil {
+							break
+						}
+					} else {
+						bufferedEvents[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}] = chunk
+					}
+
 				}
 			case nn := <-d.allowedNNC:
 				fmt.Println("recv allowed", nn)

@@ -3,15 +3,6 @@
 Runs a proxy in front of kube-apiserver that can authorize requests and filter
 responses using an embedded or remote SpiceDB.
 
-Checklist:
-
-- [x] Basic proxy with authentication 
-- [x] Authorize an action with a SpiceDB call
-- [x] Write a relationship based on an incoming kube api call
-- [x] Filter a response with a SpiceDB call
-- [ ] Authenticate a request from a ServiceAccount 
-- [ ] Add a mutating webhook to intercept all pod creating and switch api endpoints to the proxy
-
 # Development
 
 This project uses `mage` to offer various development-related commands.

@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"sync"
+	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	. "github.com/onsi/ginkgo/v2"
@@ -84,6 +85,26 @@ var _ = Describe("Proxy", func() {
 				return item.Name
 			})
 		}
+		WatchNamespaces := func(ctx context.Context, client kubernetes.Interface, expected int) []string {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+
+			got := make([]string, 0, expected)
+			watcher, err := client.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			defer watcher.Stop()
+
+			for e := range watcher.ResultChan() {
+				ns, ok := e.Object.(*corev1.Namespace)
+				Expect(ok).To(BeTrue())
+				got = append(got, ns.Name)
+				if len(got) == expected {
+					return got
+				}
+			}
+
+			return got
+		}
 
 		JustBeforeEach(func(ctx context.Context) {
 			// before every test, assert no access
@@ -95,6 +116,20 @@ var _ = Describe("Proxy", func() {
 
 		AssertDualWriteBehavior := func() {
 			It("doesn't show users namespaces the other has created", func(ctx context.Context) {
+				var wg sync.WaitGroup
+				defer wg.Wait()
+				wg.Add(2)
+				go func() {
+					defer GinkgoRecover()
+					Expect(WatchNamespaces(ctx, paulClient, 1)).To(ContainElement(paulNamespace))
+					wg.Done()
+				}()
+				go func() {
+					defer GinkgoRecover()
+					Expect(WatchNamespaces(ctx, chaniClient, 1)).To(ContainElement(chaniNamespace))
+					wg.Done()
+				}()
+
 				// each creates their respective namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 				Expect(CreateNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
