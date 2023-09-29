@@ -31,7 +31,7 @@ import (
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
-func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient client.Client, matcher *rules.Matcher) (http.Handler, error) {
+func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient *client.Client, matcher *rules.Matcher) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

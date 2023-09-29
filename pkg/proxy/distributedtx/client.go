@@ -17,14 +17,14 @@ import (
 
 const defaultLogLevel = slog.LevelDebug
 
-func SetupWithMemoryBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface) (client.Client, *Worker, error) {
+func SetupWithMemoryBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface) (*client.Client, *Worker, error) {
 	ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("backend", "sqlite-memory"))
 	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewInMemoryBackend(backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: defaultLogLevel,
 	})))))
 }
 
-func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, sqlitePath string) (client.Client, *Worker, error) {
+func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, sqlitePath string) (*client.Client, *Worker, error) {
 	if sqlitePath == "" {
 		return SetupWithMemoryBackend(ctx, permissionClient, kubeClient)
 	}
@@ -35,7 +35,7 @@ func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.Permissions
 	})))))
 }
 
-func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, backend backend.Backend) (client.Client, *Worker, error) {
+func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, backend backend.Backend) (*client.Client, *Worker, error) {
 	klog.FromContext(ctx).Info("starting workflow engine")
 	txHandler := ActivityHandler{
 		PermissionClient: permissionClient,
@@ -65,7 +65,7 @@ func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServic
 }
 
 type Worker struct {
-	worker       worker.Worker
+	worker       *worker.Worker
 	shutdownFunc func()
 }
 
