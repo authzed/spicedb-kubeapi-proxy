@@ -7,8 +7,8 @@ toolchain go1.21.0
 replace github.com/authzed/spicedb-kubeapi-proxy => ../
 
 require (
-	github.com/authzed/authzed-go v0.9.1-0.20230810180432-2fb0fd4c66dd
-	github.com/authzed/spicedb v1.24.1-0.20230821163419-e4bb3adfd50b
+	github.com/authzed/authzed-go v0.9.1-0.20230830212047-e1e7da6e877d
+	github.com/authzed/spicedb v1.25.0
 	github.com/authzed/spicedb-kubeapi-proxy v0.0.0-00010101000000-000000000000
 	github.com/go-logr/zapr v1.2.4
 	github.com/onsi/ginkgo/v2 v2.11.0
@@ -123,7 +123,7 @@ require (
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/jzelinskie/cobrautil/v2 v2.0.0-20230714172849-80717639cec5 // indirect
+	github.com/jzelinskie/cobrautil/v2 v2.0.0-20230825161137-b46695920a60 // indirect
 	github.com/jzelinskie/stringz v0.0.2 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect

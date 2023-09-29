@@ -5,9 +5,9 @@ go 1.21
 toolchain go1.21.0
 
 require (
-	github.com/authzed/authzed-go v0.9.1-0.20230810180432-2fb0fd4c66dd
+	github.com/authzed/authzed-go v0.9.1-0.20230830212047-e1e7da6e877d
 	github.com/authzed/grpcutil v0.0.0-20230703173955-bdd0ac3f16a5
-	github.com/authzed/spicedb v1.24.1-0.20230821163419-e4bb3adfd50b
+	github.com/authzed/spicedb v1.25.0
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/cschleiden/go-workflows v0.16.3-0.20230928210702-d72004e1fdf2
 	github.com/dustin/go-humanize v1.0.1
@@ -122,7 +122,7 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.0.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/jzelinskie/cobrautil/v2 v2.0.0-20230714172849-80717639cec5 // indirect
+	github.com/jzelinskie/cobrautil/v2 v2.0.0-20230825161137-b46695920a60 // indirect
 	github.com/jzelinskie/stringz v0.0.2 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
