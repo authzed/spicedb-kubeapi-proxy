@@ -10,9 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
-
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"golang.org/x/sync/errgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -27,6 +26,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/klog/v2"
+
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
 type Server struct {
@@ -34,17 +36,12 @@ type Server struct {
 	Handler        http.Handler
 	WorkflowWorker *distributedtx.Worker
 	KubeClient     *kubernetes.Clientset
-
-	// LockMode references the name of the workflow to run for dual writes
-	// This is very temporary, and should be replaced with per-request
-	// configuration.
-	LockMode string
+	Matcher        *rules.Matcher
 }
 
 func NewServer(ctx context.Context, o Options) (*Server, error) {
 	s := &Server{
-		opts:     o,
-		LockMode: distributedtx.DefaultLockMode,
+		opts: o,
 	}
 
 	restConfig, err := clientcmd.NewDefaultClientConfig(*s.opts.BackendConfig, nil).ClientConfig()
@@ -117,7 +114,8 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	}
 	s.WorkflowWorker = worker
 
-	handler, err := WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, &s.LockMode)
+	s.Matcher = &s.opts.Matcher
+	handler, err := WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
 	}
@@ -140,40 +138,37 @@ func (s *Server) PermissionClient() v1.PermissionsServiceClient {
 
 func (s *Server) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	// TODO: errgroup
+	var g errgroup.Group
 
 	if s.opts.EmbeddedSpiceDB != nil {
-		go func() {
-			if err := s.opts.EmbeddedSpiceDB.Run(ctx); err != nil {
-				klog.FromContext(ctx).Error(err, "failed to run spicedb")
-				cancel()
-				return
-			}
-			klog.FromContext(ctx).Info("embedded SpiceDB stopped")
-		}()
+		g.Go(func() error {
+			return s.opts.EmbeddedSpiceDB.Run(ctx)
+		})
 	}
+	g.Go(func() error {
+		return s.WorkflowWorker.Start(ctx)
+	})
 
-	go func() {
-		if err := s.WorkflowWorker.Start(ctx); err != nil {
-			klog.FromContext(ctx).Error(err, "failed to run workflow worker")
-			cancel()
-			return
+	g.Go(func() error {
+		done, _, err := s.opts.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
+		if err != nil {
+			return err
 		}
-		klog.FromContext(ctx).Info("workflow worker started")
-	}()
-	doneCh, _, err := s.opts.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
-	if err != nil {
+		<-done
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
+		defer cancel()
+		if err := s.WorkflowWorker.Shutdown(ctx); err != nil {
+			return err
+		}
 		return err
 	}
 
-	<-doneCh
-
-	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
-	defer cancel()
-	if err := s.WorkflowWorker.Shutdown(ctx); err != nil {
-		return err
-	}
 	return nil
 }
 

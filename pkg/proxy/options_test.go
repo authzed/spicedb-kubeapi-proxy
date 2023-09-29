@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path"
 	"testing"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/clientcmd"
 	logsv1 "k8s.io/component-base/logs/api/v1"
@@ -25,13 +27,13 @@ func TestKubeConfig(t *testing.T) {
 
 	opts := optionsForTesting(t)
 	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
-	err := opts.Complete(context.Background())
-	require.NoError(t, err)
+	require.Empty(t, opts.Validate())
+	require.NoError(t, opts.Complete(context.Background()))
 
 	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 	opts = optionsForTesting(t)
 	opts.BackendKubeconfigPath = uuid.NewString()
-	err = opts.Complete(context.Background())
+	err := opts.Complete(context.Background())
 	require.ErrorContains(t, err, "couldn't load kubeconfig")
 	require.ErrorContains(t, err, opts.BackendKubeconfigPath)
 }
@@ -39,8 +41,8 @@ func TestKubeConfig(t *testing.T) {
 func TestEmbeddedSpiceDB(t *testing.T) {
 	opts := optionsForTesting(t)
 	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
-	err := opts.Complete(context.Background())
-	require.NoError(t, err)
+	require.Empty(t, opts.Validate())
+	require.NoError(t, opts.Complete(context.Background()))
 	require.NotNil(t, opts.EmbeddedSpiceDB)
 	require.NotNil(t, opts.PermissionsClient)
 	require.NotNil(t, opts.WatchClient)
@@ -61,15 +63,55 @@ func TestRemoteSpiceDB(t *testing.T) {
 	opts.SpiceDBEndpoint = addr
 	opts.insecure = true
 	opts.token = "foobar"
-	err := opts.Complete(context.Background())
+	require.Empty(t, opts.Validate())
+	require.NoError(t, opts.Complete(context.Background()))
 
-	require.NoError(t, err)
 	require.Nil(t, opts.EmbeddedSpiceDB)
 	require.NotNil(t, opts.PermissionsClient)
 	require.NotNil(t, opts.WatchClient)
 
-	_, err = opts.PermissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{})
+	_, err := opts.PermissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{})
 	grpcutil.RequireStatus(t, codes.InvalidArgument, err)
+}
+
+func TestRuleConfig(t *testing.T) {
+	opts := optionsForTesting(t)
+	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	require.Empty(t, opts.Validate())
+	require.NoError(t, opts.Complete(context.Background()))
+
+	rules := opts.Matcher.Match(&request.RequestInfo{
+		APIGroup:   "authzed.com",
+		APIVersion: "v1alpha1",
+		Resource:   "spicedbclusters",
+		Verb:       "list",
+	})
+	require.Len(t, rules, 1)
+	require.Len(t, rules[0].PreFilter, 1)
+	require.Len(t, rules[0].Checks, 0)
+	require.Len(t, rules[0].Writes, 0)
+
+	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
+	errConfigBytes := []byte(`
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic 
+match:
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters
+  verbs: ["list"]
+prefilter:
+- name: .request.name
+  byResource:
+    tpl: "org:*#audit-cluster@user:{{request.user}}"
+`)
+	errConfigFile := path.Join(t.TempDir(), "rulesbad.yaml")
+	require.NoError(t, os.WriteFile(errConfigFile, errConfigBytes, 0o600))
+	opts = optionsForTesting(t)
+	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts.RuleConfigFile = errConfigFile
+	require.Empty(t, opts.Validate())
+	require.ErrorContains(t, opts.Complete(context.Background()), "SyntaxError")
 }
 
 func optionsForTesting(t *testing.T) *Options {
@@ -80,6 +122,7 @@ func optionsForTesting(t *testing.T) *Options {
 	opts.SecureServing.BindPort = getFreePort(t, "127.0.0.1")
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
 	opts.BackendKubeconfigPath = kubeConfigForTest(t)
+	opts.RuleConfigFile = ruleConfigForTest(t)
 	require.Empty(t, opts.Validate())
 	return opts
 }
@@ -141,4 +184,25 @@ func kubeConfigForTest(t *testing.T) string {
 	require.NoError(t, err)
 
 	return f.Name()
+}
+
+func ruleConfigForTest(t *testing.T) string {
+	t.Helper()
+
+	configBytes := []byte(`
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic 
+match:
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters 
+  verbs: ["list"]
+prefilter:
+- name: request.name
+  byResource:
+    tpl: "org:*#audit-cluster@user:{{request.user}}"
+`)
+	configFile := path.Join(t.TempDir(), "rules.yaml")
+	require.NoError(t, os.WriteFile(configFile, configBytes, 0o600))
+	return configFile
 }

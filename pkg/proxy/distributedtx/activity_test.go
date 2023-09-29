@@ -48,7 +48,7 @@ func (trt testRoundTripper) toKubeClient() *fake.RESTClient {
 }
 
 func TestWriteToKube(t *testing.T) {
-	trt := testRoundTripper{T: t, expectedPath: "/my_way/namespaces/ns", status: http.StatusCreated}
+	trt := testRoundTripper{T: t, expectedPath: "/my_way", status: http.StatusCreated}
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
 	resp, err := ah.WriteToKube(context.Background(), &KubeReqInput{
@@ -63,7 +63,7 @@ func TestWriteToKube(t *testing.T) {
 }
 
 func TestWriteToKubeError(t *testing.T) {
-	trt := testRoundTripper{T: t, expectedPath: "/my_way/namespaces/ns", status: http.StatusInternalServerError}
+	trt := testRoundTripper{T: t, expectedPath: "/my_way", status: http.StatusInternalServerError}
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
 	resp, err := ah.WriteToKube(context.Background(), &KubeReqInput{

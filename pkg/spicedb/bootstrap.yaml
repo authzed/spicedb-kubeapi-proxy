@@ -7,6 +7,12 @@ schema: |-
     relation viewer: user
     permission view = viewer + creator
   }
+  definition pod {
+    relation namespace: namespace
+    relation creator: user
+    relation viewer: user
+    permission view = viewer + creator
+  }
   definition lock {
     relation workflow: workflow
   }

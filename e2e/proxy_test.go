@@ -4,7 +4,9 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	. "github.com/onsi/ginkgo/v2"
@@ -17,14 +19,18 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/failpoints"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
 var _ = Describe("Proxy", func() {
 	When("there are two users", func() {
 		var paulClient, chaniClient, adminClient kubernetes.Interface
-		var paulNamespace, chaniNamespace string
+		var paulNamespace, chaniNamespace, sharedNamespace string
+		var chaniPod, paulPod string
+		var lockMode proxyrule.LockMode
 
 		BeforeEach(func() {
 			paulRestConfig, err := clientcmd.NewDefaultClientConfig(
@@ -46,12 +52,21 @@ var _ = Describe("Proxy", func() {
 
 			paulNamespace = names.SimpleNameGenerator.GenerateName("paul-")
 			chaniNamespace = names.SimpleNameGenerator.GenerateName("chani-")
+
+			// pods are used for tests that require deletes, since the GC
+			// controller can clean them up in tests (namespaces can't be GCd)
+			sharedNamespace = names.SimpleNameGenerator.GenerateName("shared-")
+			paulPod = names.SimpleNameGenerator.GenerateName("paul-pod-")
+			chaniPod = names.SimpleNameGenerator.GenerateName("chani-pod-")
 		})
 
 		AfterEach(func(ctx context.Context) {
 			orphan := metav1.DeletePropagationOrphan
 			_ = adminClient.CoreV1().Namespaces().Delete(ctx, paulNamespace, metav1.DeleteOptions{PropagationPolicy: &orphan})
 			_ = adminClient.CoreV1().Namespaces().Delete(ctx, chaniNamespace, metav1.DeleteOptions{PropagationPolicy: &orphan})
+			_ = adminClient.CoreV1().Pods(sharedNamespace).Delete(ctx, paulPod, metav1.DeleteOptions{PropagationPolicy: &orphan})
+			_ = adminClient.CoreV1().Pods(sharedNamespace).Delete(ctx, chaniPod, metav1.DeleteOptions{PropagationPolicy: &orphan})
+			_ = adminClient.CoreV1().Namespaces().Delete(ctx, sharedNamespace, metav1.DeleteOptions{PropagationPolicy: &orphan})
 
 			// ensure there are no remaining locks
 			Expect(len(GetAllTuples(ctx, &v1.RelationshipFilter{
@@ -81,17 +96,91 @@ var _ = Describe("Proxy", func() {
 				return item.Name
 			})
 		}
+		WatchNamespaces := func(ctx context.Context, client kubernetes.Interface, expected int) []string {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+
+			got := make([]string, 0, expected)
+			watcher, err := client.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			defer watcher.Stop()
+
+			for e := range watcher.ResultChan() {
+				ns, ok := e.Object.(*corev1.Namespace)
+				if !ok {
+					return got
+				}
+				got = append(got, ns.Name)
+				if len(got) == expected {
+					return got
+				}
+			}
+			return got
+		}
+
+		CreatePod := func(ctx context.Context, client kubernetes.Interface, namespace, name string) error {
+			_, err := client.CoreV1().Pods(namespace).Create(ctx, &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name:  "nginx",
+					Image: "nginx:1.14.2",
+				}}},
+			}, metav1.CreateOptions{})
+			return err
+		}
+		DeletePod := func(ctx context.Context, client kubernetes.Interface, namespace, name string) error {
+			return client.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		}
+		GetPod := func(ctx context.Context, client kubernetes.Interface, namespace, name string) error {
+			_, err := client.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+			return err
+		}
+		WatchPods := func(ctx context.Context, client kubernetes.Interface, namespace string, expected int, timeout time.Duration) []string {
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+
+			got := make([]string, 0, expected)
+			watcher, err := client.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			defer watcher.Stop()
+
+			for e := range watcher.ResultChan() {
+				pod, ok := e.Object.(*corev1.Pod)
+				if !ok {
+					return got
+				}
+				got = append(got, pod.Name)
+				if len(got) == expected {
+					return got
+				}
+			}
+			return got
+		}
 
 		JustBeforeEach(func(ctx context.Context) {
 			// before every test, assert no access
-			Expect(k8serrors.IsNotFound(GetNamespace(ctx, paulClient, paulNamespace))).To(BeTrue())
-			Expect(k8serrors.IsNotFound(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
-			Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, paulNamespace))).To(BeTrue())
-			Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+			Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, paulNamespace))).To(BeTrue())
+			Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
+			Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, paulNamespace))).To(BeTrue())
+			Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
 		})
 
 		AssertDualWriteBehavior := func() {
 			It("doesn't show users namespaces the other has created", func(ctx context.Context) {
+				var wg sync.WaitGroup
+				defer wg.Wait()
+				wg.Add(2)
+				go func() {
+					defer GinkgoRecover()
+					Expect(WatchNamespaces(ctx, paulClient, 1)).To(ContainElement(paulNamespace))
+					wg.Done()
+				}()
+				go func() {
+					defer GinkgoRecover()
+					Expect(WatchNamespaces(ctx, chaniClient, 1)).To(ContainElement(chaniNamespace))
+					wg.Done()
+				}()
+
 				// each creates their respective namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 				Expect(CreateNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
@@ -101,8 +190,8 @@ var _ = Describe("Proxy", func() {
 				Expect(GetNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
 
 				// neither can get each other's namespace
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, paulNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, paulNamespace))).To(BeTrue())
 
 				// neither can see each other's namespace in the list
 				paulList := ListNamespaces(ctx, paulClient)
@@ -113,13 +202,13 @@ var _ = Describe("Proxy", func() {
 				Expect(chaniList).To(ContainElement(chaniNamespace))
 			})
 
-			It("recovers when there are kube failures", func(ctx context.Context) {
+			It("recovers when there are kube write failures", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 
 				// make kube write fail for chani's namespace, spicedb write will have
 				// succeeded
-				if proxySrv.LockMode == distributedtx.StrategyPessimisticWriteToSpiceDBAndKube {
+				if lockMode == proxyrule.PessimisticLockMode {
 					// the locking version retries if the connection fails
 					failpoints.EnableFailPoint("panicKubeWrite", distributedtx.MaxKubeAttempts+1)
 				} else {
@@ -140,6 +229,26 @@ var _ = Describe("Proxy", func() {
 				Expect(GetNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
 			})
 
+			It("recovers when there are kube delete failures", func(ctx context.Context) {
+				// paul creates his pod
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+				Expect(CreatePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+
+				// make kube delete fail, spicedb write will have succeeded
+				if lockMode == proxyrule.PessimisticLockMode {
+					// the locking version retries if the connection fails
+					failpoints.EnableFailPoint("panicKubeWrite", distributedtx.MaxKubeAttempts+1)
+				} else {
+					failpoints.EnableFailPoint("panicKubeWrite", 1)
+				}
+				// delete panics, but is retried
+				Expect(DeletePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+
+				// the pod is gone on subsequent calls
+				Expect(k8serrors.IsUnauthorized(GetPod(ctx, paulClient, paulNamespace, paulPod))).To(BeTrue())
+				Expect(k8serrors.IsNotFound(GetPod(ctx, adminClient, paulNamespace, paulPod))).To(BeTrue())
+			})
+
 			It("recovers when kube write succeeds but crashes", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
@@ -154,6 +263,20 @@ var _ = Describe("Proxy", func() {
 				Expect(GetNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
 			})
 
+			It("recovers when kube delete succeeds but crashes", func(ctx context.Context) {
+				// paul creates his pod
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+				Expect(CreatePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+
+				// make kube delete succeed, but crash process before it can be recorded
+				failpoints.EnableFailPoint("panicKubeReadResp", 1)
+				Expect(DeletePod(ctx, paulClient, paulNamespace, paulPod)).ToNot(BeNil())
+
+				// the pod is gone on subsequent calls
+				Expect(k8serrors.IsUnauthorized(GetPod(ctx, paulClient, paulNamespace, paulPod))).To(BeTrue())
+				Expect(k8serrors.IsNotFound(GetPod(ctx, adminClient, paulNamespace, paulPod))).To(BeTrue())
+			})
+
 			It("prevents ownership stealing when crashing", func(ctx context.Context) {
 				// paul creates chani's namespace, but crashes before returning
 				failpoints.EnableFailPoint("panicKubeReadResp", 1)
@@ -164,7 +287,7 @@ var _ = Describe("Proxy", func() {
 				Expect(k8serrors.IsConflict(err) || k8serrors.IsAlreadyExists(err)).To(BeTrue())
 
 				// Chani can't get her namespace - paul created it first and hasn't shared it
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
 			})
 
 			It("prevents ownership stealing when retrying second write", func(ctx context.Context) {
@@ -177,10 +300,10 @@ var _ = Describe("Proxy", func() {
 				Expect(k8serrors.IsConflict(err) || k8serrors.IsAlreadyExists(err)).To(BeTrue())
 
 				// Chani can't get her namespace - paul created it first and hasn't shared it
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
 			})
 
-			It("recovers when there are spicedb write failures", func(ctx context.Context) {
+			It("recovers writes when there are spicedb write failures", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 
@@ -203,7 +326,30 @@ var _ = Describe("Proxy", func() {
 				}))).ToNot(BeZero())
 			})
 
-			It("recovers when spicedb write succeeds but crashes", func(ctx context.Context) {
+			It("recovers deletes when there are spicedb write failures", func(ctx context.Context) {
+				// paul creates his namespace
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+				Expect(CreatePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+
+				// make spicedb write crash on pod delete
+				failpoints.EnableFailPoint("panicWriteSpiceDB", 1)
+				Expect(DeletePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+
+				// chani is able to create pauls's pod, the delete succeeded
+				Expect(CreatePod(ctx, chaniClient, paulNamespace, paulPod)).To(Succeed())
+
+				// confirm the relationship exists
+				owners := GetAllTuples(ctx, &v1.RelationshipFilter{
+					ResourceType:          "pod",
+					OptionalResourceId:    paulNamespace + "/" + paulPod,
+					OptionalRelation:      "creator",
+					OptionalSubjectFilter: &v1.SubjectFilter{SubjectType: "user"},
+				})
+				Expect(len(owners)).ToNot(BeZero())
+				Expect(owners[0].Relationship.Subject.Object.ObjectId).To(Equal("chani"))
+			})
+
+			It("recovers writes when spicedb write succeeds but crashes", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 
@@ -219,7 +365,7 @@ var _ = Describe("Proxy", func() {
 
 				// check that chani can't get her namespace, indirectly showing
 				// that the spicedb write was rolled back
-				Expect(k8serrors.IsNotFound(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
 
 				// confirm the relationship doesn't exist
 				Expect(len(GetAllTuples(ctx, &v1.RelationshipFilter{
@@ -231,6 +377,48 @@ var _ = Describe("Proxy", func() {
 
 				// confirm paul can get the namespace
 				Expect(GetNamespace(ctx, paulClient, chaniNamespace)).To(Succeed())
+			})
+
+			It("recovers deletes when spicedb write succeeds but crashes", func(ctx context.Context) {
+				// paul creates his namespace
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+				Expect(CreatePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+
+				// chani can't create the same pod
+				Expect(k8serrors.IsAlreadyExists(CreatePod(ctx, chaniClient, paulNamespace, paulPod))).To(BeTrue())
+				fmt.Println(GetPod(ctx, chaniClient, paulNamespace, paulPod))
+				Expect(k8serrors.IsUnauthorized(GetPod(ctx, chaniClient, paulNamespace, paulPod))).To(BeTrue())
+
+				// make spicedb write crash on pod delete
+				failpoints.EnableFailPoint("panicSpiceDBReadResp", 1)
+				err := DeletePod(ctx, paulClient, paulNamespace, paulPod)
+				if lockMode == proxyrule.OptimisticLockMode {
+					Expect(err).To(Succeed())
+				} else {
+					fmt.Println(err)
+					Expect(k8serrors.IsUnauthorized(err)).To(BeTrue())
+					// paul sees the request fail, so he tries again:
+					Expect(DeletePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+				}
+
+				// chani can now re-create paul's pod and take ownership
+				Expect(CreatePod(ctx, chaniClient, paulNamespace, paulPod)).To(Succeed())
+
+				// check that paul can't get the pod that chani created
+				Expect(k8serrors.IsUnauthorized(GetPod(ctx, paulClient, paulNamespace, paulPod))).To(BeTrue())
+
+				// confirm the relationship exists
+				owners := GetAllTuples(ctx, &v1.RelationshipFilter{
+					ResourceType:          "pod",
+					OptionalResourceId:    paulNamespace + "/" + paulPod,
+					OptionalRelation:      "creator",
+					OptionalSubjectFilter: &v1.SubjectFilter{SubjectType: "user"},
+				})
+				Expect(len(owners)).ToNot(BeZero())
+				Expect(owners[0].Relationship.Subject.Object.ObjectId).To(Equal("chani"))
+
+				// confirm chani can get the pod
+				Expect(GetPod(ctx, chaniClient, paulNamespace, paulPod)).To(Succeed())
 			})
 
 			It("ensures only one write at a time happens for a given object", MustPassRepeatedly(5), func(ctx context.Context) {
@@ -272,20 +460,230 @@ var _ = Describe("Proxy", func() {
 					k8serrors.IsAlreadyExists(allErrs[0]), // optimistic lock
 				).To(BeTrue())
 			})
+
+			It("revokes access during watch", func(ctx context.Context) {
+				Expect(CreateNamespace(ctx, adminClient, sharedNamespace)).To(Succeed())
+				Expect(CreatePod(ctx, chaniClient, sharedNamespace, chaniPod)).To(Succeed())
+
+				// Chani deletes her pod, which will remove her access
+				// to that pod in spicedb
+				Expect(DeletePod(ctx, chaniClient, sharedNamespace, chaniPod)).To(Succeed())
+
+				Eventually(func(g Gomega) {
+					fmt.Println(GetPod(ctx, adminClient, sharedNamespace, chaniPod))
+					g.Expect(GetPod(ctx, adminClient, sharedNamespace, chaniPod)).To(Not(Succeed()))
+				}).Should(Succeed())
+
+				// start a watch waiting for one result, but expect 0 results
+				// after the watch times out
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					defer GinkgoRecover()
+					Expect(len(WatchPods(ctx, chaniClient, sharedNamespace, 1, 2*time.Second))).To(BeZero())
+					wg.Done()
+				}()
+
+				// paul should get an event for the pod he creates
+				wg.Add(1)
+				go func() {
+					defer GinkgoRecover()
+					Expect(len(WatchPods(ctx, paulClient, sharedNamespace, 1, 2*time.Second))).To(Equal(1))
+					wg.Done()
+				}()
+
+				// Paul creates chani's pod, will generate kube events that
+				// Chani shouldn't see
+				Expect(CreatePod(ctx, paulClient, sharedNamespace, chaniPod)).To(Succeed())
+
+				// wait for Chani's watch to time out, which means she didn't
+				// see the events from pauls writes
+				wg.Wait()
+			})
 		}
 
 		When("optimistic locking is used", func() {
 			BeforeEach(func() {
-				proxySrv.LockMode = distributedtx.StrategyOptimisticWriteToSpiceDBAndKube
+				*proxySrv.Matcher = testOptimisticMatcher()
+				lockMode = proxyrule.OptimisticLockMode
 			})
 			AssertDualWriteBehavior()
 		})
 
 		When("pessimistic locking is used", func() {
 			BeforeEach(func() {
-				proxySrv.LockMode = distributedtx.StrategyPessimisticWriteToSpiceDBAndKube
+				*proxySrv.Matcher = testPessimisticMatcher()
+				lockMode = proxyrule.PessimisticLockMode
 			})
 			AssertDualWriteBehavior()
 		})
 	})
 })
+
+var (
+	createNamespace = func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "namespaces",
+				Verbs:        []string{"create"},
+			}},
+			Writes: []proxyrule.StringOrTemplate{{
+				Template: "namespace:{{name}}#creator@user:{{user.Name}}",
+			}, {
+				Template: "namespace:{{name}}#cluster@cluster:cluster",
+			}},
+		}}
+	}
+
+	deleteNamespace = func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "namespaces",
+				Verbs:        []string{"delete"},
+			}},
+			Writes: []proxyrule.StringOrTemplate{{
+				Template: "namespace:{{name}}#creator@user:{{user.Name}}",
+			}, {
+				Template: "namespace:{{name}}#cluster@cluster:cluster",
+			}},
+		}}
+	}
+
+	getNamespace = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "namespaces",
+				Verbs:        []string{"get"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "namespace:{{name}}#view@user:{{user.Name}}",
+			}},
+		},
+	}
+
+	listWatchNamespace = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "namespaces",
+				Verbs:        []string{"list", "watch"},
+			}},
+			PreFilters: []proxyrule.PreFilter{{
+				Name:       "resourceId",
+				ByResource: &proxyrule.StringOrTemplate{Template: "namespace:*#view@user:{{user.Name}}"},
+			}},
+		},
+	}
+
+	createPod = func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "pods",
+				Verbs:        []string{"create"},
+			}},
+			Writes: []proxyrule.StringOrTemplate{{
+				Template: "pod:{{namespacedName}}#creator@user:{{user.Name}}",
+			}, {
+				Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
+			}},
+		}}
+	}
+
+	deletePod = func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "pods",
+				Verbs:        []string{"delete"},
+			}},
+			Writes: []proxyrule.StringOrTemplate{{
+				Template: "pod:{{namespacedName}}#creator@user:{{user.Name}}",
+			}, {
+				Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
+			}},
+		}}
+	}
+
+	getPod = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "pods",
+				Verbs:        []string{"get"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "pod:{{namespacedName}}#view@user:{{user.Name}}",
+			}},
+		},
+	}
+
+	listWatchPod = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "pods",
+				Verbs:        []string{"list", "watch"},
+			}},
+			PreFilters: []proxyrule.PreFilter{{
+				Namespace:  "splitNamespace(resourceId)",
+				Name:       "splitName(resourceId)",
+				ByResource: &proxyrule.StringOrTemplate{Template: "pod:*#view@user:{{user.Name}}"},
+			}},
+		},
+	}
+)
+
+func testOptimisticMatcher() rules.MapMatcher {
+	matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+		createNamespace(),
+		deleteNamespace(),
+		getNamespace,
+		listWatchNamespace,
+		createPod(),
+		deletePod(),
+		getPod,
+		listWatchPod,
+	})
+	Expect(err).To(Succeed())
+	return matcher
+}
+
+func testPessimisticMatcher() rules.MapMatcher {
+	pessimisticCreateNamespace := createNamespace()
+	pessimisticCreateNamespace.MustNot = []proxyrule.StringOrTemplate{{
+		Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
+	}}
+	pessimisticCreateNamespace.Locking = proxyrule.PessimisticLockMode
+
+	pessimisticDeleteNamespace := deleteNamespace()
+	pessimisticDeleteNamespace.Locking = proxyrule.PessimisticLockMode
+
+	pessimisticCreatePod := createPod()
+	pessimisticCreatePod.Locking = proxyrule.PessimisticLockMode
+	pessimisticCreatePod.MustNot = []proxyrule.StringOrTemplate{{
+		Template: "pod:{{object.metadata.name}}#namespace@namespace:{{request.Namespace}}",
+	}}
+	pessimisticDeletePod := deletePod()
+	pessimisticDeletePod.Locking = proxyrule.PessimisticLockMode
+
+	matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+		pessimisticCreateNamespace,
+		pessimisticDeleteNamespace,
+		getNamespace,
+		listWatchNamespace,
+		pessimisticCreatePod,
+		pessimisticDeletePod,
+		getPod,
+		listWatchPod,
+	})
+	Expect(err).To(Succeed())
+	return matcher
+}

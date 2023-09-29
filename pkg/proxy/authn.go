@@ -57,7 +57,7 @@ func (c *Authentication) ApplyTo(authenticationInfo *genericapiserver.Authentica
 		}
 	}
 
-	// TODO: serviceaccount
+	// TODO: ServiceAccounts
 
 	baseAuthenticator, _, err := authenticatorConfig.New()
 	if err != nil {

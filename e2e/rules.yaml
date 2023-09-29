@@ -1,0 +1,3 @@
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+# dummy; e2e tests set matcher directly

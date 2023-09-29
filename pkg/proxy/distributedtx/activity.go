@@ -2,6 +2,7 @@ package distributedtx
 
 import (
 	"context"
+	"net/http"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -14,6 +15,7 @@ import (
 
 type KubeReqInput struct {
 	RequestInfo *request.RequestInfo
+	Header      http.Header
 	ObjectMeta  *metav1.ObjectMeta
 	Body        []byte
 }
@@ -42,9 +44,14 @@ func (h *ActivityHandler) WriteToSpiceDB(ctx context.Context, input *v1.WriteRel
 func (h *ActivityHandler) WriteToKube(ctx context.Context, req *KubeReqInput) (*KubeResp, error) {
 	failpoints.FailPoint("panicKubeWrite")
 
-	kreq := h.KubeClient.Post().RequestURI(req.RequestInfo.Path).Body(req.Body)
-	if len(req.RequestInfo.Namespace) > 0 {
-		kreq = kreq.Namespace(req.RequestInfo.Namespace)
+	verb := http.MethodPost
+	if req.RequestInfo.Verb == "delete" {
+		verb = http.MethodDelete
+	}
+	kreq := h.KubeClient.Verb(verb).AbsPath(req.RequestInfo.Path).Body(req.Body)
+
+	for h, v := range req.Header {
+		kreq.SetHeader(h, v...)
 	}
 
 	res := kreq.Do(ctx)
@@ -69,7 +76,7 @@ func (h *ActivityHandler) WriteToKube(ctx context.Context, req *KubeReqInput) (*
 }
 
 func (h *ActivityHandler) CheckKubeResource(ctx context.Context, req *KubeReqInput) (bool, error) {
-	// TODO: this is somewhat janky
+	// TODO: this is somewhat janky - may not work for all request types
 	uri := req.RequestInfo.Path + "/" + req.ObjectMeta.GetName()
 	res := h.KubeClient.Get().RequestURI(uri).Do(ctx)
 	err := res.Error()

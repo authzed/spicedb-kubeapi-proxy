@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -26,9 +27,17 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/spf13/afero"
 	"go.uber.org/zap"
+	"k8s.io/client-go/discovery/cached/disk"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
+	"k8s.io/client-go/metadata/metadatainformer"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/controller-manager/pkg/informerfactory"
+	"k8s.io/kubernetes/pkg/controller/garbagecollector"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/env"
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/remote"
@@ -76,6 +85,10 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	DeferCleanup(testEnv.Stop)
 	DisableClientRateLimits(config)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	DeferCleanup(cancel)
+	StartKubeGC(ctx, config)
+
 	// TODO: bind cluster-admin to admin user
 
 	var buf bytes.Buffer
@@ -105,6 +118,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 
 	opts := proxy.NewOptions()
 	opts.BackendConfig = backendCfg
+	opts.RuleConfigFile = "rules.yaml"
 	opts.SecureServing.BindPort = port
 	opts.SpiceDBEndpoint = proxy.EmbeddedSpiceDBEndpoint
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
@@ -165,6 +179,38 @@ func ConfigureApiserver() {
 
 	Expect(os.Setenv("KUBEBUILDER_ASSETS", fmt.Sprintf("../testbin/k8s/%s-%s-%s", e.Version.AsConcrete(), e.Platform.OS, e.Platform.Arch))).To(Succeed())
 	DeferCleanup(os.Unsetenv, "KUBEBUILDER_ASSETS")
+}
+
+func StartKubeGC(ctx context.Context, restConfig *rest.Config) {
+	kclient, err := kubernetes.NewForConfig(restConfig)
+	Expect(err).To(Succeed())
+	mclient, err := metadata.NewForConfig(restConfig)
+	Expect(err).To(Succeed())
+
+	cacheDir, err := os.MkdirTemp("", "kubecache")
+	Expect(err).To(Succeed())
+	httpCacheDir := filepath.Join(cacheDir, "http")
+	discoveryCacheDir := filepath.Join(cacheDir, "discovery")
+	cachedDiscovery, err := disk.NewCachedDiscoveryClientForConfig(restConfig, discoveryCacheDir, httpCacheDir, 5*time.Minute)
+	Expect(err).To(Succeed())
+
+	mapper := restmapper.NewDeferredDiscoveryRESTMapper(cachedDiscovery)
+
+	sharedInformers := informers.NewSharedInformerFactory(kclient, 0)
+	metadataInformers := metadatainformer.NewSharedInformerFactory(mclient, 0)
+
+	started := make(chan struct{})
+	gcController, err := garbagecollector.NewGarbageCollector(kclient, mclient, mapper, nil, informerfactory.NewInformerFactory(sharedInformers, metadataInformers), started)
+	Expect(err).To(Succeed())
+
+	sharedInformers.Start(ctx.Done())
+	metadataInformers.Start(ctx.Done())
+	sharedInformers.WaitForCacheSync(ctx.Done())
+	metadataInformers.WaitForCacheSync(ctx.Done())
+	close(started)
+
+	go gcController.Run(ctx, 1)
+	go gcController.Sync(ctx, cachedDiscovery, 30*time.Second)
 }
 
 // DisableClientRateLimits removes rate limiting against the apiserver

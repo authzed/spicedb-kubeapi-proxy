@@ -9,13 +9,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sync"
-
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/client"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -25,14 +26,12 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
+
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
-func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient client.Client, lockMode *string) (http.Handler, error) {
-	workflow, err := distributedtx.WorkflowForLockMode(*lockMode)
-	if err != nil {
-		return nil, err
-	}
-
+func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient client.Client, matcher *rules.Matcher) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -54,55 +53,148 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 			return
 		}
 
-		// CREATE namespace
-		if requestInfo.Resource == "namespaces" &&
-			requestInfo.Verb == "create" &&
-			requestInfo.APIVersion == "v1" &&
-			requestInfo.APIGroup == "" {
-
-			body, err := io.ReadAll(req.Body)
+		// create/update requests should contain an object body, parse it and
+		// include in the input
+		var body []byte
+		var object *metav1.PartialObjectMetadata
+		if slices.Contains([]string{"create", "update", "patch"}, requestInfo.Verb) {
+			var err error
+			body, err = io.ReadAll(req.Body)
 			if err != nil {
 				failed.ServeHTTP(w, req)
 				return
 			}
-
-			pom := metav1.PartialObjectMetadata{}
 			decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(body), 100)
+			var pom metav1.PartialObjectMetadata
 			if err := decoder.Decode(&pom); err != nil {
 				failed.ServeHTTP(w, req)
 				return
 			}
+			object = &pom
+		}
+		input := rules.NewResolveInput(requestInfo, userInfo.(*user.DefaultInfo), object)
 
-			id, err := workflowClient.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{
-				InstanceID: uuid.NewString(),
-			}, workflow, &distributedtx.CreateObjInput{
-				RequestInfo: requestInfo,
-				UserInfo:    userInfo.(*user.DefaultInfo),
-				ObjectMeta:  &pom.ObjectMeta,
-				Body:        body,
-			})
+		matchingRules := (*matcher).Match(requestInfo)
+
+		if err := check(ctx, matchingRules, input, permissionsClient); err != nil {
+			failed.ServeHTTP(w, req)
+			return
+		}
+
+		// NOTE: this assumes all `writes` are dual writes; i.e. we only
+		//  write into spicedb when there is a corresponding write to kube.
+		//  There may be use cases for writes to spicedb on kube reads, which
+		//  would require a different path here.
+		for _, r := range matchingRules {
+			if len(r.Writes) == 0 {
+				break
+			}
+			writeRels := make([]*v1.Relationship, 0, len(r.Writes))
+			for _, write := range r.Writes {
+				rel, err := rules.ResolveRel(write, input)
+				if err != nil {
+					failed.ServeHTTP(w, req)
+					return
+				}
+				writeRels = append(writeRels, &v1.Relationship{
+					Resource: &v1.ObjectReference{
+						ObjectType: rel.ResourceType,
+						ObjectId:   rel.ResourceID,
+					},
+					Relation: rel.ResourceRelation,
+					Subject: &v1.SubjectReference{
+						Object: &v1.ObjectReference{
+							ObjectType: rel.SubjectType,
+							ObjectId:   rel.SubjectID,
+						},
+						OptionalRelation: rel.SubjectRelation,
+					},
+				})
+			}
+			preconditions := make([]*v1.Precondition, 0, len(r.Must)+len(r.MustNot))
+
+			preconditionFromRel := func(rel *rules.ResolvedRel) *v1.Precondition {
+				p := &v1.Precondition{
+					Filter: &v1.RelationshipFilter{
+						ResourceType: rel.ResourceType,
+					},
+				}
+				if rel.ResourceID != "*" {
+					p.Filter.OptionalResourceId = rel.ResourceID
+				}
+				if rel.ResourceRelation != "*" {
+					p.Filter.OptionalRelation = rel.ResourceRelation
+				}
+				if rel.SubjectType != "*" || rel.SubjectID != "*" || rel.SubjectRelation != "*" {
+					p.Filter.OptionalSubjectFilter = &v1.SubjectFilter{}
+				}
+				if rel.SubjectType != "*" {
+					p.Filter.OptionalSubjectFilter.SubjectType = rel.SubjectType
+				}
+				if rel.SubjectID != "*" {
+					p.Filter.OptionalSubjectFilter.OptionalSubjectId = rel.SubjectID
+				}
+				if rel.SubjectRelation != "*" && rel.SubjectRelation != "" {
+					p.Filter.OptionalSubjectFilter.OptionalRelation = &v1.SubjectFilter_RelationFilter{
+						Relation: rel.SubjectRelation,
+					}
+				}
+				return p
+			}
+			for _, precondition := range r.Must {
+				rel, err := rules.ResolveRel(precondition, input)
+				if err != nil {
+					failed.ServeHTTP(w, req)
+					return
+				}
+				p := preconditionFromRel(rel)
+				p.Operation = v1.Precondition_OPERATION_MUST_MATCH
+				preconditions = append(preconditions, p)
+			}
+			for _, precondition := range r.MustNot {
+				rel, err := rules.ResolveRel(precondition, input)
+				if err != nil {
+					failed.ServeHTTP(w, req)
+					return
+				}
+				p := preconditionFromRel(rel)
+				p.Operation = v1.Precondition_OPERATION_MUST_NOT_MATCH
+				preconditions = append(preconditions, p)
+			}
+
+			writeInput := &distributedtx.WriteObjInput{
+				RequestInfo:   requestInfo,
+				UserInfo:      userInfo.(*user.DefaultInfo),
+				Header:        req.Header.Clone(),
+				Rels:          writeRels,
+				Preconditions: preconditions,
+				Body:          body,
+			}
+			if input.Object != nil {
+				writeInput.ObjectMeta = &input.Object.ObjectMeta
+			}
+			dualWrite := func() (*distributedtx.KubeResp, error) {
+				workflow, err := distributedtx.WorkflowForLockMode(string(r.LockMode))
+				if err != nil {
+					return nil, err
+				}
+				id, err := workflowClient.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{
+					InstanceID: uuid.NewString(),
+				}, workflow, writeInput)
+				if err != nil {
+					return nil, err
+				}
+				resp, err := client.GetWorkflowResult[distributedtx.KubeResp](ctx, workflowClient, id, distributedtx.DefaultWorkflowTimeout)
+				if err != nil {
+					return nil, err
+				}
+				return &resp, nil
+			}
+			resp, err := dualWrite()
 			if err != nil {
-				fmt.Println(err)
 				failed.ServeHTTP(w, req)
 				return
 			}
-
-			resp, err := client.GetWorkflowResult[distributedtx.KubeResp](ctx, workflowClient, id, distributedtx.DefaultWorkflowTimeout)
-			if err != nil {
-				fmt.Println(err)
-				failed.ServeHTTP(w, req)
-				return
-			}
-			req.Body = io.NopCloser(bytes.NewBuffer(body))
-
-			fmt.Println("pom", pom)
-
-			allowed := make(chan string)
-			req = req.WithContext(WithAuthzData(req.Context(), &AuthzData{
-				allowedNameC: allowed,
-				allowedNames: map[string]struct{}{pom.ObjectMeta.Name: {}},
-			}))
-			close(allowed)
 
 			// this can happen if there are un-recoverable failures in the
 			// workflow execution
@@ -111,6 +203,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				return
 			}
 
+			// we can only do one dual-write per request without some way of
+			// marking some writes async.
 			w.Header().Set("Content-Type", resp.ContentType)
 			w.WriteHeader(resp.StatusCode)
 			if _, err := w.Write(resp.Body); err != nil {
@@ -118,176 +212,299 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				failed.ServeHTTP(w, req)
 				return
 			}
+
 			return
 		}
 
-		authzData := AuthzData{
-			allowedNameC: make(chan string),
-			allowedNames: map[string]struct{}{},
+		authzData := &AuthzData{
+			allowedNNC: make(chan types.NamespacedName),
+			removedNNC: make(chan types.NamespacedName),
+			allowedNN:  map[types.NamespacedName]struct{}{},
 		}
 
-		// GET namespace
-		if requestInfo.Resource == "namespaces" &&
-			requestInfo.Verb == "get" &&
-			requestInfo.APIVersion == "v1" &&
-			requestInfo.APIGroup == "" &&
-			requestInfo.Name != "" {
-			go func() {
-				cr, err := permissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
+		authorizeGet(input, authzData)
+
+		if err := filterResponse(ctx, matchingRules, input, authzData, permissionsClient, watchClient); err != nil {
+			failed.ServeHTTP(w, req)
+			return
+		}
+
+		req = req.WithContext(WithAuthzData(req.Context(), authzData))
+
+		handler.ServeHTTP(w, req)
+	}), nil
+}
+
+func check(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, client v1.PermissionsServiceClient) error {
+	var checkGroup errgroup.Group
+
+	// issue checks for all matching rules
+	for _, r := range matchingRules {
+		for _, c := range r.Checks {
+			checkGroup.Go(func() error {
+				rel, err := rules.ResolveRel(c, input)
+				if err != nil {
+					return err
+				}
+				resp, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
 					Consistency: &v1.Consistency{
 						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 					},
 					Resource: &v1.ObjectReference{
-						ObjectType: "namespace",
-						ObjectId:   requestInfo.Name,
+						ObjectType: rel.ResourceType,
+						ObjectId:   rel.ResourceID,
 					},
-					Permission: "view",
+					Permission: rel.ResourceRelation,
 					Subject: &v1.SubjectReference{
 						Object: &v1.ObjectReference{
-							ObjectType: "user",
-							ObjectId:   userInfo.GetName(),
+							ObjectType: rel.SubjectType,
+							ObjectId:   rel.SubjectID,
 						},
+						OptionalRelation: rel.SubjectRelation,
 					},
 				})
 				if err != nil {
-					fmt.Println(err)
-					failed.ServeHTTP(w, req)
-					return
+					return err
 				}
-				fmt.Println(cr.Permissionship)
-				if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
-					authzData.allowedNameC <- requestInfo.Name
+				if resp.Permissionship != v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
+					return fmt.Errorf("failed check for %v", rel)
 				}
-				close(authzData.allowedNameC)
-			}()
-			go func() {
-				authzData.Lock()
-				defer authzData.Unlock()
-				for n := range authzData.allowedNameC {
-					authzData.allowedNames[n] = struct{}{}
-				}
-			}()
+				return nil
+			})
 		}
+	}
+	return checkGroup.Wait()
+}
 
-		// LIST namespace
-		if requestInfo.Resource == "namespaces" &&
-			requestInfo.Verb == "list" &&
-			requestInfo.APIVersion == "v1" &&
-			requestInfo.APIGroup == "" {
+// filterResponse filters responses by fetching a list of allowed objects in
+// parallel with the request
+func filterResponse(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, authzData *AuthzData, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient) error {
+	for _, r := range matchingRules {
+		for _, f := range r.PreFilter {
 
-			go func() {
-				lr, err := permissionsClient.LookupResources(ctx, &v1.LookupResourcesRequest{
+			rel, err := rules.ResolveRel(f.Rel, input)
+			if err != nil {
+				return err
+			}
+
+			filter := &rules.ResolvedPreFilter{
+				LookupType: f.LookupType,
+				Rel:        rel,
+				Name:       f.Name,
+				Namespace:  f.Namespace,
+			}
+
+			switch input.Request.Verb {
+			case "list":
+				filterList(ctx, client, filter, authzData)
+			case "watch":
+				filterWatch(ctx, client, watchClient, filter, input, authzData)
+			}
+		}
+	}
+	return nil
+}
+
+func authorizeGet(input *rules.ResolveInput, authzData *AuthzData) {
+	if input.Request.Verb != "get" {
+		return
+	}
+	close(authzData.allowedNNC)
+	close(authzData.removedNNC)
+	authzData.Lock()
+	defer authzData.Unlock()
+	// gets aren't really filtered, but we add them to the allowed list so that
+	// downstream can know it's passed all configured checks.
+	authzData.allowedNN[types.NamespacedName{Name: input.Name, Namespace: input.Namespace}] = struct{}{}
+}
+
+type wrapper struct {
+	ResourceID string `json:"resourceId"`
+	SubjectID  string `json:"subjectId"`
+}
+
+func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter *rules.ResolvedPreFilter, authzData *AuthzData) {
+	go func() {
+		authzData.Lock()
+		defer authzData.Unlock()
+		defer close(authzData.allowedNNC)
+		defer close(authzData.removedNNC)
+
+		lr, err := client.LookupResources(ctx, &v1.LookupResourcesRequest{
+			Consistency: &v1.Consistency{
+				Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
+			},
+			ResourceObjectType: filter.Rel.ResourceType,
+			Permission:         filter.Rel.ResourceRelation,
+			Subject: &v1.SubjectReference{
+				Object: &v1.ObjectReference{
+					ObjectType: filter.Rel.SubjectType,
+					ObjectId:   filter.Rel.SubjectID,
+				},
+				OptionalRelation: filter.Rel.SubjectRelation,
+			},
+		})
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		for {
+			resp, err := lr.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			// TODO: this will mark an object that matches any filterResponse as allowed, should
+			//   probably change to check all filters.
+
+			byteIn, err := json.Marshal(wrapper{ResourceID: resp.ResourceObjectId})
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			var data any
+			if err := json.Unmarshal(byteIn, &data); err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			fmt.Println("GOT WATCH FILTER EVENT", string(byteIn))
+			name, err := filter.Name.Search(data)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			if name == nil || len(name.(string)) == 0 {
+				return
+			}
+			namespace, err := filter.Namespace.Search(data)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			if namespace == nil {
+				namespace = ""
+			}
+			fmt.Println("NAMENS", name, namespace)
+
+			// TODO: check permissionship?
+			authzData.allowedNN[types.NamespacedName{
+				Name:      name.(string),
+				Namespace: namespace.(string),
+			}] = struct{}{}
+			fmt.Println("allowed", resp.ResourceObjectId)
+		}
+	}()
+}
+
+func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
+	go func() {
+		defer close(authzData.allowedNNC)
+		defer close(authzData.removedNNC)
+
+		watchResource, err := watchClient.Watch(ctx, &v1.WatchRequest{
+			OptionalObjectTypes: []string{filter.Rel.ResourceType},
+		})
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		for {
+			resp, err := watchResource.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			for _, u := range resp.Updates {
+				cr, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
 					Consistency: &v1.Consistency{
-						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
+						Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
 					},
-					ResourceObjectType: "namespace",
-					Permission:         "view",
+					Resource: &v1.ObjectReference{
+						ObjectType: filter.Rel.ResourceType,
+						// TODO: should swap out subject id if in subject mode
+						ObjectId: u.Relationship.Resource.ObjectId,
+					},
+					Permission: filter.Rel.ResourceRelation,
 					Subject: &v1.SubjectReference{
 						Object: &v1.ObjectReference{
-							ObjectType: "user",
-							ObjectId:   userInfo.GetName(),
+							ObjectType: filter.Rel.SubjectType,
+							ObjectId:   filter.Rel.SubjectID,
 						},
+						OptionalRelation: filter.Rel.SubjectRelation,
 					},
 				})
 				if err != nil {
 					fmt.Println(err)
-					failed.ServeHTTP(w, req)
 					return
 				}
-				for {
-					resp, err := lr.Recv()
-					if errors.Is(err, io.EOF) {
-						break
-					}
+				// TODO: this will mark an object that matches any filterResponse as allowed, should
+				//   probably change to check all filters.
 
-					if err != nil {
-						fmt.Println(err)
-						failed.ServeHTTP(w, req)
-						return
-					}
-					authzData.allowedNameC <- resp.ResourceObjectId
-					fmt.Println("allowed", resp.ResourceObjectId)
-				}
-				close(authzData.allowedNameC)
-			}()
-			go func() {
-				authzData.Lock()
-				defer authzData.Unlock()
-				for n := range authzData.allowedNameC {
-					authzData.allowedNames[n] = struct{}{}
-				}
-			}()
-		}
-
-		// WATCH namespaces
-		if requestInfo.Resource == "namespaces" &&
-			requestInfo.Verb == "watch" &&
-			requestInfo.APIVersion == "v1" &&
-			requestInfo.APIGroup == "" {
-
-			go func() {
-				watchNs, err := watchClient.Watch(ctx, &v1.WatchRequest{
-					OptionalObjectTypes: []string{"namespace"},
-				})
+				byteIn, err := json.Marshal(wrapper{ResourceID: u.Relationship.Resource.ObjectId, SubjectID: u.Relationship.Subject.Object.ObjectId})
 				if err != nil {
 					fmt.Println(err)
-					failed.ServeHTTP(w, req)
 					return
 				}
-				for {
-					resp, err := watchNs.Recv()
-					if errors.Is(err, io.EOF) {
-						break
-					}
-
-					if err != nil {
-						fmt.Println(err)
-						failed.ServeHTTP(w, req)
-						return
-					}
-
-					for _, u := range resp.Updates {
-						if u.Operation == v1.RelationshipUpdate_OPERATION_TOUCH || u.Operation == v1.RelationshipUpdate_OPERATION_CREATE {
-							// do a check
-							cr, err := permissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{
-								Consistency: &v1.Consistency{
-									Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
-									// TODO
-									// Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
-								},
-								Resource: &v1.ObjectReference{
-									ObjectType: "namespace",
-									ObjectId:   u.Relationship.Resource.ObjectId,
-								},
-								Permission: "view",
-								Subject: &v1.SubjectReference{
-									Object: &v1.ObjectReference{
-										ObjectType: "user",
-										ObjectId:   userInfo.GetName(),
-									},
-								},
-							})
-							if err != nil {
-								fmt.Println(err)
-								failed.ServeHTTP(w, req)
-								return
-							}
-							fmt.Println(u.Relationship.Resource.ObjectId, cr.Permissionship)
-							if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
-								fmt.Println("sending allowed name", u.Relationship.Resource.ObjectId)
-								authzData.allowedNameC <- u.Relationship.Resource.ObjectId
-							}
-						}
-					}
+				var data any
+				if err := json.Unmarshal(byteIn, &data); err != nil {
+					fmt.Println(err)
+					return
 				}
-				close(authzData.allowedNameC)
-			}()
+				fmt.Println(data)
+				fmt.Println("RESPONSE", string(byteIn))
+
+				name, err := filter.Name.Search(data)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				fmt.Println("GOT NAME", name)
+				if name == nil || len(name.(string)) == 0 {
+					return
+				}
+				namespace, err := filter.Namespace.Search(data)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				fmt.Println("GOT NAMESPACE", namespace)
+				if namespace == nil {
+					namespace = ""
+				}
+				nn := types.NamespacedName{Name: name.(string), Namespace: namespace.(string)}
+
+				// TODO: this should really be over a single channel to prevent
+				//  races on add/remove
+				fmt.Println(u.Relationship.Resource.ObjectId, cr.Permissionship)
+				if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
+					authzData.allowedNNC <- nn
+				} else {
+					authzData.removedNNC <- nn
+				}
+			}
 		}
+	}()
+}
 
-		req = req.WithContext(WithAuthzData(req.Context(), &authzData))
-
-		handler.ServeHTTP(w, req)
-	}), nil
+// normalizedNamespace returns the namespace for the request. Namespace requests
+// have name and namespace set to the namespace, this normalizes it to match
+// other cluster-scoped objects
+func normalizedNamespace(info *request.RequestInfo) string {
+	namespace := info.Namespace
+	if info.Resource == "namespaces" {
+		namespace = ""
+	}
+	return namespace
 }
 
 type requestAuthzData int
@@ -307,81 +524,9 @@ func AuthzDataFrom(ctx context.Context) (*AuthzData, bool) {
 
 type AuthzData struct {
 	sync.RWMutex
-	allowedNameC chan string
-	allowedNames map[string]struct{}
-	// TODO: may need to include namespace info
-}
-
-type listOrObjectMeta struct {
-	ResourceVersion            string                      `json:"resourceVersion,omitempty" protobuf:"bytes,2,opt,name=resourceVersion"`
-	Continue                   string                      `json:"continue,omitempty" protobuf:"bytes,3,opt,name=continue"`
-	RemainingItemCount         *int64                      `json:"remainingItemCount,omitempty" protobuf:"bytes,4,opt,name=remainingItemCount"`
-	Name                       string                      `json:"name,omitempty" protobuf:"bytes,1,opt,name=name"`
-	GenerateName               string                      `json:"generateName,omitempty" protobuf:"bytes,2,opt,name=generateName"`
-	Namespace                  string                      `json:"namespace,omitempty" protobuf:"bytes,3,opt,name=namespace"`
-	SelfLink                   string                      `json:"selfLink,omitempty" protobuf:"bytes,4,opt,name=selfLink"`
-	UID                        types.UID                   `json:"uid,omitempty" protobuf:"bytes,5,opt,name=uid,casttype=k8s.io/kubernetes/pkg/types.UID"`
-	Generation                 int64                       `json:"generation,omitempty" protobuf:"varint,7,opt,name=generation"`
-	CreationTimestamp          metav1.Time                 `json:"creationTimestamp,omitempty" protobuf:"bytes,8,opt,name=creationTimestamp"`
-	DeletionTimestamp          *metav1.Time                `json:"deletionTimestamp,omitempty" protobuf:"bytes,9,opt,name=deletionTimestamp"`
-	DeletionGracePeriodSeconds *int64                      `json:"deletionGracePeriodSeconds,omitempty" protobuf:"varint,10,opt,name=deletionGracePeriodSeconds"`
-	Labels                     map[string]string           `json:"labels,omitempty" protobuf:"bytes,11,rep,name=labels"`
-	Annotations                map[string]string           `json:"annotations,omitempty" protobuf:"bytes,12,rep,name=annotations"`
-	OwnerReferences            []metav1.OwnerReference     `json:"ownerReferences,omitempty" patchStrategy:"merge" patchMergeKey:"uid" protobuf:"bytes,13,rep,name=ownerReferences"`
-	Finalizers                 []string                    `json:"finalizers,omitempty" patchStrategy:"merge" protobuf:"bytes,14,rep,name=finalizers"`
-	ManagedFields              []metav1.ManagedFieldsEntry `json:"managedFields,omitempty" protobuf:"bytes,17,rep,name=managedFields"`
-}
-
-func (m *listOrObjectMeta) ToListMeta() metav1.ListMeta {
-	return metav1.ListMeta{
-		ResourceVersion:    m.ResourceVersion,
-		Continue:           m.Continue,
-		RemainingItemCount: m.RemainingItemCount,
-	}
-}
-
-func (m *listOrObjectMeta) ToObjectMeta() metav1.ObjectMeta {
-	return metav1.ObjectMeta{
-		Name:                       m.Name,
-		GenerateName:               m.GenerateName,
-		Namespace:                  m.Namespace,
-		UID:                        m.UID,
-		ResourceVersion:            m.ResourceVersion,
-		Generation:                 m.Generation,
-		CreationTimestamp:          m.CreationTimestamp,
-		DeletionTimestamp:          m.DeletionTimestamp,
-		DeletionGracePeriodSeconds: m.DeletionGracePeriodSeconds,
-		Labels:                     m.Labels,
-		Annotations:                m.Annotations,
-		OwnerReferences:            m.OwnerReferences,
-		Finalizers:                 m.Finalizers,
-		ManagedFields:              m.ManagedFields,
-	}
-}
-
-type partialObjectOrList struct {
-	metav1.TypeMeta  `json:",inline"`
-	listOrObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
-	Items            []metav1.PartialObjectMetadata `json:"items" protobuf:"bytes,2,rep,name=items"`
-}
-
-func (p *partialObjectOrList) IsList() bool {
-	return p.Items != nil
-}
-
-func (p *partialObjectOrList) ToPartialObjectMetadata() *metav1.PartialObjectMetadata {
-	return &metav1.PartialObjectMetadata{
-		TypeMeta:   p.TypeMeta,
-		ObjectMeta: p.ToObjectMeta(),
-	}
-}
-
-func (p *partialObjectOrList) ToPartialObjectMetadataList() *metav1.PartialObjectMetadataList {
-	return &metav1.PartialObjectMetadataList{
-		TypeMeta: p.TypeMeta,
-		ListMeta: p.ToListMeta(),
-		Items:    p.Items,
-	}
+	allowedNNC chan types.NamespacedName
+	removedNNC chan types.NamespacedName
+	allowedNN  map[types.NamespacedName]struct{}
 }
 
 func (d *AuthzData) FilterResp(resp *http.Response) error {
@@ -419,14 +564,17 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 	case pom.IsList():
 		filtered, err = d.FilterList(body)
 	default:
-		// filter single object
+		// filterResponse single object
 		filtered, err = d.FilterObject(pom.ToPartialObjectMetadata(), body)
 	}
 
-	// FIXME we are not returning the err here, and if added, no e2e test passes because "FilterObject"
-	// returns "unauthorized" error
 	if err != nil {
-		fmt.Println(err)
+		var merr error
+		filtered, merr = json.Marshal(k8serrors.NewUnauthorized(err.Error()))
+		if merr != nil {
+			return merr
+		}
+		resp.StatusCode = http.StatusUnauthorized
 	}
 
 	resp.Body = io.NopCloser(bytes.NewBuffer(filtered))
@@ -444,7 +592,6 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 
 	go func() {
 		fmt.Println("running watcher")
-
 		events := make(chan []byte)
 		go func() {
 			fmt.Println("watching for chunks")
@@ -453,22 +600,21 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 					fmt.Println("context canceled, stopping chunk watch")
 					break
 				}
-				// TODO: isprefix?
 				chunk, _, err := bufio.NewReader(originalRespBody).ReadLine()
 				fmt.Println(string(chunk))
 				if err != nil {
 					fmt.Println(err)
 					break
 				}
-				fmt.Println("sending chunk")
+				fmt.Printf("sending chunk, %s\n", string(chunk))
 				events <- chunk
 				fmt.Println()
 			}
 		}()
 
 		type Event struct {
-			Type   string
-			Object ejson.RawMessage
+			Type   string           `json:"type"`
+			Object ejson.RawMessage `json:"object"`
 		}
 
 		writeChunk := func(chunk []byte) error {
@@ -481,13 +627,14 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 			return nil
 		}
 
-		bufferedEvents := make(map[string][]byte, 0)
+		bufferedEvents := make(map[types.NamespacedName][]byte)
 		for {
 			select {
 			case chunk := <-events:
 				event := Event{}
 				if err := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(chunk), 100).Decode(&event); err != nil {
 					fmt.Println(err)
+					fmt.Println(string(chunk))
 				}
 				if event.Type == string(watch.Added) || event.Type == string(watch.Modified) {
 					pom := metav1.PartialObjectMetadata{}
@@ -499,52 +646,60 @@ func (d *AuthzData) FilterWatch(resp *http.Response) error {
 
 					fmt.Println("got watch event", pom)
 
-					// TODO: non-table
-					switch pom.GroupVersionKind().GroupKind() {
-					case schema.GroupKind{Group: "meta.k8s.io", Kind: "Table"}:
+					// unwrap object if the response is a Table
+					gk := pom.GroupVersionKind().GroupKind()
+					if gk.Group == "meta.k8s.io" && gk.Kind == "Table" {
 						table := metav1.Table{}
 						if err := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(event.Object), 100).Decode(&table); err != nil {
 							fmt.Println(err)
 							break
 						}
-
 						for _, r := range table.Rows {
-							pom := metav1.PartialObjectMetadata{}
+							rowpom := metav1.PartialObjectMetadata{}
 							decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(r.Object.Raw), 100)
-							if err := decoder.Decode(&pom); err != nil {
+							if err := decoder.Decode(&rowpom); err != nil {
 								fmt.Println(err)
 								break
 							}
-							d.RLock()
-							_, ok := d.allowedNames[pom.ObjectMeta.Name]
-							d.RUnlock()
-
-							fmt.Println("found in allowed:", pom.ObjectMeta.Name, ok)
-							if ok {
-								if err := writeChunk(chunk); err != nil {
-									break
-								}
-							} else {
-								bufferedEvents[pom.Name] = chunk
-							}
+							pom = rowpom
+							break
 						}
 					}
-				}
-			case name := <-d.allowedNameC:
-				fmt.Println("recv allowed name", name)
-				fmt.Println("bufferedEvents on name recv", bufferedEvents)
 
+					d.RLock()
+					_, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]
+					d.RUnlock()
+
+					fmt.Println("found in allowed:", pom.ObjectMeta.Name, ok)
+					if ok {
+						if err := writeChunk(chunk); err != nil {
+							break
+						}
+					} else {
+						bufferedEvents[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}] = chunk
+					}
+
+				}
+			case nn := <-d.allowedNNC:
 				d.Lock()
-				d.allowedNames[name] = struct{}{}
+				d.allowedNN[nn] = struct{}{}
 				d.Unlock()
 
-				if chunk, ok := bufferedEvents[name]; ok {
+				if chunk, ok := bufferedEvents[nn]; ok {
 					err := writeChunk(chunk)
 					if err != nil {
 						break
 					} else {
-						delete(bufferedEvents, name)
+						delete(bufferedEvents, nn)
 					}
+				}
+			case nn := <-d.removedNNC:
+				d.Lock()
+				delete(d.allowedNN, nn)
+				d.Unlock()
+
+				if _, ok := bufferedEvents[nn]; ok {
+					delete(bufferedEvents, nn)
 				}
 			case <-resp.Request.Context().Done():
 				fmt.Println("request canceled")
@@ -575,7 +730,7 @@ func (d *AuthzData) FilterTable(body []byte) ([]byte, error) {
 			fmt.Println(err)
 			return nil, err
 		}
-		if _, ok := d.allowedNames[pom.ObjectMeta.Name]; ok {
+		if _, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]; ok {
 			allowedRows = append(allowedRows, r)
 		}
 	}
@@ -604,7 +759,7 @@ func (d *AuthzData) FilterList(body []byte) ([]byte, error) {
 			fmt.Println(err)
 			return nil, err
 		}
-		if _, ok := d.allowedNames[pom.ObjectMeta.Name]; ok {
+		if _, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]; ok {
 			allowedItems = append(allowedItems, item)
 		}
 	}
@@ -616,11 +771,11 @@ func (d *AuthzData) FilterList(body []byte) ([]byte, error) {
 
 func (d *AuthzData) FilterObject(pom *metav1.PartialObjectMetadata, body []byte) ([]byte, error) {
 	// wait for all allowednames to be synced
-	<-d.allowedNameC
+	<-d.allowedNNC
 	d.RLock()
 	defer d.RUnlock()
 
-	if _, ok := d.allowedNames[pom.Name]; ok {
+	if _, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]; ok {
 		return body, nil
 	}
 	return nil, fmt.Errorf("unauthorized")

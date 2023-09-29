@@ -26,6 +26,8 @@ import (
 	logsv1 "k8s.io/component-base/logs/api/v1"
 	"k8s.io/klog/v2"
 
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/spicedb"
 )
 
@@ -43,6 +45,8 @@ type Options struct {
 	BackendKubeconfigPath string
 	BackendConfig         *clientcmdapi.Config
 	OverrideUpstream      bool
+	RuleConfigFile        string
+	Matcher               rules.Matcher
 
 	CertDir string
 
@@ -87,6 +91,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&o.insecure, "spicedb-insecure", false, "If set to true uses the insecure transport configuration for gRPC. Set to false by default.")
 	fs.BoolVar(&o.skipVerifyCA, "spicedb-skip-verify-ca", false, "If set to true backend certificate trust chain is not verified. Set to false by default.")
 	fs.StringVar(&o.token, "spicedb-token", "", "specifies the preshared key to use with the remote SpiceDB")
+	fs.StringVar(&o.RuleConfigFile, "rule-config", "", "The path to a file containing proxy rule configuration")
 }
 
 func (o *Options) Complete(ctx context.Context) error {
@@ -119,6 +124,21 @@ func (o *Options) Complete(ctx context.Context) error {
 			}
 		}
 		klog.FromContext(ctx).WithValues("kubeconfig", o.BackendKubeconfigPath).Error(err, "loaded backend kube config")
+	}
+
+	if o.Matcher == nil {
+		ruleFile, err := os.Open(o.RuleConfigFile)
+		if err != nil {
+			return fmt.Errorf("couldn't open rule config file: %w", err)
+		}
+		ruleConfigs, err := proxyrule.Parse(ruleFile)
+		if err != nil {
+			return fmt.Errorf("couldn't parse rule config file: %w", err)
+		}
+		o.Matcher, err = rules.NewMapMatcher(ruleConfigs)
+		if err != nil {
+			return fmt.Errorf("couldn't compile rule configs: %w", err)
+		}
 	}
 
 	if !filepath.IsAbs(o.SecureServing.ServerCert.CertDirectory) {
@@ -200,6 +220,10 @@ func (o *Options) Validate() []error {
 
 	if len(o.BackendKubeconfigPath) == 0 {
 		errs = append(errs, fmt.Errorf("--backend-kubeconfig is required"))
+	}
+
+	if len(o.RuleConfigFile) == 0 {
+		errs = append(errs, fmt.Errorf("--rule-config is required"))
 	}
 
 	errs = append(errs, o.SecureServing.Validate()...)
