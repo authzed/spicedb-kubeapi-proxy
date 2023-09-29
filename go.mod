@@ -9,7 +9,7 @@ require (
 	github.com/authzed/grpcutil v0.0.0-20230703173955-bdd0ac3f16a5
 	github.com/authzed/spicedb v1.24.1-0.20230821163419-e4bb3adfd50b
 	github.com/cespare/xxhash/v2 v2.2.0
-	github.com/cschleiden/go-workflows v0.16.2
+	github.com/cschleiden/go-workflows v0.16.3-0.20230928210702-d72004e1fdf2
 	github.com/dustin/go-humanize v1.0.1
 	github.com/google/uuid v1.3.0
 	github.com/kyverno/go-jmespath v0.4.1-0.20230705123211-d067dc3d6613
@@ -25,8 +25,6 @@ require (
 	k8s.io/klog/v2 v2.100.1
 	k8s.io/kubernetes v1.28.0
 )
-
-replace github.com/cschleiden/go-workflows => github.com/vroldanbet/go-workflows v0.0.0-20230920154829-ec90b5bd4fd6
 
 require (
 	buf.build/gen/go/gogo/protobuf/protocolbuffers/go v1.31.0-20210810001428-4df00b267f94.1 // indirect
@@ -143,6 +141,8 @@ require (
 	github.com/mostynb/go-grpc-compression v1.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ngrok/sqlmw v0.0.0-20220520173518-97c9c04efc79 // indirect
+	github.com/onsi/ginkgo/v2 v2.11.0 // indirect
+	github.com/onsi/gomega v1.27.10 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/selinux v1.10.0 // indirect
 	github.com/outcaste-io/ristretto v0.2.3 // indirect
@@ -190,16 +190,16 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.24.0 // indirect
-	golang.org/x/crypto v0.11.0 // indirect
+	golang.org/x/crypto v0.12.0 // indirect
 	golang.org/x/exp v0.0.0-20230801115018-d63ba01acd4b // indirect
 	golang.org/x/mod v0.12.0 // indirect
-	golang.org/x/net v0.13.0 // indirect
+	golang.org/x/net v0.14.0 // indirect
 	golang.org/x/oauth2 v0.10.0 // indirect
-	golang.org/x/sys v0.10.0 // indirect
-	golang.org/x/term v0.10.0 // indirect
-	golang.org/x/text v0.11.0 // indirect
+	golang.org/x/sys v0.11.0 // indirect
+	golang.org/x/term v0.11.0 // indirect
+	golang.org/x/text v0.12.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
-	golang.org/x/tools v0.11.0 // indirect
+	golang.org/x/tools v0.12.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/api v0.134.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
