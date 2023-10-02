@@ -108,7 +108,7 @@ func (r *RollbackRelationships) Cleanup(ctx workflow.Context) {
 		if _, err := f.Get(ctx); err != nil {
 			if s, ok := status.FromError(err); ok {
 				if s.Code() == codes.InvalidArgument {
-					fmt.Println("unrecoverable error rolling back tuples", err)
+					fmt.Println("unrecoverable error when rolling back tuples", err)
 					break
 				}
 			}
