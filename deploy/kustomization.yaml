@@ -9,7 +9,7 @@ configMapGenerator:
 images:
 - name: authzed/spicedb-kubeapi-proxy:dev
   newName: kind.local/spicedb-kubeapi-proxy
-  newTag: 7b6c2489bde6add5e851d3cf2dffd7b85f40539cde75d9bcf86507793f7a785e
+  newTag: cd53bb7c5e6dc804e0580243b17a301226dec1fc40bfc4dd1a9defa13ee6e82c
 kind: Kustomization
 resources:
 - proxy.yaml

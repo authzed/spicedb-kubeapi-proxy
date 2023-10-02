@@ -2,8 +2,11 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -43,8 +46,9 @@ type Options struct {
 	Logs           *logs.Options
 
 	BackendKubeconfigPath string
-	BackendConfig         *clientcmdapi.Config
+	RestConfigFunc        func() (*rest.Config, *http.Transport, error)
 	OverrideUpstream      bool
+	UseInClusterConfig    bool
 	RuleConfigFile        string
 	Matcher               rules.Matcher
 
@@ -86,6 +90,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	logsv1.AddFlags(o.Logs, fs)
 	fs.StringVar(&o.WorkflowDatabasePath, "workflow-database-path", defaultWorkflowDatabasePath, "Path for the file representing the SQLite database used for the workflow engine.")
 	fs.BoolVar(&o.OverrideUpstream, "override-upstream", true, "if true, uses the environment to pick the upstream apiserver address instead of what is listed in --backend-kubeconfig. This simplifies kubeconfig management when running the proxy in the same cluster as the upstream.")
+	fs.BoolVar(&o.UseInClusterConfig, "use-in-cluster-config", false, "if true, uses the local cluster as the upstream and gets the configuration from the environment.")
 	fs.StringVar(&o.BackendKubeconfigPath, "backend-kubeconfig", o.BackendKubeconfigPath, "The path to the kubeconfig to proxy connections to. It should authenticate the user with cluster-admin permission.")
 	fs.StringVar(&o.SpiceDBEndpoint, "spicedb-endpoint", "localhost:50051", "Defines the endpoint endpoint to the SpiceDB authorizing proxy operations. if embedded:// is specified, an in memory ephemeral instance created.")
 	fs.BoolVar(&o.insecure, "spicedb-insecure", false, "If set to true uses the insecure transport configuration for gRPC. Set to false by default.")
@@ -98,32 +103,39 @@ func (o *Options) Complete(ctx context.Context) error {
 	if err := logsv1.ValidateAndApply(o.Logs, utilfeature.DefaultFeatureGate); err != nil {
 		return err
 	}
+
 	var err error
-	if o.BackendConfig == nil {
-		// TODO: load ambient kube config if running in a cluster and no explict
-		// kubeconfig given
-		if !filepath.IsAbs(o.BackendKubeconfigPath) {
-			pwd, err := os.Getwd()
+	if o.RestConfigFunc == nil {
+		switch o.UseInClusterConfig {
+		case true:
+			o.RestConfigFunc = func() (*rest.Config, *http.Transport, error) {
+				conf, err := rest.InClusterConfig()
+				return conf, nil, err
+			}
+
+			klog.FromContext(ctx).Info("running in-cluster, loaded ambient kube config")
+		default:
+			backendConfig, err := o.configFromPath()
 			if err != nil {
-				return fmt.Errorf("couldn't load kubeconfig: %w", err)
+				return fmt.Errorf("couldn't load kubeconfig from path: %w", err)
 			}
-			o.BackendKubeconfigPath = filepath.Join(pwd, o.BackendKubeconfigPath)
-		}
-		o.BackendConfig, err = clientcmd.LoadFromFile(o.BackendKubeconfigPath)
-		if err != nil {
-			return fmt.Errorf("couldn't load kubeconfig: %w", err)
-		}
-		// This uses the in-cluster config to get the URI
-		// In the future we may want options that use the full in-cluster config
-		// instead of requiring a kubeconfig.
-		if o.OverrideUpstream {
-			host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
-			addr := "https://" + net.JoinHostPort(host, port)
-			for i := range o.BackendConfig.Clusters {
-				o.BackendConfig.Clusters[i].Server = addr
+
+			o.RestConfigFunc = func() (*rest.Config, *http.Transport, error) {
+				conf, err := clientcmd.NewDefaultClientConfig(*backendConfig, nil).ClientConfig()
+				if err != nil {
+					return nil, nil, err
+				}
+
+				transport, err := NewTransportForKubeconfig(backendConfig)
+				if err != nil {
+					return nil, nil, fmt.Errorf("unable to create file kubeconfig transport: %w", err)
+				}
+
+				return conf, transport, err
 			}
+
+			klog.FromContext(ctx).WithValues("kubeconfig", o.BackendKubeconfigPath).Error(err, "running with provided kube config file")
 		}
-		klog.FromContext(ctx).WithValues("kubeconfig", o.BackendKubeconfigPath).Error(err, "loaded backend kube config")
 	}
 
 	if o.Matcher == nil {
@@ -215,6 +227,37 @@ func (o *Options) Complete(ctx context.Context) error {
 	return nil
 }
 
+func (o *Options) configFromPath() (*clientcmdapi.Config, error) {
+
+	if !filepath.IsAbs(o.BackendKubeconfigPath) {
+		pwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("couldn't load kubeconfig: %w", err)
+		}
+		o.BackendKubeconfigPath = filepath.Join(pwd, o.BackendKubeconfigPath)
+	}
+
+	backendConfig, err := clientcmd.LoadFromFile(o.BackendKubeconfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't load kubeconfig: %w", err)
+	}
+
+	// This uses the in-cluster config to get the URI of the upstream cluster
+	// This useful when testing with a provide kubeconfig file and make it reach out to the API.
+	// It's also useful in a scenario where you want to use it in a cluster without RBAC enabled.
+	//
+	// If running in-cluster, prefer the --use-in-cluster-config flag
+	if o.OverrideUpstream {
+		host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
+		addr := "https://" + net.JoinHostPort(host, port)
+		for i := range backendConfig.Clusters {
+			backendConfig.Clusters[i].Server = addr
+		}
+	}
+
+	return backendConfig, nil
+}
+
 func (o *Options) Validate() []error {
 	var errs []error
 
@@ -230,4 +273,26 @@ func (o *Options) Validate() []error {
 	errs = append(errs, o.Authentication.Validate()...)
 
 	return errs
+}
+
+func NewTransportForKubeconfig(config *clientcmdapi.Config) (*http.Transport, error) {
+	kubeCtx := config.Contexts[config.CurrentContext]
+	cluster := config.Clusters[kubeCtx.Cluster]
+	user := config.AuthInfos[kubeCtx.AuthInfo]
+
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(cluster.CertificateAuthorityData)
+
+	cert, err := tls.X509KeyPair(user.ClientCertificateData, user.ClientKeyData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client certificate %q or key %q: %w", user.ClientCertificateData, user.ClientKeyData, err)
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caCertPool,
+	}
+
+	return transport, nil
 }

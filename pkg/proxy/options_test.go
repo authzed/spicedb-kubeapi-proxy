@@ -38,6 +38,20 @@ func TestKubeConfig(t *testing.T) {
 	require.ErrorContains(t, err, opts.BackendKubeconfigPath)
 }
 
+func TestInClusterConfig(t *testing.T) {
+	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
+
+	opts := optionsForTesting(t)
+	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts.UseInClusterConfig = true
+	require.Empty(t, opts.Validate())
+	err := opts.Complete(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, opts.RestConfigFunc, "missing kube client REST config")
+	_, _, err = opts.RestConfigFunc()
+	require.ErrorContains(t, err, "unable to load in-cluster configuration")
+}
+
 func TestEmbeddedSpiceDB(t *testing.T) {
 	opts := optionsForTesting(t)
 	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
