@@ -1,0 +1,88 @@
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+- apiVersion: v1
+  resource: namespaces
+  verbs: ["create"]
+mustNot:
+- tpl: "namespace:{{name}}#cluster@cluster:cluster"
+write:
+- tpl: "namespace:{{name}}#creator@user:{{user.Name}}"
+- tpl: "namespace:{{name}}#cluster@cluster:cluster"
+---
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+- apiVersion: v1
+  resource: namespaces
+  verbs: ["delete"]
+write:
+- tpl: "namespace:{{name}}#creator@user:{{user.Name}}"
+- tpl: "namespace:{{name}}#cluster@cluster:cluster"
+---
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+match:
+- apiVersion: v1
+  resource: namespaces
+  verbs: ["get"]
+check:
+- tpl: "namespace:{{name}}#view@user:{{user.Name}}"
+---
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+match:
+- apiVersion: v1
+  resource: namespaces
+  verbs: ["list", "watch"]
+prefilter:
+- name: "resourceId"
+  byResource:
+    tpl: "namespace:*#view@user:{{user.Name}}"
+---
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+- apiVersion: v1
+  resource: pods
+  verbs: ["create"]
+mustNot:
+- tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
+write:
+- tpl: "pod:{{namespacedName}}#creator@user:{{user.Name}}"
+- tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
+---
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+- apiVersion: v1
+  resource: pods
+  verbs: ["delete"]
+write:
+- tpl: "pod:{{namespacedName}}#creator@user:{{user.Name}}"
+- tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
+---
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+match:
+- apiVersion: v1
+  resource: pods
+  verbs: ["get"]
+check:
+- tpl: "pod:{{namespacedName}}#view@user:{{user.Name}}"
+---
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+match:
+- apiVersion: v1
+  resource: pods
+  verbs: ["list", "watch"]
+prefilter:
+- namespace: "splitNamespace(resourceId)"
+  name: "splitName(resourceId)"
+  byResource:
+    tpl: "pod:*#view@user:{{user.Name}}"

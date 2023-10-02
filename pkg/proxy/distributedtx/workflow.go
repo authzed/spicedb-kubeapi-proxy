@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -104,6 +106,12 @@ func (r *RollbackRelationships) Cleanup(ctx workflow.Context) {
 			&v1.WriteRelationshipsRequest{Updates: updates})
 
 		if _, err := f.Get(ctx); err != nil {
+			if s, ok := status.FromError(err); ok {
+				if s.Code() == codes.InvalidArgument {
+					fmt.Println("unrecoverable error when rolling back tuples", err)
+					break
+				}
+			}
 			fmt.Println("error rolling back tuples", err)
 			continue
 		}
@@ -158,6 +166,9 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 	if err != nil {
 		// request failed for some reason
 		fmt.Println("spicedb write failed", err)
+		for _, u := range updates {
+			fmt.Println(u.String(), u)
+		}
 
 		rollback.WithRels(updates...).Cleanup(ctx)
 
