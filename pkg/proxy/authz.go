@@ -31,6 +31,11 @@ import (
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
+// alwaysAllow allows unfiltered access to api metadata
+func alwaysAllow(info *request.RequestInfo) bool {
+	return (info.Path == "/api" || info.Path == "/apis" || info.Path == "/openapi/v2") && info.Verb == "get"
+}
+
 func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient *client.Client, matcher *rules.Matcher) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -47,7 +52,7 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 			return
 		}
 
-		if (requestInfo.Path == "/api" || requestInfo.Path == "/apis") && requestInfo.Verb == "get" {
+		if alwaysAllow(requestInfo) {
 			req = req.WithContext(WithAuthzData(req.Context(), &AuthzData{}))
 			handler.ServeHTTP(w, req)
 			return
@@ -281,7 +286,6 @@ func check(ctx context.Context, matchingRules []*rules.RunnableRule, input *rule
 func filterResponse(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, authzData *AuthzData, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient) error {
 	for _, r := range matchingRules {
 		for _, f := range r.PreFilter {
-
 			rel, err := rules.ResolveRel(f.Rel, input)
 			if err != nil {
 				return err
@@ -297,8 +301,12 @@ func filterResponse(ctx context.Context, matchingRules []*rules.RunnableRule, in
 			switch input.Request.Verb {
 			case "list":
 				filterList(ctx, client, filter, authzData)
+				// only one filter allowed per request
+				return nil
 			case "watch":
 				filterWatch(ctx, client, watchClient, filter, input, authzData)
+				// only one filter allowed per request
+				return nil
 			}
 		}
 	}
@@ -358,8 +366,6 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				fmt.Println(err)
 				return
 			}
-			// TODO: this will mark an object that matches any filterResponse as allowed, should
-			//   probably change to check all filters.
 
 			byteIn, err := json.Marshal(wrapper{ResourceID: resp.ResourceObjectId})
 			if err != nil {
@@ -447,8 +453,6 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					fmt.Println(err)
 					return
 				}
-				// TODO: this will mark an object that matches any filterResponse as allowed, should
-				//   probably change to check all filters.
 
 				byteIn, err := json.Marshal(wrapper{ResourceID: u.Relationship.Resource.ObjectId, SubjectID: u.Relationship.Subject.Object.ObjectId})
 				if err != nil {
@@ -496,17 +500,6 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 	}()
 }
 
-// normalizedNamespace returns the namespace for the request. Namespace requests
-// have name and namespace set to the namespace, this normalizes it to match
-// other cluster-scoped objects
-func normalizedNamespace(info *request.RequestInfo) string {
-	namespace := info.Namespace
-	if info.Resource == "namespaces" {
-		namespace = ""
-	}
-	return namespace
-}
-
 type requestAuthzData int
 
 const requestAuthzDataKey requestAuthzData = iota
@@ -535,7 +528,7 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 		return fmt.Errorf("no info")
 	}
 
-	if (info.Path == "/api" || info.Path == "/apis") && info.Verb == "get" {
+	if alwaysAllow(info) {
 		return nil
 	}
 
