@@ -44,6 +44,8 @@ spec:
           - X-Remote-Group
           - --requestheader-username-headers
           - X-Remote-User
+          - --rule-config
+          - /opt/proxy/config/rules.yaml
           image: authzed/spicedb-kubeapi-proxy:dev
           name: spicedb-kubeapi-proxy
           ports:
@@ -72,6 +74,8 @@ spec:
               name: certs
             - mountPath: /opt/proxy/clientcerts
               name: client-ca
+            - mountPath: /opt/proxy/config
+              name: rules
       volumes:
         - name: kubeconfig
           secret:
@@ -82,6 +86,9 @@ spec:
         - name: client-ca
           secret:
             secretName: spicedb-kubeapi-proxy-client-ca-cert
+        - name: rules
+          configMap:
+            name: rules
   volumeClaimTemplates:
     - metadata:
         name: workflow-database

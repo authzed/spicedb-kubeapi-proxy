@@ -41,13 +41,18 @@ const (
 
 // Run runs the proxy locally against the development cluster - requires dev:up
 func (d Dev) Run() error {
+	fmt.Println("✅  starting local proxy! To talk to the proxy with kubectl:")
+	fmt.Printf("  export KUBECONFIG=$(pwd)/%s\n", developmentKubeConfigFileName)
+	fmt.Println("  kubectx local")
+	fmt.Println("  kubectl --insecure-skip-tls-verify get namespace")
 	return sh.RunV("go", "run",
 		"./cmd/spicedb-kubeapi-proxy/main.go",
 		"--bind-address=127.0.0.1",
 		"--secure-port=8443",
 		"--backend-kubeconfig", "spicedb-kubeapi-proxy.kubeconfig",
 		"--client-ca-file", "client-ca.crt",
-		"--spicedb-endpoint", "embedded://")
+		"--spicedb-endpoint", "embedded://",
+		"--rule-config", "./deploy/rules.yaml")
 }
 
 // Up brings up a dev cluster with the proxy installed.
@@ -87,15 +92,11 @@ func (d Dev) Up(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Println("✅  development environment ready! To talk to the proxy with kubectl:")
-	fmt.Printf("  export KUBECONFIG=$(pwd)/%s\n", developmentKubeConfigFileName)
-	fmt.Println("  kubectx proxy")
-	fmt.Println("  kubectl --context proxy get namespace")
-	fmt.Println("ℹ️ you can also run the proxy locally with:")
-	fmt.Println("  go run ./cmd/spicedb-kubeapi-proxy/main.go --bind-address=127.0.0.1 --secure-port=8443 --backend-kubeconfig $(pwd)/spicedb-kubeapi-proxy.kubeconfig --client-ca-file $(pwd)/client-ca.crt --spicedb-endpoint embedded://")
-	fmt.Printf("  export KUBECONFIG=$(pwd)/%s\n", developmentKubeConfigFileName)
-	fmt.Println("  kubectx local")
-	fmt.Println("  kubectl --insecure-skip-tls-verify get namespace")
+	fmt.Println("✅ development environment ready! To talk to the proxy with kubectl:")
+	fmt.Printf("   export KUBECONFIG=$(pwd)/%s\n", developmentKubeConfigFileName)
+	fmt.Println("   kubectx proxy")
+	fmt.Println("   kubectl --context proxy get namespace")
+	fmt.Printf("ℹ️  you can also run the proxy locally with: %q\n", "mage dev:run")
 	return nil
 }
 

@@ -1,8 +1,15 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
+configMapGenerator:
+- files:
+  - rules.yaml
+  name: rules
+  namespace: spicedb-kubeapi-proxy
+  options:
+    disableNameSuffixHash: true
 images:
 - name: authzed/spicedb-kubeapi-proxy:dev
   newName: kind.local/spicedb-kubeapi-proxy
-  newTag: c90e5619e24d34a8cda2b306b9b42aedf615fe5021e1ff40ee80050f63bc5b80
+  newTag: 7b6c2489bde6add5e851d3cf2dffd7b85f40539cde75d9bcf86507793f7a785e
 kind: Kustomization
 resources:
 - proxy.yaml
