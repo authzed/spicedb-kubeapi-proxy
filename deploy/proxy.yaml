@@ -13,7 +13,7 @@ metadata:
   namespace: spicedb-kubeapi-proxy
 spec:
   serviceName: spicedb-kubeapi-proxy
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: spicedb-kubeapi-proxy
