@@ -88,6 +88,15 @@ func TestRemoteSpiceDB(t *testing.T) {
 	grpcutil.RequireStatus(t, codes.InvalidArgument, err)
 }
 
+func TestRemoteSpiceDBCerts(t *testing.T) {
+	opts := optionsForTesting(t)
+	opts.SpiceDBEndpoint = "localhost"
+	opts.token = "foobar"
+	opts.spicedbCAPath = "test"
+	require.Empty(t, opts.Validate())
+	require.ErrorContains(t, opts.Complete(context.Background()), "unable to load custom certificates")
+}
+
 func TestRuleConfig(t *testing.T) {
 	opts := optionsForTesting(t)
 	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint

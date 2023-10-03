@@ -65,6 +65,7 @@ type Options struct {
 	insecure          bool
 	skipVerifyCA      bool
 	token             string
+	spicedbCAPath     string
 
 	WorkflowDatabasePath string
 	LockMode             string
@@ -95,7 +96,8 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.SpiceDBEndpoint, "spicedb-endpoint", "localhost:50051", "Defines the endpoint endpoint to the SpiceDB authorizing proxy operations. if embedded:// is specified, an in memory ephemeral instance created.")
 	fs.BoolVar(&o.insecure, "spicedb-insecure", false, "If set to true uses the insecure transport configuration for gRPC. Set to false by default.")
 	fs.BoolVar(&o.skipVerifyCA, "spicedb-skip-verify-ca", false, "If set to true backend certificate trust chain is not verified. Set to false by default.")
-	fs.StringVar(&o.token, "spicedb-token", "", "specifies the preshared key to use with the remote SpiceDB")
+	fs.StringVar(&o.token, "spicedb-token", "", "Specifies the preshared key to use with the remote SpiceDB")
+	fs.StringVar(&o.spicedbCAPath, "spicedb-ca-path", "", "If set, looks in the given directory for CAs to trust when connecting to SpiceDB.")
 	fs.StringVar(&o.RuleConfigFile, "rule-config", "", "The path to a file containing proxy rule configuration")
 }
 
@@ -203,10 +205,17 @@ func (o *Options) Complete(ctx context.Context) error {
 			if o.skipVerifyCA {
 				verification = grpcutil.SkipVerifyCA
 			}
-
-			certs, err := grpcutil.WithSystemCerts(verification)
-			if err != nil {
-				return fmt.Errorf("unable to load system certificates: %w", err)
+			var certs grpc.DialOption
+			if len(o.spicedbCAPath) > 0 {
+				certs, err = grpcutil.WithCustomCerts(verification, o.spicedbCAPath)
+				if err != nil {
+					return fmt.Errorf("unable to load custom certificates: %w", err)
+				}
+			} else {
+				certs, err = grpcutil.WithSystemCerts(verification)
+				if err != nil {
+					return fmt.Errorf("unable to load system certificates: %w", err)
+				}
 			}
 
 			opts = append(opts, certs)
