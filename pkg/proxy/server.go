@@ -23,7 +23,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz/distributedtx"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
@@ -79,7 +80,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 			req.URL.Scheme = "https"
 		},
 		ModifyResponse: func(response *http.Response) error {
-			authzData, ok := AuthzDataFrom(response.Request.Context())
+			authzData, ok := authz.AuthzDataFrom(response.Request.Context())
 			if !ok {
 				return fmt.Errorf("no authz data")
 			}
@@ -113,7 +114,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	s.WorkflowWorker = worker
 
 	s.Matcher = &s.opts.Matcher
-	handler, err := WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher)
+	handler, err := authz.WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
 	}

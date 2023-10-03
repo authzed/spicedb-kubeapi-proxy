@@ -19,9 +19,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz/distributedtx"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/failpoints"
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
