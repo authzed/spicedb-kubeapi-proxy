@@ -2,8 +2,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -23,8 +21,6 @@ import (
 	"k8s.io/apiserver/pkg/server"
 	genericfilters "k8s.io/apiserver/pkg/server/filters"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/klog/v2"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
@@ -44,14 +40,24 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 		opts: o,
 	}
 
-	restConfig, err := clientcmd.NewDefaultClientConfig(*s.opts.BackendConfig, nil).ClientConfig()
-	if err != nil {
-		return nil, err
+	var err error
+	var clusterHost string
+	if s.opts.RestConfigFunc == nil {
+		return nil, fmt.Errorf("missing kube client REST configuration")
 	}
+
+	restConfig, transport, err := s.opts.RestConfigFunc()
+	if err != nil {
+		return nil, fmt.Errorf("unable to load kube REST config: %w", err)
+	}
+
 	s.KubeClient, err = kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return nil, err
 	}
+
+	clusterHost = restConfig.Host
+	klog.FromContext(ctx).WithValues("host", clusterHost).Error(err, "created upstream client")
 
 	mux := http.NewServeMux()
 
@@ -65,19 +71,11 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	transport, err := newTransportForKubeconfig(o.BackendConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create transport: %w", err)
-	}
-
-	kubeCtx := o.BackendConfig.Contexts[o.BackendConfig.CurrentContext]
-	cluster := o.BackendConfig.Clusters[kubeCtx.Cluster]
-
 	clusterProxy := &httputil.ReverseProxy{
 		ErrorLog:      nil, // TODO
 		FlushInterval: -1,
 		Director: func(req *http.Request) {
-			req.URL.Host = strings.TrimPrefix(cluster.Server, "https://")
+			req.URL.Host = strings.TrimPrefix(clusterHost, "https://")
 			req.URL.Scheme = "https"
 		},
 		ModifyResponse: func(response *http.Response) error {
@@ -170,28 +168,6 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func newTransportForKubeconfig(config *clientcmdapi.Config) (*http.Transport, error) {
-	kubeCtx := config.Contexts[config.CurrentContext]
-	cluster := config.Clusters[kubeCtx.Cluster]
-	user := config.AuthInfos[kubeCtx.AuthInfo]
-
-	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(cluster.CertificateAuthorityData)
-
-	cert, err := tls.X509KeyPair(user.ClientCertificateData, user.ClientKeyData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load client certificate %q or key %q: %w", user.ClientCertificateData, user.ClientKeyData, err)
-	}
-
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      caCertPool,
-	}
-
-	return transport, nil
 }
 
 func withAuthentication(handler, failed http.Handler, auth authenticator.Request) http.Handler {
