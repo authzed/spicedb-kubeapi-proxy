@@ -1,7 +1,10 @@
 package rules
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -11,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
 
@@ -111,10 +115,42 @@ type ResolveInput struct {
 	Request        *request.RequestInfo          `json:"request"`
 	User           *user.DefaultInfo             `json:"user"`
 	Object         *metav1.PartialObjectMetadata `json:"object"`
+	Body           []byte                        `json:"body"`
+	Headers        http.Header                   `json:"headers"`
+}
+
+func NewResolveInputFromHttp(req *http.Request) (*ResolveInput, error) {
+	requestInfo, ok := request.RequestInfoFrom(req.Context())
+	if !ok {
+		return nil, fmt.Errorf("unable to get request info from request")
+	}
+	userInfo, ok := request.UserFrom(req.Context())
+	if !ok {
+		return nil, fmt.Errorf("unable to get user info from request")
+	}
+
+	// create/update requests should contain an object body, parse it and
+	// include in the input
+	var body []byte
+	var object *metav1.PartialObjectMetadata
+	if slices.Contains([]string{"create", "update", "patch"}, requestInfo.Verb) {
+		var err error
+		body, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("unable to read request body: %w", err)
+		}
+		decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(body), 100)
+		var pom metav1.PartialObjectMetadata
+		if err := decoder.Decode(&pom); err != nil {
+			return nil, fmt.Errorf("unable to decode request body as kube object: %w", err)
+		}
+		object = &pom
+	}
+	return NewResolveInput(requestInfo, userInfo.(*user.DefaultInfo), object, body, req.Header.Clone()), nil
 }
 
 // NewResolveInput creates a ResolveInput with normalized fields.
-func NewResolveInput(req *request.RequestInfo, user *user.DefaultInfo, object *metav1.PartialObjectMetadata) *ResolveInput {
+func NewResolveInput(req *request.RequestInfo, user *user.DefaultInfo, object *metav1.PartialObjectMetadata, body []byte, headers http.Header) *ResolveInput {
 	var name, namespace, namespacedName string
 
 	// default to object
@@ -149,6 +185,8 @@ func NewResolveInput(req *request.RequestInfo, user *user.DefaultInfo, object *m
 		Request:        req,
 		User:           user,
 		Object:         object,
+		Body:           body,
+		Headers:        headers,
 	}
 }
 

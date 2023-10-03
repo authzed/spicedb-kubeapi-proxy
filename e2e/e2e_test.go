@@ -46,8 +46,8 @@ import (
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/versions"
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/workflows"
 
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz/distributedtx"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy"
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy/distributedtx"
 )
 
 var (

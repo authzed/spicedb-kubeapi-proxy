@@ -1,10 +1,13 @@
-package proxy
+package authz
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// listOrObjectMeta is a superset of fields that may be returned by a kube
+// request. It can then be converted to a standard type after inspection to
+// see what fields were deserialized.
 type listOrObjectMeta struct {
 	ResourceVersion            string                      `json:"resourceVersion,omitempty" protobuf:"bytes,2,opt,name=resourceVersion"`
 	Continue                   string                      `json:"continue,omitempty" protobuf:"bytes,3,opt,name=continue"`
