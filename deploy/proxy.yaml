@@ -25,6 +25,8 @@ spec:
     spec:
       containers:
         - args:
+          - --workflow-database-path
+          - /opt/proxy/database/dtx.sqlite
           - --secure-port=8443
           - --spicedb-endpoint
           - embedded://
@@ -68,14 +70,20 @@ spec:
               scheme: HTTPS
           terminationMessagePolicy: FallbackToLogsOnError
           volumeMounts:
-            - mountPath: /opt/proxy
-              name: kubeconfig
-            - mountPath: /opt/proxy/certs
-              name: certs
-            - mountPath: /opt/proxy/clientcerts
-              name: client-ca
-            - mountPath: /opt/proxy/config
-              name: rules
+            - name: kubeconfig
+              mountPath: /opt/proxy
+              readOnly: true
+            - name: certs
+              mountPath: /opt/proxy/certs
+              readOnly: true
+            - name: client-ca
+              mountPath: /opt/proxy/clientcerts
+              readOnly: true
+            - name: rules
+              mountPath: /opt/proxy/config
+              readOnly: true
+            - name: workflow-database
+              mountPath: /opt/proxy/database
       volumes:
         - name: kubeconfig
           secret:
