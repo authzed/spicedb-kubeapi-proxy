@@ -29,7 +29,7 @@ func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.Permissions
 		return SetupWithMemoryBackend(ctx, permissionClient, kubeClient)
 	}
 
-	ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("backend", "sqlite-file"))
+	ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("backend", "sqlite-file", "path", sqlitePath))
 	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewSqliteBackend(sqlitePath, backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: defaultLogLevel,
 	})))))
