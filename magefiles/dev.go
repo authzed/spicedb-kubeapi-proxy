@@ -102,7 +102,7 @@ func (d Dev) Up(ctx context.Context) error {
 
 // apply applies kubernetes manifest to an existing running environment, and blocks until all resources are ready
 func apply() error {
-	return sh.RunV("kustomizer", "apply", "inventory", "spicedb-kubeapi-proxy", "-k", "./deploy", "--prune", "--wait")
+	return sh.RunV("kustomizer", "apply", "inventory", "spicedb-kubeapi-proxy", "-k", "./deploy", "--prune", "--wait", "--timeout", "5m")
 }
 
 // generateDevKubeconfig writes locally a kubeconfig for development purposes, containing context to have kube clients
