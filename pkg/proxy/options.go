@@ -194,6 +194,7 @@ func (o *Options) Complete(ctx context.Context) error {
 		klog.FromContext(ctx).WithValues("spicedb-endpoint", o.SpiceDBEndpoint).
 			WithValues("spicedb-insecure", o.insecure).
 			WithValues("spicedb-skip-verify-ca", o.skipVerifyCA).
+			WithValues("spicedb-ca-path", o.spicedbCAPath).
 			Info("using remote SpiceDB")
 		var opts []grpc.DialOption
 		if o.insecure {
