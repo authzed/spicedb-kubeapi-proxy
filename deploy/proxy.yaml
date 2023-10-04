@@ -52,6 +52,17 @@ spec:
           name: spicedb-kubeapi-proxy
           ports:
           - containerPort: 8443
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           livenessProbe:
             failureThreshold: 3
             httpGet:
@@ -97,6 +108,12 @@ spec:
         - name: rules
           configMap:
             name: rules
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
   volumeClaimTemplates:
     - metadata:
         name: workflow-database
