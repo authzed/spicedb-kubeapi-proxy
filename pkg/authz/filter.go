@@ -102,6 +102,11 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				return
 			}
 
+			if resp.Permissionship != v1.LookupPermissionship_LOOKUP_PERMISSIONSHIP_HAS_PERMISSION {
+				klog.V(3).InfoS("denying conditional resource in list", "resource_type", filter.Rel.ResourceType, "resource_id", resp.ResourceObjectId, "condition", resp.PartialCaveatInfo.String())
+				continue
+			}
+
 			byteIn, err := json.Marshal(wrapper{ResourceID: resp.ResourceObjectId})
 			if err != nil {
 				handleFilterListError(err)
