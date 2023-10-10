@@ -31,7 +31,7 @@ func TestWorkflow(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			srv, err := spicedb.NewServer(ctx)
+			srv, err := spicedb.NewServer(ctx, "")
 			require.NoError(t, err)
 			go func() {
 				require.NoError(t, srv.Run(ctx))
