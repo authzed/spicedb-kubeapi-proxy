@@ -331,11 +331,11 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 			f.Namespace = "''"
 		}
 		namespace, err := jmespath.Compile(f.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compile jmespath: %w", err)
+		}
 		namespace.Register(splitName)
 		namespace.Register(splitNamespace)
-		if err != nil {
-			return nil, err
-		}
 		filter := &PreFilter{
 			Name:      name,
 			Namespace: namespace,
