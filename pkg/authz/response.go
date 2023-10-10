@@ -58,12 +58,17 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 		return d.FilterWatch(resp)
 	}
 
+	switch {
+	case resp.StatusCode >= 400 && resp.StatusCode <= 499:
+		return nil
+	case resp.StatusCode >= 500 && resp.StatusCode <= 599:
+		return nil
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println(err)
 		return err
 	}
-	fmt.Println(string(body))
 
 	pom := partialObjectOrList{}
 	if err := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(body), 100).Decode(&pom); err != nil {
