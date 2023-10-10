@@ -2,6 +2,7 @@ package distributedtx
 
 import (
 	"fmt"
+	"k8s.io/klog/v2"
 	"net/http"
 	"time"
 
@@ -205,19 +206,28 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 			continue
 		}
 
-		if out.StatusCode == http.StatusConflict || out.StatusCode == http.StatusCreated || out.StatusCode == http.StatusOK {
+		if isSuccessfulCreate(input, out) || isSuccessfulDelete(input, out) {
 			rollback.Cleanup(ctx)
 			return out, nil
 		}
 
 		// some other status code is some other type of error, remove
 		// the original tuple and the lock tuple
+		klog.V(3).ErrorS(err, "unsuccessful Kube API operation on PessimisticWriteToSpiceDBAndKube", "response", out)
 		rollback.WithRels(updates...).Cleanup(ctx)
 		return out, nil
 	}
 
 	rollback.WithRels(updates...).Cleanup(ctx)
 	return nil, fmt.Errorf("failed to communicate with kubernetes after %d attempts", MaxKubeAttempts)
+}
+
+func isSuccessfulDelete(input *WriteObjInput, out *KubeResp) bool {
+	return input.RequestInfo.Verb == "delete" && (out.StatusCode == http.StatusNotFound || out.StatusCode == http.StatusOK)
+}
+
+func isSuccessfulCreate(input *WriteObjInput, out *KubeResp) bool {
+	return input.RequestInfo.Verb == "create" && (out.StatusCode == http.StatusConflict || out.StatusCode == http.StatusCreated || out.StatusCode == http.StatusOK)
 }
 
 // OptimisticWriteToSpiceDBAndKube ensures that a write exists in both SpiceDB and kube,
