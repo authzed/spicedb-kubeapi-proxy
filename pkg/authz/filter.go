@@ -148,7 +148,6 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				namespace = ""
 			}
 
-			// TODO: check permissionship?
 			authzData.allowedNN[types.NamespacedName{
 				Name:      name.(string),
 				Namespace: namespace.(string),
