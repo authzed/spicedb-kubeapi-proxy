@@ -2,6 +2,7 @@
 /testbin/
 /**/apiserver.local.config/
 client-ca.crt
+client-cert.crt
 *__failpoint_*.go
 *.go__failpoint*
 *.sqlite
