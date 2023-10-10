@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kyverno/go-jmespath"
 	"io"
 	"k8s.io/klog/v2"
 
@@ -33,7 +34,7 @@ func filterResponse(ctx context.Context, matchingRules []*rules.RunnableRule, in
 
 			switch input.Request.Verb {
 			case "list":
-				filterList(ctx, client, filter, authzData)
+				filterList(ctx, client, filter, input, authzData)
 				// only one filter allowed per request
 				return nil
 			case "watch":
@@ -64,7 +65,7 @@ type wrapper struct {
 	SubjectID  string `json:"subjectId"`
 }
 
-func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter *rules.ResolvedPreFilter, authzData *AuthzData) {
+func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
 	go func() {
 		authzData.Lock()
 		defer authzData.Unlock()
@@ -131,8 +132,17 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 
 			namespace, err := filter.Namespace.Search(data)
 			if err != nil {
-				handleFilterListError(err)
-				return
+				if _, ok := err.(jmespath.NotFoundError); !ok {
+					handleFilterListError(err)
+					return
+				}
+			}
+			if namespace == nil {
+				namespace, err = filter.Namespace.Search(input)
+				if err != nil {
+					handleFilterListError(err)
+					return
+				}
 			}
 			if namespace == nil {
 				namespace = ""
