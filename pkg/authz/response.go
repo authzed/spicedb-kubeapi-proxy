@@ -7,6 +7,7 @@ import (
 	ejson "encoding/json"
 	"fmt"
 	"io"
+	"k8s.io/klog/v2"
 	"net/http"
 	"sync"
 
@@ -69,7 +70,8 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 		fmt.Println(err)
 		return err
 	}
-	fmt.Printf("obj pom %#v\n", pom)
+	klog.V(3).InfoS("upstream response object", "name", pom.Name, "namespace", pom.Namespace, "kind", pom.Kind, "item_count", len(pom.Items))
+	klog.V(4).InfoS("upstream response object detail", "pom", pom)
 
 	var filtered []byte
 	switch {
@@ -275,6 +277,9 @@ func (d *AuthzData) FilterList(body []byte) ([]byte, error) {
 		}
 		if _, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]; ok {
 			allowedItems = append(allowedItems, item)
+			klog.V(3).InfoS("allowed resource in list", "kind", pom.TypeMeta.Kind, "resource", pom.ObjectMeta.Namespace+"/"+pom.ObjectMeta.Name)
+		} else {
+			klog.V(3).InfoS("denied resource in list", "kind", pom.TypeMeta.Kind, "resource", pom.ObjectMeta.Namespace+"/"+pom.ObjectMeta.Name)
 		}
 	}
 
@@ -290,7 +295,10 @@ func (d *AuthzData) FilterObject(pom *metav1.PartialObjectMetadata, body []byte)
 	defer d.RUnlock()
 
 	if _, ok := d.allowedNN[types.NamespacedName{Name: pom.ObjectMeta.Name, Namespace: pom.ObjectMeta.Namespace}]; ok {
+		klog.V(3).InfoS("allowed resource get", "kind", pom.TypeMeta.Kind, "resource", pom.ObjectMeta.Namespace+"/"+pom.ObjectMeta.Name)
 		return body, nil
 	}
+
+	klog.V(3).InfoS("denied resource get", "kind", pom.TypeMeta.Kind, "resource", pom.ObjectMeta.Namespace+"/"+pom.ObjectMeta.Name)
 	return nil, fmt.Errorf("unauthorized")
 }

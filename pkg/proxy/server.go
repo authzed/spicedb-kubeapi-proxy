@@ -80,6 +80,9 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 			req.URL.Scheme = "https"
 		},
 		ModifyResponse: func(response *http.Response) error {
+			klog.V(3).InfoSDepth(1, "upstream Kubernetes API response",
+				"status", response.StatusCode,
+				"headers", response.Header)
 			authzData, ok := authz.AuthzDataFrom(response.Request.Context())
 			if !ok {
 				return fmt.Errorf("no authz data")
@@ -87,6 +90,10 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 			return authzData.FilterResp(response)
 		},
 		Transport: transport,
+		ErrorHandler: func(writer http.ResponseWriter, h *http.Request, err error) {
+			klog.V(3).InfoSDepth(1, "upstream Kubernetes API response", "error", err)
+			writer.WriteHeader(http.StatusBadGateway)
+		},
 	}
 
 	requestInfoResolver := &request.RequestInfoFactory{

@@ -2,13 +2,17 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
+
+var ErrUnauthorized = errors.New("unauthorized operation")
 
 func runAllMatchingChecks(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, client v1.PermissionsServiceClient) error {
 	var checkGroup errgroup.Group
@@ -21,7 +25,7 @@ func runAllMatchingChecks(ctx context.Context, matchingRules []*rules.RunnableRu
 				if err != nil {
 					return err
 				}
-				resp, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
+				req := &v1.CheckPermissionRequest{
 					Consistency: &v1.Consistency{
 						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 					},
@@ -37,12 +41,14 @@ func runAllMatchingChecks(ctx context.Context, matchingRules []*rules.RunnableRu
 						},
 						OptionalRelation: rel.SubjectRelation,
 					},
-				})
+				}
+				resp, err := client.CheckPermission(ctx, req)
+				klog.V(3).InfoSDepth(1, "CheckPermission", "request", req, "response", resp, "error", err)
 				if err != nil {
-					return err
+					return fmt.Errorf("failed runAllMatchingChecks: %w", err)
 				}
 				if resp.Permissionship != v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
-					return fmt.Errorf("failed runAllMatchingChecks for %v", rel)
+					return ErrUnauthorized
 				}
 				return nil
 			})

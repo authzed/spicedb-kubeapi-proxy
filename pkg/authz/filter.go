@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -70,7 +71,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 		defer close(authzData.allowedNNC)
 		defer close(authzData.removedNNC)
 
-		lr, err := client.LookupResources(ctx, &v1.LookupResourcesRequest{
+		req := &v1.LookupResourcesRequest{
 			Consistency: &v1.Consistency{
 				Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
 			},
@@ -83,9 +84,11 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				},
 				OptionalRelation: filter.Rel.SubjectRelation,
 			},
-		})
+		}
+		klog.V(3).InfoSDepth(1, "LookupResources", "request", req)
+		lr, err := client.LookupResources(ctx, req)
 		if err != nil {
-			fmt.Println(err)
+			handleFilterListError(err)
 			return
 		}
 		for {
@@ -95,48 +98,54 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 			}
 
 			if err != nil {
-				fmt.Println(err)
+				handleFilterListError(err)
 				return
 			}
 
 			byteIn, err := json.Marshal(wrapper{ResourceID: resp.ResourceObjectId})
 			if err != nil {
-				fmt.Println(err)
+				handleFilterListError(err)
 				return
 			}
 			var data any
 			if err := json.Unmarshal(byteIn, &data); err != nil {
-				fmt.Println(err)
+				handleFilterListError(err)
 				return
 			}
 
-			fmt.Println("GOT WATCH FILTER EVENT", string(byteIn))
+			klog.V(4).InfoS("received list filter event", "event", string(byteIn))
 			name, err := filter.Name.Search(data)
 			if err != nil {
-				fmt.Println(err)
+				handleFilterListError(err)
 				return
 			}
 			if name == nil || len(name.(string)) == 0 {
+				klog.V(3).InfoS("unable to determine name for resource", "event", string(byteIn))
 				return
 			}
+
 			namespace, err := filter.Namespace.Search(data)
 			if err != nil {
-				fmt.Println(err)
+				handleFilterListError(err)
 				return
 			}
 			if namespace == nil {
 				namespace = ""
 			}
-			fmt.Println("NAMENS", name, namespace)
 
 			// TODO: check permissionship?
 			authzData.allowedNN[types.NamespacedName{
 				Name:      name.(string),
 				Namespace: namespace.(string),
 			}] = struct{}{}
-			fmt.Println("allowed", resp.ResourceObjectId)
+
+			klog.V(3).InfoS("allowed resource in list/LR response", "resource_type", filter.Rel.ResourceType, "resource_id", resp.ResourceObjectId)
 		}
 	}()
+}
+
+func handleFilterListError(err error) {
+	klog.V(3).ErrorS(err, "error on filterList")
 }
 
 func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
