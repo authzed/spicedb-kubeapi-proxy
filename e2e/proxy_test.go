@@ -272,6 +272,15 @@ var _ = Describe("Proxy", func() {
 				failpoints.EnableFailPoint("panicKubeReadResp", 1)
 				Expect(DeletePod(ctx, paulClient, paulNamespace, paulPod)).ToNot(BeNil())
 
+				// Make sure tuples are gone
+				owners := GetAllTuples(ctx, &v1.RelationshipFilter{
+					ResourceType:          "pod",
+					OptionalResourceId:    paulNamespace + "/" + paulPod,
+					OptionalRelation:      "creator",
+					OptionalSubjectFilter: &v1.SubjectFilter{SubjectType: "user"},
+				})
+				Expect(len(owners)).To(BeZero())
+
 				// the pod is gone on subsequent calls
 				Expect(k8serrors.IsUnauthorized(GetPod(ctx, paulClient, paulNamespace, paulPod))).To(BeTrue())
 				Expect(k8serrors.IsNotFound(GetPod(ctx, adminClient, paulNamespace, paulPod))).To(BeTrue())

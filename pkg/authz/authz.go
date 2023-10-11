@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"k8s.io/klog/v2"
 	"net/http"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -19,7 +20,7 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 
 		input, err := rules.NewResolveInputFromHttp(req)
 		if err != nil {
-			failed.ServeHTTP(w, req)
+			handleError(w, failed, req, err)
 			return
 		}
 
@@ -31,17 +32,31 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 		}
 
 		matchingRules := (*matcher).Match(input.Request)
-
+		if len(matchingRules) == 0 {
+			klog.V(3).InfoSDepth(1,
+				"request did not match any authorization rule",
+				"verb", input.Request.Verb,
+				"APIGroup", input.Request.APIGroup,
+				"APIVersion", input.Request.APIVersion,
+				"Resource", input.Request.Resource)
+		} else {
+			klog.V(3).InfoSDepth(1,
+				"request matched authorization rule/s",
+				"verb", input.Request.Verb,
+				"APIGroup", input.Request.APIGroup,
+				"APIVersion", input.Request.APIVersion,
+				"Resource", input.Request.Resource)
+		}
 		// run all checks for this request
 		if err := runAllMatchingChecks(ctx, matchingRules, input, permissionsClient); err != nil {
-			failed.ServeHTTP(w, req)
+			handleError(w, failed, req, err)
 			return
 		}
 
 		// if this request is a write, perform the dual write and return
 		if rule := getWriteRule(matchingRules); rule != nil {
 			if err := write(ctx, w, rule, input, workflowClient); err != nil {
-				failed.ServeHTTP(w, req)
+				handleError(w, failed, req, err)
 				return
 			}
 			return
@@ -66,6 +81,10 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 
 		handler.ServeHTTP(w, req)
 	}), nil
+}
+
+func handleError(w http.ResponseWriter, failHandler http.Handler, req *http.Request, err error) {
+	failHandler.ServeHTTP(w, req)
 }
 
 // alwaysAllow allows unfiltered access to api metadata

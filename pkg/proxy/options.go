@@ -180,8 +180,8 @@ func (o *Options) Complete(ctx context.Context) error {
 
 	var conn *grpc.ClientConn
 	if spicedbURl.Scheme == "embedded" {
-		klog.FromContext(ctx).WithValues("spicedb-endpoint", o.SpiceDBEndpoint).Info("using embedded SpiceDB")
-		o.EmbeddedSpiceDB, err = spicedb.NewServer(ctx)
+		klog.FromContext(ctx).WithValues("spicedb-endpoint", spicedbURl).Info("using embedded SpiceDB")
+		o.EmbeddedSpiceDB, err = spicedb.NewServer(ctx, spicedbURl.Path)
 		if err != nil {
 			return fmt.Errorf("unable to stand up embedded SpiceDB: %w", err)
 		}

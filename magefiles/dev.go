@@ -141,6 +141,11 @@ func generateDevKubeconfig(ctx context.Context, proxyHost string) error {
 		return err
 	}
 
+	certPath := path.Join(wd, "client-cert.crt")
+	if err := os.WriteFile(certPath, clientCertBytes, 0o600); err != nil {
+		fmt.Printf("unable to cache proxy client certificate in host machine: %s\n", err.Error())
+	}
+
 	clientKeyBytes, err := getBytesFromSecretField(ctx, clientset, "spicedb-kubeapi-proxy", "rakis-client-cert", "tls.key")
 	if err != nil {
 		return err
@@ -219,6 +224,7 @@ func (d Dev) Clean() error {
 	_ = os.Remove(kubeconfigPath)
 	_ = os.Remove(developmentKubeConfigFileName)
 	_ = os.Remove("client-ca.crt")
+	_ = os.Remove("client-cert.crt")
 	return nil
 }
 

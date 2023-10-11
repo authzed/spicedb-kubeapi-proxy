@@ -31,7 +31,7 @@ func TestWorkflow(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			srv, err := spicedb.NewServer(ctx)
+			srv, err := spicedb.NewServer(ctx, "")
 			require.NoError(t, err)
 			go func() {
 				require.NoError(t, srv.Run(ctx))
@@ -67,7 +67,7 @@ func TestWorkflow(t *testing.T) {
 			id, err := workflowClient.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{
 				InstanceID: uuid.NewString(),
 			}, workflowFunc, &WriteObjInput{
-				RequestInfo: &request.RequestInfo{},
+				RequestInfo: &request.RequestInfo{Verb: "create"},
 				UserInfo:    &user.DefaultInfo{Name: "janedoe"},
 				ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
 				Rels: []*v1.Relationship{{
