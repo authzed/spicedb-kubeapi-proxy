@@ -113,7 +113,33 @@ func (o *Options) Complete(ctx context.Context) error {
 		case true:
 			o.RestConfigFunc = func() (*rest.Config, *http.Transport, error) {
 				conf, err := rest.InClusterConfig()
-				return conf, nil, err
+				if err != nil {
+					return nil, nil, err
+				}
+				fmt.Printf("%v+", conf)
+				transport := http.DefaultTransport.(*http.Transport).Clone()
+				caCertPool := x509.NewCertPool()
+				caBytes, err := os.ReadFile(conf.TLSClientConfig.CAFile)
+				if err != nil {
+					return nil, nil, fmt.Errorf("failed to read Kube API CA Certificate file at %s: %w", conf.TLSClientConfig.CAFile, err)
+				}
+				caCertPool.AppendCertsFromPEM(caBytes)
+
+				var certs []tls.Certificate
+				if len(conf.TLSClientConfig.CertData) > 0 && len(conf.TLSClientConfig.KeyData) > 0 {
+					cert, err := tls.X509KeyPair(conf.TLSClientConfig.CertData, conf.TLSClientConfig.KeyData)
+					if err != nil {
+						return nil, nil, fmt.Errorf("failed to create keypair used to communicate with the ambient Kube API: %w", err)
+					}
+
+					certs = append(certs, cert)
+				}
+
+				transport.TLSClientConfig = &tls.Config{
+					RootCAs:      caCertPool,
+					Certificates: certs,
+				}
+				return conf, transport, err
 			}
 
 			klog.FromContext(ctx).Info("running in-cluster, loaded ambient kube config")
@@ -279,8 +305,8 @@ func (o *Options) configFromPath() (*clientcmdapi.Config, error) {
 func (o *Options) Validate() []error {
 	var errs []error
 
-	if len(o.BackendKubeconfigPath) == 0 {
-		errs = append(errs, fmt.Errorf("--backend-kubeconfig is required"))
+	if len(o.BackendKubeconfigPath) == 0 && !o.UseInClusterConfig {
+		errs = append(errs, fmt.Errorf("either --backend-kubeconfig or --use-in-cluster-config must be specified"))
 	}
 
 	if len(o.RuleConfigFile) == 0 {

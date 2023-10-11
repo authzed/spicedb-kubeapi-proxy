@@ -43,6 +43,7 @@ func TestInClusterConfig(t *testing.T) {
 
 	opts := optionsForTesting(t)
 	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts.BackendKubeconfigPath = ""
 	opts.UseInClusterConfig = true
 	require.Empty(t, opts.Validate())
 	err := opts.Complete(context.Background())
