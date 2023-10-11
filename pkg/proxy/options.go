@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -197,11 +198,18 @@ func (o *Options) Complete(ctx context.Context) error {
 			WithValues("spicedb-ca-path", o.spicedbCAPath).
 			Info("using remote SpiceDB")
 		var opts []grpc.DialOption
+
+		tokens := strings.Split(o.token, ",")
+		if len(tokens) == 0 {
+			return fmt.Errorf("no SpiceDB token defined")
+		}
+
+		token := strings.TrimSpace(tokens[0])
 		if o.insecure {
 			opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-			opts = append(opts, grpcutil.WithInsecureBearerToken(o.token))
+			opts = append(opts, grpcutil.WithInsecureBearerToken(token))
 		} else {
-			opts = append(opts, grpcutil.WithBearerToken(o.token))
+			opts = append(opts, grpcutil.WithBearerToken(token))
 			verification := grpcutil.VerifyCA
 			if o.skipVerifyCA {
 				verification = grpcutil.SkipVerifyCA
