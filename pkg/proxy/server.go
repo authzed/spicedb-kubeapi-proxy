@@ -186,9 +186,13 @@ func withAuthentication(handler, failed http.Handler, auth authenticator.Request
 				logger := klog.FromContext(req.Context())
 				logger.Error(err, "Unable to authenticate the request")
 			}
+
+			klog.V(3).InfoS("unable to authenticate client", "method", req.Method, "url", req.URL)
 			failed.ServeHTTP(w, req)
 			return
 		}
+
+		klog.V(4).InfoS("request client authenticated", "user", resp.User)
 		req = req.WithContext(request.WithUser(req.Context(), resp.User))
 		handler.ServeHTTP(w, req)
 	})
