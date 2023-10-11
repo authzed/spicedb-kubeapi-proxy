@@ -47,7 +47,7 @@ type Options struct {
 	Logs           *logs.Options
 
 	BackendKubeconfigPath string
-	RestConfigFunc        func() (*rest.Config, *http.Transport, error)
+	RestConfigFunc        func() (*rest.Config, http.RoundTripper, error)
 	OverrideUpstream      bool
 	UseInClusterConfig    bool
 	RuleConfigFile        string
@@ -111,34 +111,17 @@ func (o *Options) Complete(ctx context.Context) error {
 	if o.RestConfigFunc == nil {
 		switch o.UseInClusterConfig {
 		case true:
-			o.RestConfigFunc = func() (*rest.Config, *http.Transport, error) {
+			o.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
 				conf, err := rest.InClusterConfig()
 				if err != nil {
 					return nil, nil, err
 				}
-				fmt.Printf("%v+", conf)
-				transport := http.DefaultTransport.(*http.Transport).Clone()
-				caCertPool := x509.NewCertPool()
-				caBytes, err := os.ReadFile(conf.TLSClientConfig.CAFile)
+
+				transport, err := rest.TransportFor(conf)
 				if err != nil {
-					return nil, nil, fmt.Errorf("failed to read Kube API CA Certificate file at %s: %w", conf.TLSClientConfig.CAFile, err)
-				}
-				caCertPool.AppendCertsFromPEM(caBytes)
-
-				var certs []tls.Certificate
-				if len(conf.TLSClientConfig.CertData) > 0 && len(conf.TLSClientConfig.KeyData) > 0 {
-					cert, err := tls.X509KeyPair(conf.TLSClientConfig.CertData, conf.TLSClientConfig.KeyData)
-					if err != nil {
-						return nil, nil, fmt.Errorf("failed to create keypair used to communicate with the ambient Kube API: %w", err)
-					}
-
-					certs = append(certs, cert)
+					return nil, nil, fmt.Errorf("failed to build transport for in-cluster config: %w", err)
 				}
 
-				transport.TLSClientConfig = &tls.Config{
-					RootCAs:      caCertPool,
-					Certificates: certs,
-				}
 				return conf, transport, err
 			}
 
@@ -149,7 +132,7 @@ func (o *Options) Complete(ctx context.Context) error {
 				return fmt.Errorf("couldn't load kubeconfig from path: %w", err)
 			}
 
-			o.RestConfigFunc = func() (*rest.Config, *http.Transport, error) {
+			o.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
 				conf, err := clientcmd.NewDefaultClientConfig(*backendConfig, nil).ClientConfig()
 				if err != nil {
 					return nil, nil, err

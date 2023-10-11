@@ -118,7 +118,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	clientCA = GenerateClientCA(port)
 
 	opts := proxy.NewOptions()
-	opts.RestConfigFunc = func() (*rest.Config, *http.Transport, error) {
+	opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
 		conf, err := clientcmd.NewDefaultClientConfig(*backendCfg, nil).ClientConfig()
 		if err != nil {
 			return nil, nil, err
