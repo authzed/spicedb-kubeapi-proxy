@@ -67,6 +67,7 @@ type Options struct {
 	skipVerifyCA      bool
 	token             string
 	spicedbCAPath     string
+	inputExtractor    rules.ResolveInputExtractor
 
 	WorkflowDatabasePath string
 	LockMode             string
@@ -163,6 +164,9 @@ func (o *Options) Complete(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("couldn't compile rule configs: %w", err)
 		}
+	}
+	if o.inputExtractor == nil {
+		o.inputExtractor = rules.ResolveInputExtractorFunc(rules.NewResolveInputFromHttp)
 	}
 
 	if !filepath.IsAbs(o.SecureServing.ServerCert.CertDirectory) {

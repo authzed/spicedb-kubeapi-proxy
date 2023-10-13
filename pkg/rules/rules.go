@@ -38,6 +38,13 @@ type Matcher interface {
 	Match(match *request.RequestInfo) []*RunnableRule
 }
 
+// MatcherFunc is a function type that implements Matcher
+type MatcherFunc func(match *request.RequestInfo) []*RunnableRule
+
+func (f MatcherFunc) Match(match *request.RequestInfo) []*RunnableRule {
+	return f(match)
+}
+
 // MapMatcher stores rules in a map keyed on GVR and Verb
 type MapMatcher map[RequestMeta][]*RunnableRule
 
@@ -62,7 +69,7 @@ func NewMapMatcher(configRules []proxyrule.Config) (MapMatcher, error) {
 				}
 				rules, err := Compile(r)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("couldn't compile rule %s: %w", r.String(), err)
 				}
 				matchingRules[meta] = append(matchingRules[meta], rules)
 			}
@@ -106,6 +113,17 @@ type RelExpr struct {
 // It has the same structure as string templates in UncompiledRelExpr, but
 // with resolved values.
 type ResolvedRel UncompiledRelExpr
+
+type ResolveInputExtractor interface {
+	ExtractFromHttp(req *http.Request) (*ResolveInput, error)
+}
+
+// ResolveInputExtractorFunc is a function type that implements Matcher
+type ResolveInputExtractorFunc func(req *http.Request) (*ResolveInput, error)
+
+func (f ResolveInputExtractorFunc) ExtractFromHttp(req *http.Request) (*ResolveInput, error) {
+	return f(req)
+}
 
 // ResolveInput is the data fed into RelExpr to be evaluated.
 type ResolveInput struct {
