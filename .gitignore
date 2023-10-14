@@ -3,6 +3,7 @@
 /**/apiserver.local.config/
 client-ca.crt
 client-cert.crt
+client-key.crt
 *__failpoint_*.go
 *.go__failpoint*
 *.sqlite

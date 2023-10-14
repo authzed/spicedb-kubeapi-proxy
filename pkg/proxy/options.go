@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -46,7 +47,7 @@ type Options struct {
 	Logs           *logs.Options
 
 	BackendKubeconfigPath string
-	RestConfigFunc        func() (*rest.Config, *http.Transport, error)
+	RestConfigFunc        func() (*rest.Config, http.RoundTripper, error)
 	OverrideUpstream      bool
 	UseInClusterConfig    bool
 	RuleConfigFile        string
@@ -110,9 +111,18 @@ func (o *Options) Complete(ctx context.Context) error {
 	if o.RestConfigFunc == nil {
 		switch o.UseInClusterConfig {
 		case true:
-			o.RestConfigFunc = func() (*rest.Config, *http.Transport, error) {
+			o.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
 				conf, err := rest.InClusterConfig()
-				return conf, nil, err
+				if err != nil {
+					return nil, nil, err
+				}
+
+				transport, err := rest.TransportFor(conf)
+				if err != nil {
+					return nil, nil, fmt.Errorf("failed to build transport for in-cluster config: %w", err)
+				}
+
+				return conf, transport, err
 			}
 
 			klog.FromContext(ctx).Info("running in-cluster, loaded ambient kube config")
@@ -122,7 +132,7 @@ func (o *Options) Complete(ctx context.Context) error {
 				return fmt.Errorf("couldn't load kubeconfig from path: %w", err)
 			}
 
-			o.RestConfigFunc = func() (*rest.Config, *http.Transport, error) {
+			o.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
 				conf, err := clientcmd.NewDefaultClientConfig(*backendConfig, nil).ClientConfig()
 				if err != nil {
 					return nil, nil, err
@@ -197,11 +207,18 @@ func (o *Options) Complete(ctx context.Context) error {
 			WithValues("spicedb-ca-path", o.spicedbCAPath).
 			Info("using remote SpiceDB")
 		var opts []grpc.DialOption
+
+		tokens := strings.Split(o.token, ",")
+		if len(tokens) == 0 {
+			return fmt.Errorf("no SpiceDB token defined")
+		}
+
+		token := strings.TrimSpace(tokens[0])
 		if o.insecure {
 			opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-			opts = append(opts, grpcutil.WithInsecureBearerToken(o.token))
+			opts = append(opts, grpcutil.WithInsecureBearerToken(token))
 		} else {
-			opts = append(opts, grpcutil.WithBearerToken(o.token))
+			opts = append(opts, grpcutil.WithBearerToken(token))
 			verification := grpcutil.VerifyCA
 			if o.skipVerifyCA {
 				verification = grpcutil.SkipVerifyCA
@@ -271,8 +288,8 @@ func (o *Options) configFromPath() (*clientcmdapi.Config, error) {
 func (o *Options) Validate() []error {
 	var errs []error
 
-	if len(o.BackendKubeconfigPath) == 0 {
-		errs = append(errs, fmt.Errorf("--backend-kubeconfig is required"))
+	if len(o.BackendKubeconfigPath) == 0 && !o.UseInClusterConfig {
+		errs = append(errs, fmt.Errorf("either --backend-kubeconfig or --use-in-cluster-config must be specified"))
 	}
 
 	if len(o.RuleConfigFile) == 0 {

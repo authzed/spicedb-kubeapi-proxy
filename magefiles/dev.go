@@ -151,6 +151,11 @@ func generateDevKubeconfig(ctx context.Context, proxyHost string) error {
 		return err
 	}
 
+	keyPath := path.Join(wd, "client-key.crt")
+	if err := os.WriteFile(keyPath, clientKeyBytes, 0o600); err != nil {
+		fmt.Printf("unable to cache proxy client key in host machine: %s\n", err.Error())
+	}
+
 	developmentKubeConfig := clientcmdapi.NewConfig()
 	proxyCluster := clientcmdapi.NewCluster()
 	proxyCluster.CertificateAuthorityData = serverCACertBytes
