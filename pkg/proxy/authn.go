@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/pflag"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
-	"k8s.io/apiserver/pkg/authentication/user"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	kubeoptions "k8s.io/kubernetes/pkg/kubeapiserver/options"
 )
@@ -56,6 +55,11 @@ func (c *Authentication) ApplyTo(authenticationInfo *genericapiserver.Authentica
 			return fmt.Errorf("unable to load client CA file: %w", err)
 		}
 	}
+	if authenticatorConfig.RequestHeaderConfig != nil {
+		if err = authenticationInfo.ApplyClientCert(authenticatorConfig.RequestHeaderConfig.CAContentProvider, servingInfo); err != nil {
+			return fmt.Errorf("unable to load requestheader CA file: %w", err)
+		}
+	}
 
 	// TODO: ServiceAccounts
 
@@ -69,13 +73,6 @@ func (c *Authentication) ApplyTo(authenticationInfo *genericapiserver.Authentica
 		if resp == nil || resp.User == nil {
 			return resp, ok, err
 		}
-
-		info := user.DefaultInfo{
-			Name:  resp.User.GetName(),
-			UID:   resp.User.GetUID(),
-			Extra: resp.User.GetExtra(),
-		}
-		resp.User = &info
 		return resp, ok, err
 	})
 

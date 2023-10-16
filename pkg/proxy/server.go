@@ -121,7 +121,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	s.WorkflowWorker = worker
 
 	s.Matcher = &s.opts.Matcher
-	handler, err := authz.WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher)
+	handler, err := authz.WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher, s.opts.inputExtractor)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
 	}
