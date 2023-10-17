@@ -1,0 +1,43 @@
+{
+  "configurations": [
+    {
+      "name": "Launch",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/spicedb-kubeapi-proxy/main.go",
+      "args": [
+        "-v",
+        "4",
+        "--bind-address",
+        "127.0.0.1",
+        "--secure-port",
+        "8443",
+        "--backend-kubeconfig",
+        "${workspaceFolder}/spicedb-kubeapi-proxy.kubeconfig",
+        "--override-upstream",
+        "false",
+        "--client-ca-file",
+        "${workspaceFolder}/client-ca.crt",
+        "--requestheader-client-ca-file",
+        "${workspaceFolder}/client-ca.crt",
+        "--requestheader-allowed-names",
+        "rakis",
+        "--requestheader-extra-headers-prefix",
+        "X-Remote-Extra-",
+        "--requestheader-group-headers",
+        "X-Remote-Group",
+        "--requestheader-username-headers",
+        "X-Remote-User",
+        "--spicedb-endpoint",
+        "localhost:50051",
+        "--spicedb-token",
+        "ipsdispatchonlykey",
+        "--spicedb-skip-verify-ca",
+        "true",
+        "--rule-config",
+        "${workspaceFolder}/rule-config.yaml"
+      ],
+    }
+  ]
+}

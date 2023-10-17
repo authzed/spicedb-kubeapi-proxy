@@ -1,0 +1,38 @@
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+  - apiVersion: authzed.com/v1alpha1
+    resource: permissionsystems
+    verbs: ["list", "watch"]
+check:
+  - tpl: "org:{{namespace}}#audit_ps@principal:{{user.Name}}"
+prefilter:
+  - name: "resourceId"
+    byResource:
+      tpl: "psystem:*#view_ps@org:{{namespace}}"
+---
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+  - apiVersion: authzed.com/v1alpha1
+    resource: regions
+    verbs: ["list"]
+check:
+  - tpl: "org:{{namespace}}#audit_ps@principal:{{user.Name}}"
+prefilter:
+  - name: "resourceId"
+    namespace: "namespace"
+    byResource:
+      tpl: "region:*#view@org:{{namespace}}"
+---
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+  - apiVersion: v1
+    resource: configmaps
+    verbs: ["get"]
+check:
+  - tpl: "org:{{namespace}}#audit_ps@principal:{{user.Name}}"
