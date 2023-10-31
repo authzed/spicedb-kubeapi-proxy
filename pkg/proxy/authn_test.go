@@ -136,7 +136,9 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 	opts.SecureServing.BindPort = port
 	opts.Authentication.BuiltInOptions.RequestHeader = headerOpts
 	opts.Matcher = rules.MatcherFunc(func(match *request.RequestInfo) []*rules.RunnableRule {
-		return nil
+		return []*rules.RunnableRule{{
+			Checks: []*rules.RelExpr{},
+		}}
 	})
 
 	var info user.Info

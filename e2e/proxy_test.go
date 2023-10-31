@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/storage/names"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -525,6 +526,15 @@ var _ = Describe("Proxy", func() {
 				lockMode = proxyrule.PessimisticLockMode
 			})
 			AssertDualWriteBehavior()
+		})
+
+		When("no rules match the request", func() {
+			It("returns unauthenticated error", func(ctx context.Context) {
+				*proxySrv.Matcher = rules.MatcherFunc(func(match *request.RequestInfo) []*rules.RunnableRule {
+					return nil
+				})
+				Expect(GetNamespace(ctx, paulClient, paulNamespace)).NotTo(Succeed())
+			})
 		})
 	})
 })

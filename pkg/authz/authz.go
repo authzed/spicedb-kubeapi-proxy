@@ -2,8 +2,10 @@ package authz
 
 import (
 	"context"
-	"k8s.io/klog/v2"
+	"fmt"
 	"net/http"
+
+	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/client"
@@ -39,6 +41,8 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				"APIGroup", input.Request.APIGroup,
 				"APIVersion", input.Request.APIVersion,
 				"Resource", input.Request.Resource)
+			handleError(w, failed, req, fmt.Errorf("request did not match any authorization rule"))
+			return
 		} else {
 			klog.V(3).InfoSDepth(1,
 				"request matched authorization rule/s",
