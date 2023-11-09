@@ -18,6 +18,7 @@ import (
 func write(ctx context.Context, w http.ResponseWriter, r *rules.RunnableRule, input *rules.ResolveInput, workflowClient *client.Client) error {
 	writeRels := make([]*v1.Relationship, 0, len(r.Writes))
 	for _, write := range r.Writes {
+		write := write
 		rel, err := rules.ResolveRel(write, input)
 		if err != nil {
 			return fmt.Errorf("unable to resolve write rule (%v): %w", rel, err)

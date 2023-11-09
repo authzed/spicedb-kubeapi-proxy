@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/kyverno/go-jmespath"
 	"io"
+
+	"github.com/kyverno/go-jmespath"
 	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -20,6 +21,7 @@ import (
 func filterResponse(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, authzData *AuthzData, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient) error {
 	for _, r := range matchingRules {
 		for _, f := range r.PreFilter {
+			f := f
 			rel, err := rules.ResolveRel(f.Rel, input)
 			if err != nil {
 				return err
