@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -20,6 +21,7 @@ func runAllMatchingChecks(ctx context.Context, matchingRules []*rules.RunnableRu
 	// issue checks for all matching rules
 	for _, r := range matchingRules {
 		for _, c := range r.Checks {
+			c := c
 			checkGroup.Go(func() error {
 				rel, err := rules.ResolveRel(c, input)
 				if err != nil {
