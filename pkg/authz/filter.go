@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/kyverno/go-jmespath"
 	"k8s.io/klog/v2"
@@ -49,16 +50,19 @@ func filterResponse(ctx context.Context, matchingRules []*rules.RunnableRule, in
 	return nil
 }
 
-func authorizeGet(input *rules.ResolveInput, authzData *AuthzData) {
-	if input.Request.Verb != "get" {
+// alreadyAuthorized adds the input object to the authorized list.
+// This is used for requests where the `check` on the rule is expected to authorize
+// a single object for filtering, i.e. for `get`, `update`, or `patch`
+// (where update/patch don't create the object).
+func alreadyAuthorized(input *rules.ResolveInput, authzData *AuthzData) {
+	if !slices.Contains([]string{"get", "update", "patch"}, input.Request.Verb) {
 		return
 	}
 	close(authzData.allowedNNC)
 	close(authzData.removedNNC)
 	authzData.Lock()
 	defer authzData.Unlock()
-	// gets aren't really filtered, but we add them to the allowed list so that
-	// downstream can know it's passed all configured checks.
+
 	authzData.allowedNN[types.NamespacedName{Name: input.Name, Namespace: input.Namespace}] = struct{}{}
 }
 

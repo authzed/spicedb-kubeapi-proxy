@@ -51,6 +51,7 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				"APIVersion", input.Request.APIVersion,
 				"Resource", input.Request.Resource)
 		}
+
 		// run all checks for this request
 		if err := runAllMatchingChecks(ctx, matchingRules, input, permissionsClient); err != nil {
 			handleError(w, failed, req, err)
@@ -72,7 +73,7 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 			removedNNC: make(chan types.NamespacedName),
 			allowedNN:  map[types.NamespacedName]struct{}{},
 		}
-		authorizeGet(input, authzData)
+		alreadyAuthorized(input, authzData)
 		if err := filterResponse(ctx, matchingRules, input, authzData, permissionsClient, watchClient); err != nil {
 			failed.ServeHTTP(w, req)
 			return
