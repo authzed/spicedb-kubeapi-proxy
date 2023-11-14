@@ -114,11 +114,13 @@ type RelExpr struct {
 // with resolved values.
 type ResolvedRel UncompiledRelExpr
 
+// ResolveInputExtractor defines how ResolveInput are extracted from requests.
+// This interface exists so that tests can easily fake the request data.
 type ResolveInputExtractor interface {
 	ExtractFromHttp(req *http.Request) (*ResolveInput, error)
 }
 
-// ResolveInputExtractorFunc is a function type that implements Matcher
+// ResolveInputExtractorFunc is a function type that implements ResolveInputExtractor
 type ResolveInputExtractorFunc func(req *http.Request) (*ResolveInput, error)
 
 func (f ResolveInputExtractorFunc) ExtractFromHttp(req *http.Request) (*ResolveInput, error) {
@@ -163,6 +165,8 @@ func NewResolveInputFromHttp(req *http.Request) (*ResolveInput, error) {
 			return nil, fmt.Errorf("unable to decode request body as kube object: %w", err)
 		}
 		object = &pom
+
+		req.Body = io.NopCloser(bytes.NewReader(body))
 	}
 	return NewResolveInput(requestInfo, userInfo.(*user.DefaultInfo), object, body, req.Header.Clone()), nil
 }

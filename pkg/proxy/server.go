@@ -120,6 +120,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	}
 	s.WorkflowWorker = worker
 
+	// Matcher is a pointer to an interface to make it easy to swap at runtime in tests
 	s.Matcher = &s.opts.Matcher
 	handler, err := authz.WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher, s.opts.inputExtractor)
 	if err != nil {

@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -15,10 +16,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/storage/names"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/utils/pointer"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz/distributedtx"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
@@ -136,6 +139,41 @@ var _ = Describe("Proxy", func() {
 			_, err := client.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
 			return err
 		}
+		GetAndUpdatePodLabels := func(ctx context.Context, client kubernetes.Interface, namespace, name string, labels map[string]string) error {
+			pod, err := client.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			pod.Labels = labels
+			_, err = client.CoreV1().Pods(namespace).Update(ctx, pod, metav1.UpdateOptions{})
+			return err
+		}
+		PatchPodLabels := func(ctx context.Context, client kubernetes.Interface, namespace, name string, labels map[string]string) error {
+			patch := &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pod",
+					APIVersion: "v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name,
+					Namespace: namespace,
+					Labels:    labels,
+				},
+			}
+			data, err := json.Marshal(patch)
+			if err != nil {
+				return err
+			}
+			_, err = client.CoreV1().Pods(namespace).Patch(ctx, name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: "Test", Force: pointer.Bool(true)})
+			return err
+		}
+		ListPods := func(ctx context.Context, client kubernetes.Interface, namespace string) []string {
+			visibleNamespaces, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			return lo.Map(visibleNamespaces.Items, func(item corev1.Pod, index int) string {
+				return item.Name
+			})
+		}
 		WatchPods := func(ctx context.Context, client kubernetes.Interface, namespace string, expected int, timeout time.Duration) []string {
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
@@ -167,6 +205,43 @@ var _ = Describe("Proxy", func() {
 		})
 
 		AssertDualWriteBehavior := func() {
+
+			It("supports rules for every verb", func(ctx context.Context) {
+				// watch
+				var wg sync.WaitGroup
+				defer wg.Wait()
+				wg.Add(1)
+				go func() {
+					defer GinkgoRecover()
+					Expect(WatchPods(ctx, paulClient, paulNamespace, 1, 10*time.Second)).To(ContainElement(paulPod))
+					wg.Done()
+				}()
+
+				// create
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+				Expect(CreatePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+
+				// get
+				Expect(GetPod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+				Expect(GetPod(ctx, chaniClient, paulNamespace, paulPod)).To(Not(Succeed()))
+
+				// update
+				Expect(GetAndUpdatePodLabels(ctx, paulClient, paulNamespace, paulPod, map[string]string{"a": "label"})).To(Succeed())
+				Expect(GetAndUpdatePodLabels(ctx, chaniClient, paulNamespace, paulPod, map[string]string{"a": "label"})).To(Not(Succeed()))
+
+				// patch
+				Expect(PatchPodLabels(ctx, paulClient, paulNamespace, paulPod, map[string]string{"b": "label"})).To(Succeed())
+				Expect(PatchPodLabels(ctx, chaniClient, paulNamespace, paulPod, map[string]string{"b": "label"})).To(Not(Succeed()))
+
+				// list
+				Expect(ListPods(ctx, paulClient, paulNamespace)).To(Equal([]string{paulPod}))
+				Expect(ListPods(ctx, chaniClient, paulNamespace)).To(Equal([]string{}))
+
+				// delete
+				Expect(DeletePod(ctx, chaniClient, paulNamespace, paulPod)).To(Not(Succeed()))
+				Expect(DeletePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+			})
+
 			It("doesn't show users namespaces the other has created", func(ctx context.Context) {
 				var wg sync.WaitGroup
 				defer wg.Wait()
@@ -623,6 +698,9 @@ var (
 				Resource:     "pods",
 				Verbs:        []string{"delete"},
 			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "pod:{{namespacedName}}#edit@user:{{user.Name}}",
+			}},
 			Writes: []proxyrule.StringOrTemplate{{
 				Template: "pod:{{namespacedName}}#creator@user:{{user.Name}}",
 			}, {
@@ -640,6 +718,19 @@ var (
 			}},
 			Checks: []proxyrule.StringOrTemplate{{
 				Template: "pod:{{namespacedName}}#view@user:{{user.Name}}",
+			}},
+		},
+	}
+
+	updatePod = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "pods",
+				Verbs:        []string{"update", "patch"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "pod:{{namespacedName}}#edit@user:{{user.Name}}",
 			}},
 		},
 	}
@@ -669,6 +760,7 @@ func testOptimisticMatcher() rules.MapMatcher {
 		createPod(),
 		deletePod(),
 		getPod,
+		updatePod,
 		listWatchPod,
 	})
 	Expect(err).To(Succeed())
@@ -701,6 +793,7 @@ func testPessimisticMatcher() rules.MapMatcher {
 		pessimisticCreatePod,
 		pessimisticDeletePod,
 		getPod,
+		updatePod,
 		listWatchPod,
 	})
 	Expect(err).To(Succeed())
