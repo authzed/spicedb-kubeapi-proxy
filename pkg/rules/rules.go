@@ -8,7 +8,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/kyverno/go-jmespath"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -137,6 +139,8 @@ type ResolveInput struct {
 	Object         *metav1.PartialObjectMetadata `json:"object"`
 	Body           []byte                        `json:"body"`
 	Headers        http.Header                   `json:"headers"`
+	Consistency    *v1.Consistency               `json:"consistency"`
+	WatchDelay     time.Duration                 `json:"watchDelay"`
 }
 
 func NewResolveInputFromHttp(req *http.Request) (*ResolveInput, error) {
@@ -209,6 +213,8 @@ func NewResolveInput(req *request.RequestInfo, user *user.DefaultInfo, object *m
 		Object:         object,
 		Body:           body,
 		Headers:        headers,
+		Consistency:    ConsistencyFromHeaders(headers),
+		WatchDelay:     WatchDelayFromHeaders(headers),
 	}
 }
 
