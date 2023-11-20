@@ -29,7 +29,7 @@ func runAllMatchingChecks(ctx context.Context, matchingRules []*rules.RunnableRu
 				}
 				req := &v1.CheckPermissionRequest{
 					Consistency: &v1.Consistency{
-						Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
+						Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
 					},
 					Resource: &v1.ObjectReference{
 						ObjectType: rel.ResourceType,

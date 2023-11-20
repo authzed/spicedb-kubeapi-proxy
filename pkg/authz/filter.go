@@ -80,7 +80,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 
 		req := &v1.LookupResourcesRequest{
 			Consistency: &v1.Consistency{
-				Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
+				Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
 			},
 			ResourceObjectType: filter.Rel.ResourceType,
 			Permission:         filter.Rel.ResourceRelation,
