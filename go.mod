@@ -9,7 +9,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/cschleiden/go-workflows v0.16.3-0.20230928210702-d72004e1fdf2
 	github.com/dustin/go-humanize v1.0.1
-	github.com/google/uuid v1.5.0
+	github.com/google/uuid v1.6.0
 	github.com/kyverno/go-jmespath v0.4.1-0.20230705123211-d067dc3d6613
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/pflag v1.0.6-0.20210604193023-d5e0c0615ace
