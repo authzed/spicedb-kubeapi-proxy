@@ -1,7 +1,65 @@
 # spicedb-kubeapi-proxy
 
-Runs a proxy in front of kube-apiserver that can authorize requests and filter
-responses using an embedded or remote SpiceDB.
+`spicedb-kubeapi-proxy` is a proxy that runs in between clients and the kube 
+apiserver that can authorize requests and filter responses using an embedded or 
+remote SpiceDB.
+
+## Status
+
+The [issues](https://github.com/authzed/spicedb-kubeapi-proxy/issues) track
+the current state of the project, but the primary goals before 1.0 are:
+
+- Stabilizing the API for configuring proxy rules
+- Gaining operational experience and proving the system in production
+
+## Features
+
+- 🚀 Authorize any request to the Kubernetes cluster based on data in SpiceDB
+- ✨ Filter responses (including lists) from the kubernetes cluster based on data in SpiceDB
+- 🌶️ Write to both SpiceDB and Kubernetes in a single transaction (durably)
+- 🪩 Use different user authentication in the proxy than you do in the base cluster
+- 🎉 No syncing between SpiceDB and Kubernetes is required
+- 🔒 Does not require admin permissions in the base cluster
+- 📦 Run the proxy in-cluster or out-of-cluster
+- 📡 Use an embedded SpiceDB or a remote SpiceDB
+- 📜 Configure with a variety of different rules to control access to the cluster
+- 📊 Metrics and tracing support
+
+## Architecture
+
+![Arch Diagram Dark](./docs/proxy-arch-dark.png#gh-dark-mode-only)![Arch Diagram Light](./docs/proxy-arch-light.png#gh-light-mode-only)
+
+The proxy authenticates itself with the downstream kube-apiserver (client certs
+if running out-of-cluster, service account token if running in-cluster). 
+The proxy is configured with a set of rules that define how to authorize requests
+and how to filter responses by communicating with SpiceDB.
+
+There are three basic types of rule:
+
+- **Check** rules: these are used to authorize whether a request is allowed to 
+  proceed at all. For example, a rule might say that a user can only list pods
+  in a namespace `foo` if they have a `namespace:foo#list@user:alice` permission
+  in SpiceDB.
+- **Filter** rules: these are used to filter the response from the kube-apiserver
+  based on the data in SpiceDB. For example, a rule might say that a user can
+  only see the pods in namespace `foo` if there are corresponding relationships
+  in SpiceDB that enumerate the allowed pods, like `pod:foo/a#view@user:alice`
+  and `pod:foo/b#view@user:alice`. In this example, `alice` would see pods `a`
+  and `b` in namespace `foo`, but no others.
+- **Write** rules: these are used to write data to SpiceDB based on the request
+  that the proxy is authorizing. For example, if `alice` creates a new pod `c` 
+  in namespace `foo`, a rule can determine that a relationship should be written 
+  to SpiceDB that grants ownership, i.e. `pod:foo/a#view@user:alice`.
+
+Rules often work in tendem; for example, a `Check` rule might authorize a request
+to list pods in a namespace, and a `Filter` rule might further restrict the
+response to only include certain pods.
+
+Note that the proxy does not assume anything about the structure of the data in
+SpiceDB. It is up to the user to define the data in SpiceDB and the rules that
+the proxy uses to authorize and filter requests. 
+
+The proxy rejects any request for which it doesn't find a matching rule. 
 
 # Development
 
