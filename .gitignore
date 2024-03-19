@@ -1,5 +1,7 @@
 *.kubeconfig
-/testbin/
+dist/
+testbin/
+release/
 /**/apiserver.local.config/
 client-ca.crt
 client-cert.crt
