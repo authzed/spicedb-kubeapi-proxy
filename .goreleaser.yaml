@@ -15,7 +15,7 @@ builds:
       - "-s -w"
       - "-X github.com/jzelinskie/cobrautil.Version={{ .Version }}"
 kos:
-  - repository: ghcr.io/autzhed/spicedb-kubeapi-proxy
+  - repository: ghcr.io/authzed/spicedb-kubeapi-proxy
     sbom: none
     tags:
       - 'v{{.Version}}'
