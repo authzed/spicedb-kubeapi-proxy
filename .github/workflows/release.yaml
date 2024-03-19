@@ -25,14 +25,16 @@ jobs:
       # the release directory is gitignored, which keeps goreleaser from
       # complaining about a dirty tree
       - name: "Copy manifests to release directory"
-        run: |
-          mkdir release
-          cp -R deploy release
-      - name: "Set operator image in release manifests"
+        run: mkdir release && cp -R deploy release
+      - name: "Set image in release manifests"
         uses: "mikefarah/yq@master"
         with:
           cmd: |
             yq eval '.images[0].newName="ghcr.io/${{github.repository_owner}}/${{github.event.repository.name}}"' -i ./release/deploy/kustomization.yaml
+      - name: "Set tag in release manifests"
+        uses: "mikefarah/yq@master"
+        with:
+          cmd: |
             yq eval '.images[0].newTag="${{ github.ref_name }}"' -i ./release/deploy/kustomization.yaml
       - name: "Build release bundle.yaml"
         uses: "karancode/kustomize-github-action@master"
