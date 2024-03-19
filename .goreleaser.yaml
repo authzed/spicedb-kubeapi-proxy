@@ -1,0 +1,73 @@
+---
+builds:
+  - main: "./cmd/spicedb-kubeapi-proxy"
+    env:
+      - "CGO_ENABLED=0"
+    goos:
+      - "linux"
+      - "windows"
+      - "darwin"
+    goarch:
+      - "amd64"
+      - "arm64"
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - "-s -w"
+      - "-X github.com/jzelinskie/cobrautil.Version={{ .Version }}"
+kos:
+  - repository: ghcr.io/autzhed/spicedb-kubeapi-proxy
+    tags:
+      - 'v{{.Version}}'
+      - latest
+    bare: true
+    preserve_import_paths: false
+    platforms:
+      - linux/amd64
+      - linux/arm64
+checksum:
+  name_template: "checksums.txt"
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+changelog:
+  use: "github-native"
+  sort: "asc"
+release:
+  prerelease: "auto"
+  extra_files:
+    - glob: "release/bundle.yaml"
+  footer: |
+    > [!NOTE]
+    > Deploy manifests are still in alpha and may change in the future.
+    > They install cert-manager manually and don't yet provide a simple
+    > way to get kubectl access to the proxy. We're working on it!
+    > Check out the scripts in `magefiles` to see the steps required to connect.
+    
+    ## Install with `kubectl`
+
+    ```yaml
+    kubectl apply --server-side -f https://github.com/authzed/spicedb-kubeapi-proxy/releases/download/v{{ .Version }}/bundle.yaml
+    ```
+
+    ## Include or modify this release in your own `kustomize` bundle
+
+    ```yaml
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+    resources:
+      - https://github.com/authzed/spicedb-kubeapi-proxy/deploy?ref=v{{ .Version }}
+    images:
+      - name: authzed/spicedb-kubeapi-proxy:dev
+        newName: ghcr.io/authzed/spicedb-kubeapi-proxy
+        newTag: v{{ .Version }}
+    ```
+
+    ## Install with `kustomizer`
+    release manifests can be found at `oci://ghcr.io/authzed/spicedb-kubeapi-proxy-manifests:v{{ .Version }}` and can be installed or inspected with [kustomizer](https://kustomizer.dev/):
+
+    ```sh
+    kustomizer apply inventory spicedb-kubeapi-proxy --artifact oci://ghcr.io/authzed/spicedb-kubeapi-proxy-manifests:v{{ .Version }}
+    ```
+
+    ## Docker Images
+    This release's image is available at:
+    - `ghcr.io/authzed/spicedb-kubeapi-proxy:v{{ .Version }}`
