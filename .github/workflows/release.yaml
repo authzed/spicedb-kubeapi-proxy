@@ -19,7 +19,9 @@ jobs:
       - uses: "authzed/actions/setup-go@main"
       - uses: "authzed/actions/docker-login@main"
         with:
+          quayio_token: "${{ secrets.QUAYIO_PASSWORD }}"
           github_token: "${{ secrets.GITHUB_TOKEN }}"
+          dockerhub_token: "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}"
       # the release directory is gitignored, which keeps goreleaser from
       # complaining about a dirty tree
       - name: "Copy manifests to release directory"
