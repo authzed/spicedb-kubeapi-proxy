@@ -20,7 +20,7 @@ require (
 	k8s.io/apiserver v0.28.7
 	k8s.io/client-go v0.28.7
 	k8s.io/component-base v0.28.7
-	k8s.io/klog/v2 v2.100.1
+	k8s.io/klog/v2 v2.120.1
 	k8s.io/kubernetes v1.28.7
 )
 
