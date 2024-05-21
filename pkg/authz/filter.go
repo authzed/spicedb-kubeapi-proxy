@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	"github.com/kyverno/go-jmespath"
 	"k8s.io/klog/v2"
@@ -79,9 +80,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 		defer close(authzData.removedNNC)
 
 		req := &v1.LookupResourcesRequest{
-			Consistency: &v1.Consistency{
-				Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
-			},
+			Consistency:        input.Consistency,
 			ResourceObjectType: filter.Rel.ResourceType,
 			Permission:         filter.Rel.ResourceRelation,
 			Subject: &v1.SubjectReference{
@@ -173,6 +172,10 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 		defer close(authzData.allowedNNC)
 		defer close(authzData.removedNNC)
 
+		logger := klog.LoggerWithValues(klog.FromContext(ctx), "request", "watch", "filter", filter).WithCallDepth(1)
+
+		logger.V(3).Info("started watch")
+
 		watchResource, err := watchClient.Watch(ctx, &v1.WatchRequest{
 			OptionalObjectTypes: []string{filter.Rel.ResourceType},
 		})
@@ -187,14 +190,18 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 			}
 
 			if err != nil {
-				fmt.Println(err)
+				logger.V(2).Error(err, "watch error")
 				return
 			}
+
+			time.Sleep(input.WatchDelay)
 
 			for _, u := range resp.Updates {
 				cr, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
 					Consistency: &v1.Consistency{
-						Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
+						Requirement: &v1.Consistency_AtLeastAsFresh{
+							AtLeastAsFresh: resp.ChangesThrough,
+						},
 					},
 					Resource: &v1.ObjectReference{
 						ObjectType: filter.Rel.ResourceType,
@@ -211,46 +218,45 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					},
 				})
 				if err != nil {
-					fmt.Println(err)
+					logger.V(2).Error(err, "check permission error")
 					return
 				}
 
 				byteIn, err := json.Marshal(wrapper{ResourceID: u.Relationship.Resource.ObjectId, SubjectID: u.Relationship.Subject.Object.ObjectId})
 				if err != nil {
-					fmt.Println(err)
+					logger.V(2).Error(err, "marshal error")
 					return
 				}
 				var data any
 				if err := json.Unmarshal(byteIn, &data); err != nil {
-					fmt.Println(err)
+					logger.V(2).Error(err, "unmarshal error")
 					return
 				}
-				fmt.Println(data)
-				fmt.Println("RESPONSE", string(byteIn))
+
+				logger.V(5).Info("response", "data", data)
 
 				name, err := filter.Name.Search(data)
 				if err != nil {
-					fmt.Println(err)
+					klog.V(2).ErrorS(err, "error extracting name")
 					return
 				}
-				fmt.Println("GOT NAME", name)
 				if name == nil || len(name.(string)) == 0 {
 					return
 				}
 				namespace, err := filter.Namespace.Search(data)
 				if err != nil {
-					fmt.Println(err)
+					logger.V(2).Error(err, "namespace extract error")
 					return
 				}
-				fmt.Println("GOT NAMESPACE", namespace)
 				if namespace == nil {
 					namespace = ""
 				}
 				nn := types.NamespacedName{Name: name.(string), Namespace: namespace.(string)}
+				logger.V(4).Info("response object", "namespacedName", nn.String())
 
 				// TODO: this should really be over a single channel to prevent
 				//  races on add/remove
-				fmt.Println(u.Relationship.Resource.ObjectId, cr.Permissionship)
+				logger.V(4).Info("result", "object", u.Relationship.Resource.ObjectId, "permission", cr.Permissionship)
 				if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
 					authzData.allowedNNC <- nn
 				} else {
