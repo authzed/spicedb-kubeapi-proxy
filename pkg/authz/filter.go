@@ -177,9 +177,10 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 			OptionalObjectTypes: []string{filter.Rel.ResourceType},
 		})
 		if err != nil {
-			fmt.Println(err)
+			klog.V(3).ErrorS(err, "error on filterWatch")
 			return
 		}
+
 		for {
 			resp, err := watchResource.Recv()
 			if errors.Is(err, io.EOF) {
@@ -187,7 +188,7 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 			}
 
 			if err != nil {
-				fmt.Println(err)
+				klog.V(3).ErrorS(err, "error on watchResource.Recv")
 				return
 			}
 
@@ -211,7 +212,7 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					},
 				})
 				if err != nil {
-					fmt.Println(err)
+					klog.V(3).ErrorS(err, "error on CheckPermission")
 					return
 				}
 
@@ -225,32 +226,30 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					fmt.Println(err)
 					return
 				}
-				fmt.Println(data)
-				fmt.Println("RESPONSE", string(byteIn))
 
 				name, err := filter.Name.Search(data)
 				if err != nil {
-					fmt.Println(err)
+					klog.V(3).ErrorS(err, "error on filter.Name.Search")
 					return
 				}
-				fmt.Println("GOT NAME", name)
+
 				if name == nil || len(name.(string)) == 0 {
 					return
 				}
+
 				namespace, err := filter.Namespace.Search(data)
 				if err != nil {
-					fmt.Println(err)
+					klog.V(3).ErrorS(err, "error on filter.Namespace.Search")
 					return
 				}
-				fmt.Println("GOT NAMESPACE", namespace)
 				if namespace == nil {
 					namespace = ""
 				}
+
 				nn := types.NamespacedName{Name: name.(string), Namespace: namespace.(string)}
 
 				// TODO: this should really be over a single channel to prevent
 				//  races on add/remove
-				fmt.Println(u.Relationship.Resource.ObjectId, cr.Permissionship)
 				if cr.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
 					authzData.allowedNNC <- nn
 				} else {
