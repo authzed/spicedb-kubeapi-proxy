@@ -177,7 +177,7 @@ func TestCompile(t *testing.T) {
 
 	type result struct {
 		checks  []ResolvedRel
-		writes  []ResolvedRel
+		updates []ResolvedRel
 		filters []ResolvedPreFilter
 	}
 
@@ -227,7 +227,7 @@ func TestCompile(t *testing.T) {
 				Checks: []proxyrule.StringOrTemplate{{
 					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{request.user}}",
 				}},
-				Writes: []proxyrule.StringOrTemplate{{
+				Updates: []proxyrule.StringOrTemplate{{
 					Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
 				}, {
 					Template: "wardles:{{metadata.name}}#creator@user:{{request.user}}",
@@ -241,7 +241,7 @@ func TestCompile(t *testing.T) {
 					SubjectType:      "user",
 					SubjectID:        "testUser",
 				}},
-				writes: []ResolvedRel{{
+				updates: []ResolvedRel{{
 					ResourceType:     "wardles",
 					ResourceID:       "testName",
 					ResourceRelation: "org",
@@ -275,7 +275,7 @@ func TestCompile(t *testing.T) {
 						RelationshipTemplate: &proxyrule.RelationshipTemplate{
 							Resource: proxyrule.ObjectTemplate{
 								Type:     "wardles",
-								ID:       "*",
+								ID:       "$resourceID",
 								Relation: "view",
 							},
 							Subject: proxyrule.ObjectTemplate{
@@ -301,7 +301,7 @@ func TestCompile(t *testing.T) {
 					Namespace:  jmespath.MustCompile("''"),
 					Rel: &ResolvedRel{
 						ResourceType:     "wardles",
-						ResourceID:       "*",
+						ResourceID:       "$resourceID",
 						ResourceRelation: "view",
 						SubjectType:      "user",
 						SubjectID:        "testUser",
@@ -316,7 +316,7 @@ func TestCompile(t *testing.T) {
 			require.Equal(t, tt.wantErr, err)
 
 			requireEqualUnderTestData(got.Checks, tt.want.checks)
-			requireEqualUnderTestData(got.Writes, tt.want.writes)
+			requireEqualUnderTestData(got.Updates, tt.want.updates)
 			requireFilterEqualUnderTestData(t, got.PreFilter, tt.want.filters)
 		})
 	}
@@ -333,7 +333,7 @@ func TestMapMatcherMatch(t *testing.T) {
 		Checks: []proxyrule.StringOrTemplate{{
 			Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{request.user}}",
 		}},
-		Writes: []proxyrule.StringOrTemplate{{
+		Updates: []proxyrule.StringOrTemplate{{
 			Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
 		}, {
 			Template: "wardles:{{metadata.name}}#creator@user:{{request.user}}",
@@ -354,7 +354,7 @@ func TestMapMatcherMatch(t *testing.T) {
 				RelationshipTemplate: &proxyrule.RelationshipTemplate{
 					Resource: proxyrule.ObjectTemplate{
 						Type:     "wardles",
-						ID:       "*",
+						ID:       "$resourceID",
 						Relation: "view",
 					},
 					Subject: proxyrule.ObjectTemplate{
@@ -372,7 +372,7 @@ func TestMapMatcherMatch(t *testing.T) {
 		name        string
 		match       *request.RequestInfo
 		wantChecks  int
-		wantWrites  int
+		wantUpdates int
 		wantFilters int
 	}{
 		{
@@ -383,8 +383,8 @@ func TestMapMatcherMatch(t *testing.T) {
 				Resource:   "wardles",
 				Verb:       "create",
 			},
-			wantChecks: 1,
-			wantWrites: 2,
+			wantChecks:  1,
+			wantUpdates: 2,
 		},
 		{
 			name: "non-matching create request",
@@ -421,14 +421,14 @@ func TestMapMatcherMatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := m.Match(tt.match)
-			var totalCheck, totalWrite, totalFilter int
+			var totalCheck, totalUpdate, totalFilter int
 			for _, r := range got {
 				totalCheck += len(r.Checks)
-				totalWrite += len(r.Writes)
+				totalUpdate += len(r.Updates)
 				totalFilter += len(r.PreFilter)
 			}
 			require.Equal(t, tt.wantChecks, totalCheck)
-			require.Equal(t, tt.wantWrites, totalWrite)
+			require.Equal(t, tt.wantUpdates, totalUpdate)
 			require.Equal(t, tt.wantFilters, totalFilter)
 		})
 	}

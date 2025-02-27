@@ -623,7 +623,7 @@ var (
 				Resource:     "namespaces",
 				Verbs:        []string{"create"},
 			}},
-			Writes: []proxyrule.StringOrTemplate{{
+			Updates: []proxyrule.StringOrTemplate{{
 				Template: "namespace:{{name}}#creator@user:{{user.Name}}",
 			}, {
 				Template: "namespace:{{name}}#cluster@cluster:cluster",
@@ -639,7 +639,7 @@ var (
 				Resource:     "namespaces",
 				Verbs:        []string{"delete"},
 			}},
-			Writes: []proxyrule.StringOrTemplate{{
+			Updates: []proxyrule.StringOrTemplate{{
 				Template: "namespace:{{name}}#creator@user:{{user.Name}}",
 			}, {
 				Template: "namespace:{{name}}#cluster@cluster:cluster",
@@ -669,7 +669,7 @@ var (
 			}},
 			PreFilters: []proxyrule.PreFilter{{
 				Name:       "resourceId",
-				ByResource: &proxyrule.StringOrTemplate{Template: "namespace:*#view@user:{{user.Name}}"},
+				ByResource: &proxyrule.StringOrTemplate{Template: "namespace:$resourceID#view@user:{{user.Name}}"},
 			}},
 		},
 	}
@@ -682,7 +682,7 @@ var (
 				Resource:     "pods",
 				Verbs:        []string{"create"},
 			}},
-			Writes: []proxyrule.StringOrTemplate{{
+			Updates: []proxyrule.StringOrTemplate{{
 				Template: "pod:{{namespacedName}}#creator@user:{{user.Name}}",
 			}, {
 				Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
@@ -701,7 +701,7 @@ var (
 			Checks: []proxyrule.StringOrTemplate{{
 				Template: "pod:{{namespacedName}}#edit@user:{{user.Name}}",
 			}},
-			Writes: []proxyrule.StringOrTemplate{{
+			Updates: []proxyrule.StringOrTemplate{{
 				Template: "pod:{{namespacedName}}#creator@user:{{user.Name}}",
 			}, {
 				Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
@@ -745,7 +745,7 @@ var (
 			PreFilters: []proxyrule.PreFilter{{
 				Namespace:  "splitNamespace(resourceId)",
 				Name:       "splitName(resourceId)",
-				ByResource: &proxyrule.StringOrTemplate{Template: "pod:*#view@user:{{user.Name}}"},
+				ByResource: &proxyrule.StringOrTemplate{Template: "pod:$resourceID#view@user:{{user.Name}}"},
 			}},
 		},
 	}

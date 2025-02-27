@@ -7,7 +7,7 @@ match:
   verbs: ["create"]
 mustNot:
 - tpl: "namespace:{{name}}#cluster@cluster:cluster"
-write:
+update:
 - tpl: "namespace:{{name}}#creator@user:{{user.Name}}"
 - tpl: "namespace:{{name}}#cluster@cluster:cluster"
 ---
@@ -18,7 +18,7 @@ match:
 - apiVersion: v1
   resource: namespaces
   verbs: ["delete"]
-write:
+update:
 - tpl: "namespace:{{name}}#creator@user:{{user.Name}}"
 - tpl: "namespace:{{name}}#cluster@cluster:cluster"
 ---
@@ -40,7 +40,7 @@ match:
 prefilter:
 - name: "resourceId"
   byResource:
-    tpl: "namespace:*#view@user:{{user.Name}}"
+    tpl: "namespace:$resourceID#view@user:{{user.Name}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -51,7 +51,7 @@ match:
   verbs: ["create"]
 mustNot:
 - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
-write:
+update:
 - tpl: "pod:{{namespacedName}}#creator@user:{{user.Name}}"
 - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 ---
@@ -62,7 +62,7 @@ match:
 - apiVersion: v1
   resource: pods
   verbs: ["delete"]
-write:
+update:
 - tpl: "pod:{{namespacedName}}#creator@user:{{user.Name}}"
 - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 ---
@@ -85,4 +85,4 @@ prefilter:
 - namespace: "splitNamespace(resourceId)"
   name: "splitName(resourceId)"
   byResource:
-    tpl: "pod:*#view@user:{{user.Name}}"
+    tpl: "pod:$resourceID#view@user:{{user.Name}}"

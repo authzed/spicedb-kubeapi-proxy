@@ -113,7 +113,7 @@ func TestRuleConfig(t *testing.T) {
 	require.Len(t, rules, 1)
 	require.Len(t, rules[0].PreFilter, 1)
 	require.Len(t, rules[0].Checks, 0)
-	require.Len(t, rules[0].Writes, 0)
+	require.Len(t, rules[0].Updates, 0)
 
 	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 	errConfigBytes := []byte(`
@@ -127,7 +127,7 @@ match:
 prefilter:
 - name: .request.name
   byResource:
-    tpl: "org:*#audit-cluster@user:{{request.user}}"
+    tpl: "org:$resourceID#audit-cluster@user:{{request.user}}"
 `)
 	errConfigFile := path.Join(t.TempDir(), "rulesbad.yaml")
 	require.NoError(t, os.WriteFile(errConfigFile, errConfigBytes, 0o600))
@@ -224,7 +224,7 @@ match:
 prefilter:
 - name: request.name
   byResource:
-    tpl: "org:*#audit-cluster@user:{{request.user}}"
+    tpl: "org:$resourceID#audit-cluster@user:{{request.user}}"
 `)
 	configFile := path.Join(t.TempDir(), "rules.yaml")
 	require.NoError(t, os.WriteFile(configFile, configBytes, 0o600))

@@ -16,14 +16,14 @@ import (
 
 // write performs a dual write according to the passed rule
 func write(ctx context.Context, w http.ResponseWriter, r *rules.RunnableRule, input *rules.ResolveInput, workflowClient *client.Client) error {
-	writeRels := make([]*v1.Relationship, 0, len(r.Writes))
-	for _, write := range r.Writes {
+	updateRels := make([]*v1.Relationship, 0, len(r.Updates))
+	for _, write := range r.Updates {
 		write := write
 		rel, err := rules.ResolveRel(write, input)
 		if err != nil {
 			return fmt.Errorf("unable to resolve write rule (%v): %w", rel, err)
 		}
-		writeRels = append(writeRels, &v1.Relationship{
+		updateRels = append(updateRels, &v1.Relationship{
 			Resource: &v1.ObjectReference{
 				ObjectType: rel.ResourceType,
 				ObjectId:   rel.ResourceID,
@@ -59,7 +59,7 @@ func write(ctx context.Context, w http.ResponseWriter, r *rules.RunnableRule, in
 		preconditions = append(preconditions, p)
 	}
 
-	resp, err := dualWrite(ctx, workflowClient, input, writeRels, preconditions, r.LockMode)
+	resp, err := dualWrite(ctx, workflowClient, input, updateRels, preconditions, r.LockMode)
 	if err != nil {
 		return fmt.Errorf("dual write failed: %w", err)
 	}
@@ -82,7 +82,7 @@ func write(ctx context.Context, w http.ResponseWriter, r *rules.RunnableRule, in
 // getWriteRule returns the first matching rule with `write` defined
 func getWriteRule(matchingRules []*rules.RunnableRule) *rules.RunnableRule {
 	for _, r := range matchingRules {
-		if len(r.Writes) > 0 {
+		if len(r.Updates) > 0 {
 			// we can only do one dual-write per request without some way of
 			// marking some writes async.
 			return r
@@ -93,13 +93,13 @@ func getWriteRule(matchingRules []*rules.RunnableRule) *rules.RunnableRule {
 
 // dualWrite configures the dtx for writing to kube and spicedb and waits for
 // the response
-func dualWrite(ctx context.Context, workflowClient *client.Client, input *rules.ResolveInput, rels []*v1.Relationship, preconditions []*v1.Precondition, lockMode proxyrule.LockMode) (*distributedtx.KubeResp, error) {
+func dualWrite(ctx context.Context, workflowClient *client.Client, input *rules.ResolveInput, updateRels []*v1.Relationship, preconditions []*v1.Precondition, lockMode proxyrule.LockMode) (*distributedtx.KubeResp, error) {
 	writeInput := &distributedtx.WriteObjInput{
 		RequestInfo:   input.Request,
 		UserInfo:      input.User,
 		Body:          input.Body,
 		Header:        input.Headers,
-		Rels:          rels,
+		UpdateRels:    updateRels,
 		Preconditions: preconditions,
 	}
 	if input.Object != nil {
@@ -129,22 +129,22 @@ func preconditionFromRel(rel *rules.ResolvedRel) *v1.Precondition {
 			ResourceType: rel.ResourceType,
 		},
 	}
-	if rel.ResourceID != "*" {
+	if rel.ResourceID != "$resourceID" {
 		p.Filter.OptionalResourceId = rel.ResourceID
 	}
-	if rel.ResourceRelation != "*" {
+	if rel.ResourceRelation != "$resourceRelation" {
 		p.Filter.OptionalRelation = rel.ResourceRelation
 	}
-	if rel.SubjectType != "*" || rel.SubjectID != "*" || rel.SubjectRelation != "*" {
+	if rel.SubjectType != "$subjectType" || rel.SubjectID != "$subjectID" || rel.SubjectRelation != "$subjectRelation" {
 		p.Filter.OptionalSubjectFilter = &v1.SubjectFilter{}
 	}
-	if rel.SubjectType != "*" {
+	if rel.SubjectType != "$subjectType" {
 		p.Filter.OptionalSubjectFilter.SubjectType = rel.SubjectType
 	}
-	if rel.SubjectID != "*" {
+	if rel.SubjectID != "$subjectID" {
 		p.Filter.OptionalSubjectFilter.OptionalSubjectId = rel.SubjectID
 	}
-	if rel.SubjectRelation != "*" && rel.SubjectRelation != "" {
+	if rel.SubjectRelation != "$subjectRelation" && rel.SubjectRelation != "" {
 		p.Filter.OptionalSubjectFilter.OptionalRelation = &v1.SubjectFilter_RelationFilter{
 			Relation: rel.SubjectRelation,
 		}

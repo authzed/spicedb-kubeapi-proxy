@@ -70,7 +70,7 @@ func TestWorkflow(t *testing.T) {
 				RequestInfo: &request.RequestInfo{Verb: "create"},
 				UserInfo:    &user.DefaultInfo{Name: "janedoe"},
 				ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
-				Rels: []*v1.Relationship{{
+				UpdateRels: []*v1.Relationship{{
 					Resource: &v1.ObjectReference{
 						ObjectType: "namespace",
 						ObjectId:   "my_object_meta",

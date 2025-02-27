@@ -2,9 +2,10 @@ package distributedtx
 
 import (
 	"fmt"
-	"k8s.io/klog/v2"
 	"net/http"
 	"time"
+
+	"k8s.io/klog/v2"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -43,7 +44,7 @@ type WriteObjInput struct {
 	Header        http.Header
 	UserInfo      *user.DefaultInfo
 	ObjectMeta    *metav1.ObjectMeta
-	Rels          []*v1.Relationship
+	UpdateRels    []*v1.Relationship
 	Preconditions []*v1.Precondition
 	Body          []byte
 }
@@ -142,13 +143,14 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 	}
 	preconditions = append(preconditions, input.Preconditions...)
 
+	rels := input.UpdateRels
 	operation := v1.RelationshipUpdate_OPERATION_TOUCH
 	if input.RequestInfo.Verb == "delete" {
 		operation = v1.RelationshipUpdate_OPERATION_DELETE
 	}
 
-	updates := make([]*v1.RelationshipUpdate, 0, len(input.Rels))
-	for _, r := range input.Rels {
+	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
+	for _, r := range rels {
 		updates = append(updates, &v1.RelationshipUpdate{
 			Operation:    operation,
 			Relationship: r,
@@ -239,13 +241,14 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 	}
 
 	// TODO: this could optionally use dry-run to preflight the kube request
+	rels := input.UpdateRels
 	operation := v1.RelationshipUpdate_OPERATION_CREATE
 	if input.RequestInfo.Verb == "delete" {
 		operation = v1.RelationshipUpdate_OPERATION_DELETE
 	}
 
-	updates := make([]*v1.RelationshipUpdate, 0, len(input.Rels))
-	for _, r := range input.Rels {
+	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
+	for _, r := range rels {
 		updates = append(updates, &v1.RelationshipUpdate{
 			Operation:    operation,
 			Relationship: r,

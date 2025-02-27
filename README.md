@@ -1,7 +1,7 @@
 # spicedb-kubeapi-proxy
 
-`spicedb-kubeapi-proxy` is a proxy that runs in between clients and the kube 
-apiserver that can authorize requests and filter responses using an embedded or 
+`spicedb-kubeapi-proxy` is a proxy that runs in between clients and the kube
+apiserver that can authorize requests and filter responses using an embedded or
 remote SpiceDB.
 
 ## Status
@@ -30,13 +30,13 @@ the current state of the project, but the primary goals before 1.0 are:
 ![Arch Diagram Dark](./docs/proxy-arch-dark.png#gh-dark-mode-only)![Arch Diagram Light](./docs/proxy-arch-light.png#gh-light-mode-only)
 
 The proxy authenticates itself with the downstream kube-apiserver (client certs
-if running out-of-cluster, service account token if running in-cluster). 
+if running out-of-cluster, service account token if running in-cluster).
 The proxy is configured with a set of rules that define how to authorize requests
 and how to filter responses by communicating with SpiceDB.
 
 There are three basic types of rule:
 
-- **Check** rules: these are used to authorize whether a request is allowed to 
+- **Check** rules: these are used to authorize whether a request is allowed to
   proceed at all. For example, a rule might say that a user can only list pods
   in a namespace `foo` if they have a `namespace:foo#list@user:alice` permission
   in SpiceDB.
@@ -46,10 +46,11 @@ There are three basic types of rule:
   in SpiceDB that enumerate the allowed pods, like `pod:foo/a#view@user:alice`
   and `pod:foo/b#view@user:alice`. In this example, `alice` would see pods `a`
   and `b` in namespace `foo`, but no others.
-- **Write** rules: these are used to write data to SpiceDB based on the request
-  that the proxy is authorizing. For example, if `alice` creates a new pod `c` 
-  in namespace `foo`, a rule can determine that a relationship should be written 
-  to SpiceDB that grants ownership, i.e. `pod:foo/a#view@user:alice`.
+- **Update Relationship** rules: these are used to write/delete data in
+  SpiceDB based on the request that the proxy is authorizing. For example,
+  if `alice` creates a new pod `c` in namespace `foo`, a rule can determine
+  that a relationship should be written to SpiceDB that grants ownership,
+  i.e. `pod:foo/a#view@user:alice`.
 
 Rules often work in tendem; for example, a `Check` rule might authorize a request
 to list pods in a namespace, and a `Filter` rule might further restrict the
@@ -57,16 +58,16 @@ response to only include certain pods.
 
 Note that the proxy does not assume anything about the structure of the data in
 SpiceDB. It is up to the user to define the data in SpiceDB and the rules that
-the proxy uses to authorize and filter requests. 
+the proxy uses to authorize and filter requests.
 
-The proxy rejects any request for which it doesn't find a matching rule. 
+The proxy rejects any request for which it doesn't find a matching rule.
 
 # Development
 
 This project uses `mage` to offer various development-related commands.
 
 ```bash
-# run to get all available commands 
+# run to get all available commands
 brew install mage
 mage
 ```
@@ -74,6 +75,7 @@ mage
 ## Tests
 
 Runs both unit and e2e tests
+
 ```bash
 mage test:all
 ```

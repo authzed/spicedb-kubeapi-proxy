@@ -32,7 +32,7 @@ const (
 )
 
 // Spec defines a single rule for the proxy that matches incoming
-// requests to an optional set of checks, an optional set of writes, and an
+// requests to an optional set of checks, an optional set of updares, and an
 // optional filter.
 type Spec struct {
 	Locking    LockMode           `json:"lock,omitempty"`
@@ -40,7 +40,7 @@ type Spec struct {
 	Checks     []StringOrTemplate `json:"check,omitempty"`
 	Must       []StringOrTemplate `json:"must,omitempty"`
 	MustNot    []StringOrTemplate `json:"mustNot,omitempty"`
-	Writes     []StringOrTemplate `json:"write,omitempty"`
+	Updates    []StringOrTemplate `json:"update,omitempty"`
 	PreFilters []PreFilter        `json:"prefilter,omitempty"`
 	// TODO: PostFilter
 }
