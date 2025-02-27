@@ -275,7 +275,7 @@ func TestCompile(t *testing.T) {
 						RelationshipTemplate: &proxyrule.RelationshipTemplate{
 							Resource: proxyrule.ObjectTemplate{
 								Type:     "wardles",
-								ID:       "*",
+								ID:       "$resourceID",
 								Relation: "view",
 							},
 							Subject: proxyrule.ObjectTemplate{
@@ -301,7 +301,7 @@ func TestCompile(t *testing.T) {
 					Namespace:  jmespath.MustCompile("''"),
 					Rel: &ResolvedRel{
 						ResourceType:     "wardles",
-						ResourceID:       "*",
+						ResourceID:       "$resourceID",
 						ResourceRelation: "view",
 						SubjectType:      "user",
 						SubjectID:        "testUser",
@@ -354,7 +354,7 @@ func TestMapMatcherMatch(t *testing.T) {
 				RelationshipTemplate: &proxyrule.RelationshipTemplate{
 					Resource: proxyrule.ObjectTemplate{
 						Type:     "wardles",
-						ID:       "*",
+						ID:       "$resourceID",
 						Relation: "view",
 					},
 					Subject: proxyrule.ObjectTemplate{

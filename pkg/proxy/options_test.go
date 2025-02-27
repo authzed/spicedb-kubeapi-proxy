@@ -127,7 +127,7 @@ match:
 prefilter:
 - name: .request.name
   byResource:
-    tpl: "org:*#audit-cluster@user:{{request.user}}"
+    tpl: "org:$resourceID#audit-cluster@user:{{request.user}}"
 `)
 	errConfigFile := path.Join(t.TempDir(), "rulesbad.yaml")
 	require.NoError(t, os.WriteFile(errConfigFile, errConfigBytes, 0o600))
@@ -224,7 +224,7 @@ match:
 prefilter:
 - name: request.name
   byResource:
-    tpl: "org:*#audit-cluster@user:{{request.user}}"
+    tpl: "org:$resourceID#audit-cluster@user:{{request.user}}"
 `)
 	configFile := path.Join(t.TempDir(), "rules.yaml")
 	require.NoError(t, os.WriteFile(configFile, configBytes, 0o600))

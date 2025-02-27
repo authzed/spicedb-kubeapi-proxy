@@ -40,7 +40,7 @@ match:
 prefilter:
 - name: "resourceId"
   byResource:
-    tpl: "namespace:*#view@user:{{user.Name}}"
+    tpl: "namespace:$resourceID#view@user:{{user.Name}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -85,4 +85,4 @@ prefilter:
 - namespace: "splitNamespace(resourceId)"
   name: "splitName(resourceId)"
   byResource:
-    tpl: "pod:*#view@user:{{user.Name}}"
+    tpl: "pod:$resourceID#view@user:{{user.Name}}"

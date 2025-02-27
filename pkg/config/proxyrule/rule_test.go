@@ -161,7 +161,7 @@ prefilter:
 - name: response.ResourceObjectID
   namespace: request.Namespace
   byResource:
-    tpl: "spicedbclusters:*#view@user:{{request.user}}"
+    tpl: "spicedbclusters:$resourceID#view@user:{{request.user}}"
 `,
 			expectRules: []Config{{
 				TypeMeta: v1alpha1ProxyRule,
@@ -193,7 +193,7 @@ prefilter:
 					PreFilters: []PreFilter{{
 						Name:       "response.ResourceObjectID",
 						Namespace:  "request.Namespace",
-						ByResource: &StringOrTemplate{Template: "spicedbclusters:*#view@user:{{request.user}}"},
+						ByResource: &StringOrTemplate{Template: "spicedbclusters:$resourceID#view@user:{{request.user}}"},
 					}},
 				},
 			}},

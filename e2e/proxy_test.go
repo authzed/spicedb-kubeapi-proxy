@@ -669,7 +669,7 @@ var (
 			}},
 			PreFilters: []proxyrule.PreFilter{{
 				Name:       "resourceId",
-				ByResource: &proxyrule.StringOrTemplate{Template: "namespace:*#view@user:{{user.Name}}"},
+				ByResource: &proxyrule.StringOrTemplate{Template: "namespace:$resourceID#view@user:{{user.Name}}"},
 			}},
 		},
 	}
@@ -745,7 +745,7 @@ var (
 			PreFilters: []proxyrule.PreFilter{{
 				Namespace:  "splitNamespace(resourceId)",
 				Name:       "splitName(resourceId)",
-				ByResource: &proxyrule.StringOrTemplate{Template: "pod:*#view@user:{{user.Name}}"},
+				ByResource: &proxyrule.StringOrTemplate{Template: "pod:$resourceID#view@user:{{user.Name}}"},
 			}},
 		},
 	}

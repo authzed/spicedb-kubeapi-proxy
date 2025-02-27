@@ -129,22 +129,22 @@ func preconditionFromRel(rel *rules.ResolvedRel) *v1.Precondition {
 			ResourceType: rel.ResourceType,
 		},
 	}
-	if rel.ResourceID != "*" {
+	if rel.ResourceID != "$resourceID" {
 		p.Filter.OptionalResourceId = rel.ResourceID
 	}
-	if rel.ResourceRelation != "*" {
+	if rel.ResourceRelation != "$resourceRelation" {
 		p.Filter.OptionalRelation = rel.ResourceRelation
 	}
-	if rel.SubjectType != "*" || rel.SubjectID != "*" || rel.SubjectRelation != "*" {
+	if rel.SubjectType != "$subjectType" || rel.SubjectID != "$subjectID" || rel.SubjectRelation != "$subjectRelation" {
 		p.Filter.OptionalSubjectFilter = &v1.SubjectFilter{}
 	}
-	if rel.SubjectType != "*" {
+	if rel.SubjectType != "$subjectType" {
 		p.Filter.OptionalSubjectFilter.SubjectType = rel.SubjectType
 	}
-	if rel.SubjectID != "*" {
+	if rel.SubjectID != "$subjectID" {
 		p.Filter.OptionalSubjectFilter.OptionalSubjectId = rel.SubjectID
 	}
-	if rel.SubjectRelation != "*" && rel.SubjectRelation != "" {
+	if rel.SubjectRelation != "$subjectRelation" && rel.SubjectRelation != "" {
 		p.Filter.OptionalSubjectFilter.OptionalRelation = &v1.SubjectFilter_RelationFilter{
 			Relation: rel.SubjectRelation,
 		}
