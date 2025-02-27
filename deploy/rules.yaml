@@ -7,7 +7,7 @@ match:
   verbs: ["create"]
 mustNot:
 - tpl: "namespace:{{name}}#cluster@cluster:cluster"
-write:
+update:
 - tpl: "namespace:{{name}}#creator@user:{{user.Name}}"
 - tpl: "namespace:{{name}}#cluster@cluster:cluster"
 ---
@@ -18,7 +18,7 @@ match:
 - apiVersion: v1
   resource: namespaces
   verbs: ["delete"]
-write:
+update:
 - tpl: "namespace:{{name}}#creator@user:{{user.Name}}"
 - tpl: "namespace:{{name}}#cluster@cluster:cluster"
 ---
@@ -51,7 +51,7 @@ match:
   verbs: ["create"]
 mustNot:
 - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
-write:
+update:
 - tpl: "pod:{{namespacedName}}#creator@user:{{user.Name}}"
 - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 ---
@@ -62,7 +62,7 @@ match:
 - apiVersion: v1
   resource: pods
   verbs: ["delete"]
-write:
+update:
 - tpl: "pod:{{namespacedName}}#creator@user:{{user.Name}}"
 - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 ---

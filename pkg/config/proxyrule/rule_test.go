@@ -32,7 +32,7 @@ check:
   subject:
     type: user
     id: request.user
-write:
+update:
 - resource:
     type: spicedbclusters
     id: metadata.name
@@ -70,7 +70,7 @@ write:
 							},
 						},
 					}},
-					Writes: []StringOrTemplate{{
+					Updates: []StringOrTemplate{{
 						RelationshipTemplate: &RelationshipTemplate{
 							Resource: ObjectTemplate{
 								Type:     "spicedbclusters",
@@ -110,7 +110,7 @@ match:
   verbs: ["create"]
 check:
 - tpl: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}"
-write:
+update:
 - tpl: "spicedbclusters:{{.metadata.name}}#org@org:{{.metadata.labels.org}}"
 - tpl: "spicedbclusters:{{.metadata.name}}#creator@user:{{.request.user}}"
 `,
@@ -126,7 +126,7 @@ write:
 					Checks: []StringOrTemplate{{
 						Template: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}",
 					}},
-					Writes: []StringOrTemplate{{
+					Updates: []StringOrTemplate{{
 						Template: "spicedbclusters:{{.metadata.name}}#org@org:{{.metadata.labels.org}}",
 					}, {
 						Template: "spicedbclusters:{{.metadata.name}}#creator@user:{{.request.user}}",
@@ -146,7 +146,7 @@ match:
   verbs: ["create"]
 check:
 - tpl: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}"
-write:
+update:
 - tpl: "spicedbclusters:{{.metadata.name}}#org@org:{{.metadata.labels.org}}"
 - tpl: "spicedbclusters:{{.metadata.name}}#creator@user:{{.request.user}}"
 ---
@@ -175,7 +175,7 @@ prefilter:
 					Checks: []StringOrTemplate{{
 						Template: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}",
 					}},
-					Writes: []StringOrTemplate{{
+					Updates: []StringOrTemplate{{
 						Template: "spicedbclusters:{{.metadata.name}}#org@org:{{.metadata.labels.org}}",
 					}, {
 						Template: "spicedbclusters:{{.metadata.name}}#creator@user:{{.request.user}}",

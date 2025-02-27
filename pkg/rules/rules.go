@@ -288,7 +288,7 @@ type RunnableRule struct {
 	Checks    []*RelExpr
 	Must      []*RelExpr
 	MustNot   []*RelExpr
-	Writes    []*RelExpr
+	Updates   []*RelExpr
 	PreFilter []*PreFilter
 }
 
@@ -337,7 +337,7 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	runnable.Writes, err = compileStringOrObjTemplates(config.Writes)
+	runnable.Updates, err = compileStringOrObjTemplates(config.Updates)
 	if err != nil {
 		return nil, err
 	}
