@@ -63,6 +63,8 @@ var (
 	clientCA *ClientCA
 )
 
+const kubeVersionExpression = "~1.32.0"
+
 func TestEndToEnd(t *testing.T) {
 	RunSpecs(t, "proxy tests")
 }
@@ -156,10 +158,8 @@ func ConfigureApiserver() {
 
 	e := &env.Env{
 		Log: log,
-		Client: &remote.Client{
-			Log:    log,
-			Bucket: "kubebuilder-tools",
-			Server: "storage.googleapis.com",
+		Client: &remote.HTTPClient{
+			Log: log,
 		},
 		Version: versions.Spec{
 			Selector:    versions.TildeSelector{},
@@ -177,7 +177,8 @@ func ConfigureApiserver() {
 		Store: store.NewAt("../testbin"),
 		Out:   os.Stdout,
 	}
-	e.Version, err = versions.FromExpr("~1.27.0")
+
+	e.Version, err = versions.FromExpr(kubeVersionExpression)
 	Expect(err).To(Succeed())
 
 	workflows.Use{
@@ -209,7 +210,7 @@ func StartKubeGC(ctx context.Context, restConfig *rest.Config) {
 	metadataInformers := metadatainformer.NewSharedInformerFactory(mclient, 0)
 
 	started := make(chan struct{})
-	gcController, err := garbagecollector.NewGarbageCollector(kclient, mclient, mapper, nil, informerfactory.NewInformerFactory(sharedInformers, metadataInformers), started)
+	gcController, err := garbagecollector.NewGarbageCollector(ctx, kclient, mclient, mapper, nil, informerfactory.NewInformerFactory(sharedInformers, metadataInformers), started)
 	Expect(err).To(Succeed())
 
 	sharedInformers.Start(ctx.Done())
@@ -218,7 +219,7 @@ func StartKubeGC(ctx context.Context, restConfig *rest.Config) {
 	metadataInformers.WaitForCacheSync(ctx.Done())
 	close(started)
 
-	go gcController.Run(ctx, 1)
+	go gcController.Run(ctx, 1, 30*time.Second)
 	go gcController.Sync(ctx, cachedDiscovery, 30*time.Second)
 }
 
