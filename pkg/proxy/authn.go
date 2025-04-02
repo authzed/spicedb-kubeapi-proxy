@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -45,7 +46,7 @@ func (c *Authentication) serviceAccountAuthEnabled() bool {
 	return c.BuiltInOptions.ServiceAccounts != nil && len(c.BuiltInOptions.ServiceAccounts.KeyFiles) != 0
 }
 
-func (c *Authentication) ApplyTo(authenticationInfo *genericapiserver.AuthenticationInfo, servingInfo *genericapiserver.SecureServingInfo) error {
+func (c *Authentication) ApplyTo(ctx context.Context, authenticationInfo *genericapiserver.AuthenticationInfo, servingInfo *genericapiserver.SecureServingInfo) error {
 	authenticatorConfig, err := c.BuiltInOptions.ToAuthenticationConfig()
 	if err != nil {
 		return err
@@ -63,7 +64,7 @@ func (c *Authentication) ApplyTo(authenticationInfo *genericapiserver.Authentica
 
 	// TODO: ServiceAccounts
 
-	baseAuthenticator, _, err := authenticatorConfig.New()
+	baseAuthenticator, _, _, _, err := authenticatorConfig.New(ctx)
 	if err != nil {
 		return err
 	}

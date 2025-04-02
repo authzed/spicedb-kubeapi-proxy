@@ -19,9 +19,9 @@ const defaultLogLevel = slog.LevelDebug
 
 func SetupWithMemoryBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface) (*client.Client, *Worker, error) {
 	ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("backend", "sqlite-memory"))
-	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewInMemoryBackend(backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewInMemoryBackend(sqlite.WithBackendOptions(backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: defaultLogLevel,
-	})))))
+	}))))))
 }
 
 func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, sqlitePath string) (*client.Client, *Worker, error) {
@@ -30,9 +30,9 @@ func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.Permissions
 	}
 
 	ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("backend", "sqlite-file", "path", sqlitePath))
-	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewSqliteBackend(sqlitePath, backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewSqliteBackend(sqlitePath, sqlite.WithBackendOptions(backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: defaultLogLevel,
-	})))))
+	}))))))
 }
 
 func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, backend backend.Backend) (*client.Client, *Worker, error) {
@@ -43,7 +43,7 @@ func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServic
 	}
 
 	monoBackend := monoprocess.NewMonoprocessBackend(backend)
-	w := worker.New(monoBackend, &worker.DefaultWorkerOptions)
+	w := worker.New(monoBackend, &worker.DefaultOptions)
 
 	if err := w.RegisterWorkflow(PessimisticWriteToSpiceDBAndKube); err != nil {
 		return nil, nil, err
