@@ -1,7 +1,8 @@
 module github.com/authzed/spicedb-kubeapi-proxy
 
-go 1.22.1
-toolchain go1.24.1
+go 1.23.0
+
+toolchain go1.24.2
 
 require (
 	github.com/authzed/authzed-go v1.4.0
