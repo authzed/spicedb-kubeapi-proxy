@@ -6,7 +6,7 @@ require (
 	github.com/authzed/authzed-go v0.10.1
 	github.com/authzed/grpcutil v0.0.0-20240123092924-129dc0a6a6e1
 	github.com/authzed/spicedb v1.29.2
-	github.com/cespare/xxhash/v2 v2.2.0
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cschleiden/go-workflows v0.16.3-0.20230928210702-d72004e1fdf2
 	github.com/dustin/go-humanize v1.0.1
 	github.com/google/uuid v1.5.0
