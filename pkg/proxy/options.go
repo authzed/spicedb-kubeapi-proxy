@@ -23,6 +23,7 @@ import (
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	apiserveroptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -41,36 +42,63 @@ const (
 	defaultDialerTimeout        = 5 * time.Second
 )
 
+//go:generate go run github.com/ecordell/optgen -output zz_spicedb_options.go . SpiceDBOptions
+
 type Options struct {
-	SecureServing  apiserveroptions.SecureServingOptionsWithLoopback
-	Authentication Authentication
-	Logs           *logs.Options
+	SecureServing  apiserveroptions.SecureServingOptionsWithLoopback `debugmap:"hidden"`
+	Authentication Authentication                                    `debugmap:"hidden"`
+	Logs           *logs.Options                                     `debugmap:"hidden"`
 
-	BackendKubeconfigPath string
-	RestConfigFunc        func() (*rest.Config, http.RoundTripper, error)
-	OverrideUpstream      bool
-	UseInClusterConfig    bool
-	RuleConfigFile        string
-	Matcher               rules.Matcher
+	BackendKubeconfigPath string                                          `debugmap:"visible"`
+	RestConfigFunc        func() (*rest.Config, http.RoundTripper, error) `debugmap:"hidden"`
+	OverrideUpstream      bool                                            `debugmap:"visible"`
+	UseInClusterConfig    bool                                            `debugmap:"visible"`
 
-	CertDir string
+	RuleConfigFile string        `debugmap:"visible"`
+	Matcher        rules.Matcher `debugmap:"hidden"`
 
-	AuthenticationInfo    genericapiserver.AuthenticationInfo
-	ServingInfo           *genericapiserver.SecureServingInfo
-	AdditionalAuthEnabled bool
+	SpiceDBOptions SpiceDBOptions `debugmap:"visible"`
 
-	WatchClient       v1.WatchServiceClient
-	PermissionsClient v1.PermissionsServiceClient
-	SpiceDBEndpoint   string
-	EmbeddedSpiceDB   server.RunnableServer
-	insecure          bool
-	skipVerifyCA      bool
-	token             string
-	spicedbCAPath     string
-	inputExtractor    rules.ResolveInputExtractor
+	CertDir string `debugmap:"visible"`
 
-	WorkflowDatabasePath string
-	LockMode             string
+	AuthenticationInfo    genericapiserver.AuthenticationInfo `debugmap:"hidden"`
+	ServingInfo           *genericapiserver.SecureServingInfo `debugmap:"hidden"`
+	AdditionalAuthEnabled bool                                `debugmap:"visible"`
+
+	InputExtractor rules.ResolveInputExtractor `debugmap:"hidden"`
+
+	WorkflowDatabasePath string `debugmap:"visible"`
+	LockMode             string `debugmap:"visible"`
+
+	WatchClient       v1.WatchServiceClient       `debugmap:"hidden"`
+	PermissionsClient v1.PermissionsServiceClient `debugmap:"hidden"`
+}
+
+type SpiceDBOptions struct {
+	SpiceDBEndpoint            string                `debugmap:"visible"`
+	EmbeddedSpiceDB            server.RunnableServer `debugmap:"hidden"`
+	Insecure                   bool                  `debugmap:"sensitive"`
+	SkipVerifyCA               bool                  `debugmap:"visible"`
+	SecureSpiceDBTokensBySpace string                `debugmap:"sensitive"`
+	SpicedbCAPath              string                `debugmap:"visible"`
+}
+
+func NewSpiceDBOptions() SpiceDBOptions {
+	return SpiceDBOptions{
+		SpiceDBEndpoint:            "localhost:50051",
+		Insecure:                   false,
+		SkipVerifyCA:               false,
+		SecureSpiceDBTokensBySpace: "somepresharedkey",
+		SpicedbCAPath:              "",
+	}
+}
+
+func (so *SpiceDBOptions) AddFlags(fs *pflag.FlagSet) {
+	fs.StringVar(&so.SpiceDBEndpoint, "spicedb-endpoint", "localhost:50051", "Defines the endpoint endpoint to the SpiceDB authorizing proxy operations. if embedded:// is specified, an in memory ephemeral instance created.")
+	fs.BoolVar(&so.Insecure, "spicedb-insecure", false, "If set to true uses the insecure transport configuration for gRPC. Set to false by default.")
+	fs.BoolVar(&so.SkipVerifyCA, "spicedb-skip-verify-ca", false, "If set to true backend certificate trust chain is not verified. Set to false by default.")
+	fs.StringVar(&so.SecureSpiceDBTokensBySpace, "spicedb-token", "", "Specifies the preshared key to use with the remote SpiceDB")
+	fs.StringVar(&so.SpicedbCAPath, "spicedb-ca-path", "", "If set, looks in the given directory for CAs to trust when connecting to SpiceDB.")
 }
 
 const tlsCertificatePairName = "tls"
@@ -79,6 +107,7 @@ func NewOptions() *Options {
 	o := &Options{
 		SecureServing:  *apiserveroptions.NewSecureServingOptions().WithLoopback(),
 		Authentication: *NewAuthentication(),
+		SpiceDBOptions: NewSpiceDBOptions(),
 		Logs:           logsv1.NewLoggingConfiguration(),
 	}
 	o.Logs.Verbosity = logsv1.VerbosityLevel(2)
@@ -87,19 +116,30 @@ func NewOptions() *Options {
 	return o
 }
 
+func (o *Options) FromConfigFlags(configFlags *genericclioptions.ConfigFlags) *Options {
+	o.OverrideUpstream = false
+	o.UseInClusterConfig = false
+	o.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
+		restConfig, err := configFlags.ToRESTConfig()
+		if err != nil {
+			return nil, nil, fmt.Errorf("unable to load kube REST config: %w", err)
+		}
+
+		return restConfig, restConfig.WrapTransport(http.DefaultTransport), nil
+	}
+	return o
+}
+
 func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	o.SecureServing.AddFlags(fs)
 	o.Authentication.AddFlags(fs)
+	o.SpiceDBOptions.AddFlags(fs)
 	logsv1.AddFlags(o.Logs, fs)
+
 	fs.StringVar(&o.WorkflowDatabasePath, "workflow-database-path", defaultWorkflowDatabasePath, "Path for the file representing the SQLite database used for the workflow engine.")
 	fs.BoolVar(&o.OverrideUpstream, "override-upstream", true, "if true, uses the environment to pick the upstream apiserver address instead of what is listed in --backend-kubeconfig. This simplifies kubeconfig management when running the proxy in the same cluster as the upstream.")
 	fs.BoolVar(&o.UseInClusterConfig, "use-in-cluster-config", false, "if true, uses the local cluster as the upstream and gets the configuration from the environment.")
 	fs.StringVar(&o.BackendKubeconfigPath, "backend-kubeconfig", o.BackendKubeconfigPath, "The path to the kubeconfig to proxy connections to. It should authenticate the user with cluster-admin permission.")
-	fs.StringVar(&o.SpiceDBEndpoint, "spicedb-endpoint", "localhost:50051", "Defines the endpoint endpoint to the SpiceDB authorizing proxy operations. if embedded:// is specified, an in memory ephemeral instance created.")
-	fs.BoolVar(&o.insecure, "spicedb-insecure", false, "If set to true uses the insecure transport configuration for gRPC. Set to false by default.")
-	fs.BoolVar(&o.skipVerifyCA, "spicedb-skip-verify-ca", false, "If set to true backend certificate trust chain is not verified. Set to false by default.")
-	fs.StringVar(&o.token, "spicedb-token", "", "Specifies the preshared key to use with the remote SpiceDB")
-	fs.StringVar(&o.spicedbCAPath, "spicedb-ca-path", "", "If set, looks in the given directory for CAs to trust when connecting to SpiceDB.")
 	fs.StringVar(&o.RuleConfigFile, "rule-config", "", "The path to a file containing proxy rule configuration")
 }
 
@@ -165,8 +205,8 @@ func (o *Options) Complete(ctx context.Context) error {
 			return fmt.Errorf("couldn't compile rule configs: %w", err)
 		}
 	}
-	if o.inputExtractor == nil {
-		o.inputExtractor = rules.ResolveInputExtractorFunc(rules.NewResolveInputFromHttp)
+	if o.InputExtractor == nil {
+		o.InputExtractor = rules.ResolveInputExtractorFunc(rules.NewResolveInputFromHttp)
 	}
 
 	if !filepath.IsAbs(o.SecureServing.ServerCert.CertDirectory) {
@@ -187,7 +227,7 @@ func (o *Options) Complete(ctx context.Context) error {
 
 	o.AdditionalAuthEnabled = o.Authentication.AdditionalAuthEnabled()
 
-	spicedbURl, err := url.Parse(o.SpiceDBEndpoint)
+	spicedbURl, err := url.Parse(o.SpiceDBOptions.SpiceDBEndpoint)
 	if err != nil {
 		return fmt.Errorf("unable to parse SpiceDB endpoint URL: %w", err)
 	}
@@ -195,41 +235,41 @@ func (o *Options) Complete(ctx context.Context) error {
 	var conn *grpc.ClientConn
 	if spicedbURl.Scheme == "embedded" {
 		klog.FromContext(ctx).WithValues("spicedb-endpoint", spicedbURl).Info("using embedded SpiceDB")
-		o.EmbeddedSpiceDB, err = spicedb.NewServer(ctx, spicedbURl.Path)
+		o.SpiceDBOptions.EmbeddedSpiceDB, err = spicedb.NewServer(ctx, spicedbURl.Path)
 		if err != nil {
 			return fmt.Errorf("unable to stand up embedded SpiceDB: %w", err)
 		}
 
-		conn, err = o.EmbeddedSpiceDB.GRPCDialContext(ctx, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err = o.SpiceDBOptions.EmbeddedSpiceDB.GRPCDialContext(ctx, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			return fmt.Errorf("unable to open gRPC connection with embedded SpiceDB: %w", err)
 		}
 	} else {
-		klog.FromContext(ctx).WithValues("spicedb-endpoint", o.SpiceDBEndpoint).
-			WithValues("spicedb-insecure", o.insecure).
-			WithValues("spicedb-skip-verify-ca", o.skipVerifyCA).
-			WithValues("spicedb-ca-path", o.spicedbCAPath).
+		klog.FromContext(ctx).WithValues("spicedb-endpoint", o.SpiceDBOptions.SpiceDBEndpoint).
+			WithValues("spicedb-insecure", o.SpiceDBOptions.Insecure).
+			WithValues("spicedb-skip-verify-ca", o.SpiceDBOptions.SkipVerifyCA).
+			WithValues("spicedb-ca-path", o.SpiceDBOptions.SpicedbCAPath).
 			Info("using remote SpiceDB")
 		var opts []grpc.DialOption
 
-		tokens := strings.Split(o.token, ",")
+		tokens := strings.Split(o.SpiceDBOptions.SecureSpiceDBTokensBySpace, ",")
 		if len(tokens) == 0 {
 			return fmt.Errorf("no SpiceDB token defined")
 		}
 
 		token := strings.TrimSpace(tokens[0])
-		if o.insecure {
+		if o.SpiceDBOptions.Insecure {
 			opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			opts = append(opts, grpcutil.WithInsecureBearerToken(token))
 		} else {
 			opts = append(opts, grpcutil.WithBearerToken(token))
 			verification := grpcutil.VerifyCA
-			if o.skipVerifyCA {
+			if o.SpiceDBOptions.SkipVerifyCA {
 				verification = grpcutil.SkipVerifyCA
 			}
 			var certs grpc.DialOption
-			if len(o.spicedbCAPath) > 0 {
-				certs, err = grpcutil.WithCustomCerts(verification, o.spicedbCAPath)
+			if len(o.SpiceDBOptions.SpicedbCAPath) > 0 {
+				certs, err = grpcutil.WithCustomCerts(verification, o.SpiceDBOptions.SpicedbCAPath)
 				if err != nil {
 					return fmt.Errorf("unable to load custom certificates: %w", err)
 				}
@@ -246,14 +286,19 @@ func (o *Options) Complete(ctx context.Context) error {
 
 		timeoutCtx, cancel := context.WithTimeout(ctx, defaultDialerTimeout)
 		defer cancel()
-		conn, err = grpc.DialContext(timeoutCtx, o.SpiceDBEndpoint, opts...)
+		conn, err = grpc.DialContext(timeoutCtx, o.SpiceDBOptions.SpiceDBEndpoint, opts...)
 		if err != nil {
-			return fmt.Errorf("unable to open gRPC connection to remote SpiceDB at %s: %w", o.SpiceDBEndpoint, err)
+			return fmt.Errorf("unable to open gRPC connection to remote SpiceDB at %s: %w", o.SpiceDBOptions.SpiceDBEndpoint, err)
 		}
 	}
 
-	o.PermissionsClient = v1.NewPermissionsServiceClient(conn)
-	o.WatchClient = v1.NewWatchServiceClient(conn)
+	if o.PermissionsClient == nil {
+		o.PermissionsClient = v1.NewPermissionsServiceClient(conn)
+	}
+
+	if o.WatchClient == nil {
+		o.WatchClient = v1.NewWatchServiceClient(conn)
+	}
 
 	return nil
 }
