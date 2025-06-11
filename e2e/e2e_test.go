@@ -129,7 +129,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	}
 	opts.RuleConfigFile = "rules.yaml"
 	opts.SecureServing.BindPort = port
-	opts.SpiceDBEndpoint = proxy.EmbeddedSpiceDBEndpoint
+	opts.SpiceDBOptions.SpiceDBEndpoint = proxy.EmbeddedSpiceDBEndpoint
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
 	opts.Authentication.BuiltInOptions.ClientCert.ClientCA = clientCA.Path()
 	Expect(opts.Complete(ctx)).To(Succeed())

@@ -26,7 +26,7 @@ func TestKubeConfig(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
 	opts := optionsForTesting(t)
-	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
 	require.NoError(t, opts.Complete(context.Background()))
 
@@ -42,7 +42,7 @@ func TestInClusterConfig(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
 	opts := optionsForTesting(t)
-	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	opts.BackendKubeconfigPath = ""
 	opts.UseInClusterConfig = true
 	require.Empty(t, opts.Validate())
@@ -55,10 +55,10 @@ func TestInClusterConfig(t *testing.T) {
 
 func TestEmbeddedSpiceDB(t *testing.T) {
 	opts := optionsForTesting(t)
-	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
 	require.NoError(t, opts.Complete(context.Background()))
-	require.NotNil(t, opts.EmbeddedSpiceDB)
+	require.NotNil(t, opts.SpiceDBOptions.EmbeddedSpiceDB)
 	require.NotNil(t, opts.PermissionsClient)
 	require.NotNil(t, opts.WatchClient)
 }
@@ -75,13 +75,13 @@ func TestRemoteSpiceDB(t *testing.T) {
 	}()
 
 	opts := optionsForTesting(t)
-	opts.SpiceDBEndpoint = addr
-	opts.insecure = true
-	opts.token = "foobar"
+	opts.SpiceDBOptions.SpiceDBEndpoint = addr
+	opts.SpiceDBOptions.Insecure = true
+	opts.SpiceDBOptions.SecureSpiceDBTokensBySpace = "foobar"
 	require.Empty(t, opts.Validate())
 	require.NoError(t, opts.Complete(context.Background()))
 
-	require.Nil(t, opts.EmbeddedSpiceDB)
+	require.Nil(t, opts.SpiceDBOptions.EmbeddedSpiceDB)
 	require.NotNil(t, opts.PermissionsClient)
 	require.NotNil(t, opts.WatchClient)
 
@@ -91,16 +91,16 @@ func TestRemoteSpiceDB(t *testing.T) {
 
 func TestRemoteSpiceDBCerts(t *testing.T) {
 	opts := optionsForTesting(t)
-	opts.SpiceDBEndpoint = "localhost"
-	opts.token = "foobar"
-	opts.spicedbCAPath = "test"
+	opts.SpiceDBOptions.SpiceDBEndpoint = "localhost"
+	opts.SpiceDBOptions.SecureSpiceDBTokensBySpace = "foobar"
+	opts.SpiceDBOptions.SpicedbCAPath = "test"
 	require.Empty(t, opts.Validate())
 	require.ErrorContains(t, opts.Complete(context.Background()), "unable to load custom certificates")
 }
 
 func TestRuleConfig(t *testing.T) {
 	opts := optionsForTesting(t)
-	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
 	require.NoError(t, opts.Complete(context.Background()))
 
@@ -132,7 +132,7 @@ prefilter:
 	errConfigFile := path.Join(t.TempDir(), "rulesbad.yaml")
 	require.NoError(t, os.WriteFile(errConfigFile, errConfigBytes, 0o600))
 	opts = optionsForTesting(t)
-	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	opts.RuleConfigFile = errConfigFile
 	require.Empty(t, opts.Validate())
 	require.ErrorContains(t, opts.Complete(context.Background()), "SyntaxError")

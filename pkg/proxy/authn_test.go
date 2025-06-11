@@ -130,7 +130,7 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 
 		return rc, transport, nil
 	}
-	opts.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	opts.SecureServing.ServerCert.CertKey = certStore.servingCertKey
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
 	opts.SecureServing.BindPort = port
@@ -142,7 +142,7 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 	})
 
 	var info user.Info
-	opts.inputExtractor = rules.ResolveInputExtractorFunc(func(req *http.Request) (*rules.ResolveInput, error) {
+	opts.InputExtractor = rules.ResolveInputExtractorFunc(func(req *http.Request) (*rules.ResolveInput, error) {
 		userInfo, ok := request.UserFrom(req.Context())
 		if !ok {
 			return nil, fmt.Errorf("unable to get user info from request")
