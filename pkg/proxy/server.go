@@ -122,7 +122,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 
 	// Matcher is a pointer to an interface to make it easy to swap at runtime in tests
 	s.Matcher = &s.opts.Matcher
-	handler, err := authz.WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher, s.opts.inputExtractor)
+	handler, err := authz.WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher, s.opts.InputExtractor)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
 	}
@@ -149,9 +149,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 	var g errgroup.Group
 
-	if s.opts.EmbeddedSpiceDB != nil {
+	if s.opts.SpiceDBOptions.EmbeddedSpiceDB != nil {
 		g.Go(func() error {
-			return s.opts.EmbeddedSpiceDB.Run(ctx)
+			return s.opts.SpiceDBOptions.EmbeddedSpiceDB.Run(ctx)
 		})
 	}
 	g.Go(func() error {
