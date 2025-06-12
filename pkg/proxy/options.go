@@ -221,7 +221,7 @@ func (o *Options) Complete(ctx context.Context) error {
 	if err := o.SecureServing.ApplyTo(&o.ServingInfo, &loopbackClientConfig); err != nil {
 		return err
 	}
-	if err := o.Authentication.ApplyTo(&o.AuthenticationInfo, o.ServingInfo); err != nil {
+	if err := o.Authentication.ApplyTo(ctx, &o.AuthenticationInfo, o.ServingInfo); err != nil {
 		return err
 	}
 

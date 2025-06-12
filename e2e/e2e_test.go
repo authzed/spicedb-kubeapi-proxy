@@ -28,6 +28,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/spf13/afero"
 	"go.uber.org/zap"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery/cached/disk"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -208,17 +209,17 @@ func StartKubeGC(ctx context.Context, restConfig *rest.Config) {
 	sharedInformers := informers.NewSharedInformerFactory(kclient, 0)
 	metadataInformers := metadatainformer.NewSharedInformerFactory(mclient, 0)
 
-	started := make(chan struct{})
-	gcController, err := garbagecollector.NewGarbageCollector(kclient, mclient, mapper, nil, informerfactory.NewInformerFactory(sharedInformers, metadataInformers), started)
+	started := make(<-chan struct{})
+	ignoredResources := make(map[schema.GroupResource]struct{})
+	gcController, err := garbagecollector.NewGarbageCollector(ctx, kclient, mclient, mapper, ignoredResources, informerfactory.NewInformerFactory(sharedInformers, metadataInformers), started)
 	Expect(err).To(Succeed())
 
 	sharedInformers.Start(ctx.Done())
 	metadataInformers.Start(ctx.Done())
 	sharedInformers.WaitForCacheSync(ctx.Done())
 	metadataInformers.WaitForCacheSync(ctx.Done())
-	close(started)
 
-	go gcController.Run(ctx, 1)
+	go gcController.Run(ctx, 1, 30*time.Second)
 	go gcController.Sync(ctx, cachedDiscovery, 30*time.Second)
 }
 
