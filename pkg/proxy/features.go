@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"k8s.io/apimachinery/pkg/util/runtime"
-	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/component-base/featuregate"
 	logsapi "k8s.io/component-base/logs/api/v1"
@@ -13,13 +12,16 @@ func init() {
 }
 
 var defaultGenericControlPlaneFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
-	genericfeatures.APIResponseCompression:              {Default: true, PreRelease: featuregate.Beta},
-	genericfeatures.APIListChunking:                     {Default: true, PreRelease: featuregate.Beta},
-	genericfeatures.APIPriorityAndFairness:              {Default: true, PreRelease: featuregate.Beta},
-	genericfeatures.CustomResourceValidationExpressions: {Default: true, PreRelease: featuregate.Beta},
-	genericfeatures.OpenAPIEnums:                        {Default: true, PreRelease: featuregate.Beta},
-	genericfeatures.ServerSideApply:                     {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.29
-	genericfeatures.ValidatingAdmissionPolicy:           {Default: false, PreRelease: featuregate.Beta},
-	logsapi.LoggingBetaOptions:                          {Default: true, PreRelease: featuregate.Beta},
-	logsapi.ContextualLogging:                           {Default: true, PreRelease: featuregate.Alpha},
+	// Keep only the logging features that are required for the logging system to work
+	logsapi.LoggingBetaOptions: {Default: true, PreRelease: featuregate.Beta},
+	logsapi.ContextualLogging:  {Default: true, PreRelease: featuregate.Alpha},
+	
+	// Note: The following features have been removed from apiserver in Kubernetes 1.33:
+	// - APIListChunking: Promoted to GA and always enabled
+	// - APIPriorityAndFairness: Promoted to GA and always enabled  
+	// - CustomResourceValidationExpressions: Moved to apiextensions-apiserver
+	// - ServerSideApply: Promoted to GA and always enabled
+	// - ValidatingAdmissionPolicy: Moved to a different package or promoted to GA
+	// - APIResponseCompression: Already registered in default feature gates
+	// - OpenAPIEnums: Already registered in default feature gates
 }
