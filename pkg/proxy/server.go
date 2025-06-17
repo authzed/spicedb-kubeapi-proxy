@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httputil"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"golang.org/x/sync/errgroup"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -20,7 +24,11 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/server"
 	genericfilters "k8s.io/apiserver/pkg/server/filters"
+	diskcached "k8s.io/client-go/discovery/cached/disk"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
+	"k8s.io/client-go/util/homedir"
 	"k8s.io/klog/v2"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz"
@@ -55,6 +63,10 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	s.KubeClient, err = kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return nil, err
+	}
+	restMapper, err := toRestMapper(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create REST mapper: %w", err)
 	}
 
 	clusterHost = restConfig.Host
@@ -122,7 +134,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 
 	// Matcher is a pointer to an interface to make it easy to swap at runtime in tests
 	s.Matcher = &s.opts.Matcher
-	handler, err := authz.WithAuthorization(clusterProxy, failHandler, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher, s.opts.InputExtractor)
+	handler, err := authz.WithAuthorization(clusterProxy, failHandler, restMapper, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher, s.opts.InputExtractor)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
 	}
@@ -198,3 +210,47 @@ func withAuthentication(handler, failed http.Handler, auth authenticator.Request
 		handler.ServeHTTP(w, req)
 	})
 }
+
+// Note: these helpers are copied from cli-runtime/pkg/genericclioptions/config.go
+// and can be removed if we move to config.ConfigFlags
+
+// toRestMapper creates a rest.M from the provided rest.Config.
+func toRestMapper(config *rest.Config) (meta.RESTMapper, error) {
+	cacheDir := getDefaultCacheDir()
+
+	httpCacheDir := filepath.Join(cacheDir, "http")
+	discoveryCacheDir := computeDiscoverCacheDir(filepath.Join(cacheDir, "discovery"), config.Host)
+
+	discoveryClient, err := diskcached.NewCachedDiscoveryClientForConfig(config, discoveryCacheDir, httpCacheDir, time.Duration(6*time.Hour))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create discovery client: %w", err)
+	}
+	mapper := restmapper.NewDeferredDiscoveryRESTMapper(discoveryClient)
+	expander := restmapper.NewShortcutExpander(mapper, discoveryClient, func(a string) {
+		klog.V(3).InfoSDepth(1, "discovery warning", "error", err)
+	})
+	return expander, nil
+}
+
+// getDefaultCacheDir returns default caching directory path.
+// it first looks at KUBECACHEDIR env var if it is set, otherwise
+// it returns standard kube cache dir.
+func getDefaultCacheDir() string {
+	if kcd := os.Getenv("KUBECACHEDIR"); kcd != "" {
+		return kcd
+	}
+
+	return filepath.Join(homedir.HomeDir(), ".kube", "cache")
+}
+
+// computeDiscoverCacheDir takes the parentDir and the host and comes up with a "usually non-colliding" name.
+func computeDiscoverCacheDir(parentDir, host string) string {
+	// strip the optional scheme from host if its there:
+	schemelessHost := strings.Replace(strings.Replace(host, "https://", "", 1), "http://", "", 1)
+	// now do a simple collapse of non-AZ09 characters.  Collisions are possible but unlikely.  Even if we do collide the problem is short lived
+	safeHost := overlyCautiousIllegalFileCharacters.ReplaceAllString(schemelessHost, "_")
+	return filepath.Join(parentDir, safeHost)
+}
+
+// overlyCautiousIllegalFileCharacters matches characters that *might* not be supported.  Windows is really restrictive, so this is really restrictive
+var overlyCautiousIllegalFileCharacters = regexp.MustCompile(`[^(\w/.)]`)

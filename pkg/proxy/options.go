@@ -49,6 +49,7 @@ type Options struct {
 	Authentication Authentication                                    `debugmap:"hidden"`
 	Logs           *logs.Options                                     `debugmap:"hidden"`
 
+	// TODO: use genericclioptions.ConfigFlags instead of this?
 	BackendKubeconfigPath string                                          `debugmap:"visible"`
 	RestConfigFunc        func() (*rest.Config, http.RoundTripper, error) `debugmap:"hidden"`
 	OverrideUpstream      bool                                            `debugmap:"visible"`

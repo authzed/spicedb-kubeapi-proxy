@@ -14,6 +14,13 @@ schema: |-
     permission edit = creator
     permission view = viewer + creator
   }
+  definition testresource {
+    relation namespace: namespace
+    relation creator: user
+    relation viewer: user
+    permission edit = creator
+    permission view = viewer + creator
+  }
   definition lock {
     relation workflow: workflow
   }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -15,7 +16,7 @@ import (
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
-func WithAuthorization(handler, failed http.Handler, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient *client.Client, matcher *rules.Matcher, inputExtractor rules.ResolveInputExtractor) (http.Handler, error) {
+func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient *client.Client, matcher *rules.Matcher, inputExtractor rules.ResolveInputExtractor) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -50,10 +51,12 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 				"APIGroup", input.Request.APIGroup,
 				"APIVersion", input.Request.APIVersion,
 				"Resource", input.Request.Resource)
+			klog.V(4).InfoSDepth(1, "authorization input details", "input", input)
 		}
 
 		// run all checks for this request
 		if err := runAllMatchingChecks(ctx, matchingRules, input, permissionsClient); err != nil {
+			klog.V(2).ErrorS(err, "input failed authorization checks", "input", input)
 			handleError(w, failed, req, err)
 			return
 		}
@@ -69,6 +72,7 @@ func WithAuthorization(handler, failed http.Handler, permissionsClient v1.Permis
 
 		// all other requests are filtered by matching rules
 		authzData := &AuthzData{
+			restMapper: restMapper,
 			allowedNNC: make(chan types.NamespacedName),
 			removedNNC: make(chan types.NamespacedName),
 			allowedNN:  map[types.NamespacedName]struct{}{},

@@ -16,10 +16,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/storage/names"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/pointer"
 
@@ -32,26 +37,37 @@ import (
 var _ = Describe("Proxy", func() {
 	When("there are two users", func() {
 		var paulClient, chaniClient, adminClient kubernetes.Interface
+		var paulDynamicClient, chaniDynamicClient, adminDynamicClient dynamic.Interface
+		var paulRestConfig, chaniRestConfig, adminRestConfig *rest.Config
 		var paulNamespace, chaniNamespace, sharedNamespace string
 		var chaniPod, paulPod string
+		var paulCustomResource, chaniCustomResource string
 		var lockMode proxyrule.LockMode
 
 		BeforeEach(func() {
-			paulRestConfig, err := clientcmd.NewDefaultClientConfig(
+			var err error
+			paulRestConfig, err = clientcmd.NewDefaultClientConfig(
 				*clientCA.GenerateUserConfig("paul"), nil,
 			).ClientConfig()
 			Expect(err).To(Succeed())
 			paulClient, err = kubernetes.NewForConfig(paulRestConfig)
 			Expect(err).To(Succeed())
+			paulDynamicClient, err = dynamic.NewForConfig(paulRestConfig)
+			Expect(err).To(Succeed())
 
-			chaniRestConfig, err := clientcmd.NewDefaultClientConfig(
+			chaniRestConfig, err = clientcmd.NewDefaultClientConfig(
 				*clientCA.GenerateUserConfig("chani"), nil,
 			).ClientConfig()
 			Expect(err).To(Succeed())
 			chaniClient, err = kubernetes.NewForConfig(chaniRestConfig)
 			Expect(err).To(Succeed())
+			chaniDynamicClient, err = dynamic.NewForConfig(chaniRestConfig)
+			Expect(err).To(Succeed())
 
 			adminClient, err = kubernetes.NewForConfig(adminUser.Config())
+			Expect(err).To(Succeed())
+			adminRestConfig = adminUser.Config()
+			adminDynamicClient, err = dynamic.NewForConfig(adminRestConfig)
 			Expect(err).To(Succeed())
 
 			paulNamespace = names.SimpleNameGenerator.GenerateName("paul-")
@@ -62,6 +78,8 @@ var _ = Describe("Proxy", func() {
 			sharedNamespace = names.SimpleNameGenerator.GenerateName("shared-")
 			paulPod = names.SimpleNameGenerator.GenerateName("paul-pod-")
 			chaniPod = names.SimpleNameGenerator.GenerateName("chani-pod-")
+			paulCustomResource = names.SimpleNameGenerator.GenerateName("paul-cr-")
+			chaniCustomResource = names.SimpleNameGenerator.GenerateName("chani-cr-")
 		})
 
 		AfterEach(func(ctx context.Context) {
@@ -71,6 +89,13 @@ var _ = Describe("Proxy", func() {
 			_ = adminClient.CoreV1().Pods(sharedNamespace).Delete(ctx, paulPod, metav1.DeleteOptions{PropagationPolicy: &orphan})
 			_ = adminClient.CoreV1().Pods(sharedNamespace).Delete(ctx, chaniPod, metav1.DeleteOptions{PropagationPolicy: &orphan})
 			_ = adminClient.CoreV1().Namespaces().Delete(ctx, sharedNamespace, metav1.DeleteOptions{PropagationPolicy: &orphan})
+
+			// Clean up custom resources
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "testresources"}
+			_ = adminDynamicClient.Resource(gvr).Namespace(paulNamespace).Delete(ctx, paulCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
+			_ = adminDynamicClient.Resource(gvr).Namespace(chaniNamespace).Delete(ctx, chaniCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
+			_ = adminDynamicClient.Resource(gvr).Namespace(sharedNamespace).Delete(ctx, paulCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
+			_ = adminDynamicClient.Resource(gvr).Namespace(sharedNamespace).Delete(ctx, chaniCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
 
 			// ensure there are no remaining locks
 			Expect(len(GetAllTuples(ctx, &v1.RelationshipFilter{
@@ -174,12 +199,85 @@ var _ = Describe("Proxy", func() {
 				return item.Name
 			})
 		}
+		ListPodsAsTable := func(ctx context.Context, config *rest.Config, namespace string) (*metav1.Table, error) {
+			cfg := rest.CopyConfig(config)
+			gv := corev1.SchemeGroupVersion
+			cfg.GroupVersion = &gv
+			cfg.APIPath = "/api"
+			cfg.NegotiatedSerializer = rest.CodecFactoryForGeneratedClient(scheme.Scheme, scheme.Codecs).WithoutConversion()
+			if cfg.UserAgent == "" {
+				cfg.UserAgent = rest.DefaultKubernetesUserAgent()
+			}
+
+			client, err := rest.RESTClientFor(cfg)
+			Expect(err).To(Succeed())
+			req := client.Get().
+				Resource("pods").
+				Namespace(namespace).
+				SetHeader("Accept", "application/json;as=Table;v=v1;g=meta.k8s.io")
+
+			result := req.Do(ctx)
+			if result.Error() != nil {
+				return nil, result.Error()
+			}
+
+			body, err := result.Raw()
+			if err != nil {
+				return nil, err
+			}
+
+			var table metav1.Table
+			err = json.Unmarshal(body, &table)
+			if err != nil {
+				return nil, err
+			}
+
+			return &table, nil
+		}
+		GetPodAsTable := func(ctx context.Context, config *rest.Config, namespace, name string) (*metav1.Table, error) {
+			cfg := rest.CopyConfig(config)
+			gv := corev1.SchemeGroupVersion
+			cfg.GroupVersion = &gv
+			cfg.APIPath = "/api"
+			cfg.NegotiatedSerializer = rest.CodecFactoryForGeneratedClient(scheme.Scheme, scheme.Codecs).WithoutConversion()
+			if cfg.UserAgent == "" {
+				cfg.UserAgent = rest.DefaultKubernetesUserAgent()
+			}
+
+			client, err := rest.RESTClientFor(cfg)
+			Expect(err).To(Succeed())
+			req := client.Get().
+				Resource("pods").
+				Namespace(namespace).
+				Name(name).
+				SetHeader("Accept", "application/json;as=Table;v=v1;g=meta.k8s.io")
+
+			result := req.Do(ctx)
+			if result.Error() != nil {
+				return nil, result.Error()
+			}
+
+			body, err := result.Raw()
+			if err != nil {
+				return nil, err
+			}
+
+			var table metav1.Table
+			err = json.Unmarshal(body, &table)
+			if err != nil {
+				return nil, err
+			}
+
+			return &table, nil
+		}
 		WatchPods := func(ctx context.Context, client kubernetes.Interface, namespace string, expected int, timeout time.Duration) []string {
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
 			got := make([]string, 0, expected)
-			watcher, err := client.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{})
+			watcher, err := client.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
+				ResourceVersion: "0",
+			})
 			Expect(err).To(Succeed())
 			defer watcher.Stop()
 
@@ -189,6 +287,88 @@ var _ = Describe("Proxy", func() {
 					return got
 				}
 				got = append(got, pod.Name)
+				if len(got) == expected {
+					return got
+				}
+			}
+			return got
+		}
+
+		// Custom Resource helper functions
+		CreateTestResource := func(ctx context.Context, client dynamic.Interface, namespace, name string) error {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "testresources"}
+			resource := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "example.com/v1",
+					"kind":       "TestResource",
+					"metadata": map[string]interface{}{
+						"name":      name,
+						"namespace": namespace,
+					},
+					"spec": map[string]interface{}{
+						"message": "test message",
+					},
+				},
+			}
+			_, err := client.Resource(gvr).Namespace(namespace).Create(ctx, resource, metav1.CreateOptions{})
+			return err
+		}
+
+		DeleteTestResource := func(ctx context.Context, client dynamic.Interface, namespace, name string) error {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "testresources"}
+			return client.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		}
+
+		GetTestResource := func(ctx context.Context, client dynamic.Interface, namespace, name string) error {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "testresources"}
+			_, err := client.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+			return err
+		}
+
+		UpdateTestResource := func(ctx context.Context, client dynamic.Interface, namespace, name string, message string) error {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "testresources"}
+			resource, err := client.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			spec, ok := resource.Object["spec"].(map[string]interface{})
+			if !ok {
+				spec = make(map[string]interface{})
+				resource.Object["spec"] = spec
+			}
+			spec["message"] = message
+			_, err = client.Resource(gvr).Namespace(namespace).Update(ctx, resource, metav1.UpdateOptions{})
+			return err
+		}
+
+		ListTestResources := func(ctx context.Context, client dynamic.Interface, namespace string) []string {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "testresources"}
+			list, err := client.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			return lo.Map(list.Items, func(item unstructured.Unstructured, index int) string {
+				return item.GetName()
+			})
+		}
+
+		WatchTestResources := func(ctx context.Context, client dynamic.Interface, namespace string, expected int, timeout time.Duration) []string {
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "testresources"}
+			got := make([]string, 0, expected)
+			watcher, err := client.Resource(gvr).Namespace(namespace).Watch(ctx, metav1.ListOptions{
+				ResourceVersion: "0",
+			})
+			Expect(err).To(Succeed())
+			defer watcher.Stop()
+
+			for e := range watcher.ResultChan() {
+				fmt.Println("Event received:", e.Type, e.Object)
+				resource, ok := e.Object.(*unstructured.Unstructured)
+				if !ok {
+					return got
+				}
+				got = append(got, resource.GetName())
 				if len(got) == expected {
 					return got
 				}
@@ -240,6 +420,107 @@ var _ = Describe("Proxy", func() {
 				// delete
 				Expect(DeletePod(ctx, chaniClient, paulNamespace, paulPod)).To(Not(Succeed()))
 				Expect(DeletePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+			})
+
+			It("supports rules for every verb on custom resources", func(ctx context.Context) {
+				// watch
+				var wg sync.WaitGroup
+				defer wg.Wait()
+				wg.Add(1)
+				go func() {
+					defer GinkgoRecover()
+					Expect(WatchTestResources(ctx, paulDynamicClient, paulNamespace, 1, 10*time.Second)).To(ContainElement(paulCustomResource))
+					wg.Done()
+				}()
+
+				// create
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+				Expect(CreateTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+
+				// get
+				Expect(GetTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+				Expect(GetTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
+
+				// update
+				Expect(UpdateTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource, "updated message")).To(Succeed())
+				Expect(UpdateTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource, "unauthorized update")).To(Not(Succeed()))
+
+				// list
+				Expect(ListTestResources(ctx, paulDynamicClient, paulNamespace)).To(Equal([]string{paulCustomResource}))
+				Expect(ListTestResources(ctx, chaniDynamicClient, paulNamespace)).To(Equal([]string{}))
+
+				// delete
+				Expect(DeleteTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
+				Expect(DeleteTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+			})
+
+			It("filters table format responses for get and list operations", func(ctx context.Context) {
+				// Create namespaces and pods for both users
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+				Expect(CreateNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
+				Expect(CreatePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
+				Expect(CreatePod(ctx, chaniClient, chaniNamespace, chaniPod)).To(Succeed())
+
+				// Paul should be able to get his pod as a table
+				paulTable, err := GetPodAsTable(ctx, paulRestConfig, paulNamespace, paulPod)
+				Expect(err).To(Succeed())
+				Expect(paulTable.Kind).To(Equal("Table"))
+				Expect(len(paulTable.Rows)).To(Equal(1))
+
+				// Extract the pod name from the table row
+				var podObj corev1.Pod
+				err = json.Unmarshal(paulTable.Rows[0].Object.Raw, &podObj)
+				Expect(err).To(Succeed())
+				Expect(podObj.Name).To(Equal(paulPod))
+
+				// Paul should not be able to get Chani's pod as a table (should get unauthorized)
+				chaniTable, err := GetPodAsTable(ctx, paulRestConfig, chaniNamespace, chaniPod)
+				Expect(k8serrors.IsUnauthorized(err)).To(BeTrue())
+				Expect(chaniTable).To(BeNil())
+
+				// Test LIST operations with table format
+				// Create a shared namespace with pods from both users
+				Expect(CreateNamespace(ctx, adminClient, sharedNamespace)).To(Succeed())
+				Expect(CreatePod(ctx, paulClient, sharedNamespace, paulPod)).To(Succeed())
+				Expect(CreatePod(ctx, chaniClient, sharedNamespace, chaniPod)).To(Succeed())
+
+				// Paul should only see his pod in the table list
+				paulListTable, err := ListPodsAsTable(ctx, paulRestConfig, sharedNamespace)
+				Expect(err).To(Succeed())
+				Expect(paulListTable.Kind).To(Equal("Table"))
+				Expect(len(paulListTable.Rows)).To(Equal(1))
+
+				var paulPodFromList corev1.Pod
+				err = json.Unmarshal(paulListTable.Rows[0].Object.Raw, &paulPodFromList)
+				Expect(err).To(Succeed())
+				Expect(paulPodFromList.Name).To(Equal(paulPod))
+
+				// Chani should only see her pod in the table list
+				chaniListTable, err := ListPodsAsTable(ctx, chaniRestConfig, sharedNamespace)
+				Expect(err).To(Succeed())
+				Expect(chaniListTable.Kind).To(Equal("Table"))
+				Expect(len(chaniListTable.Rows)).To(Equal(1))
+
+				var chaniPodFromList corev1.Pod
+				err = json.Unmarshal(chaniListTable.Rows[0].Object.Raw, &chaniPodFromList)
+				Expect(err).To(Succeed())
+				Expect(chaniPodFromList.Name).To(Equal(chaniPod))
+
+				// Admin should see both pods in the table list
+				adminListTable, err := ListPodsAsTable(ctx, adminRestConfig, sharedNamespace)
+				Expect(err).To(Succeed())
+				Expect(adminListTable.Kind).To(Equal("Table"))
+				Expect(len(adminListTable.Rows)).To(Equal(2))
+
+				// Extract pod names from admin's view
+				adminPodNames := make([]string, 0, 2)
+				for _, row := range adminListTable.Rows {
+					var pod corev1.Pod
+					err = json.Unmarshal(row.Object.Raw, &pod)
+					Expect(err).To(Succeed())
+					adminPodNames = append(adminPodNames, pod.Name)
+				}
+				Expect(adminPodNames).To(ContainElements(paulPod, chaniPod))
 			})
 
 			It("doesn't show users namespaces the other has created", func(ctx context.Context) {
@@ -615,6 +896,82 @@ var _ = Describe("Proxy", func() {
 })
 
 var (
+	createTestResource = func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "testresources",
+				Verbs:        []string{"create"},
+			}},
+			Updates: []proxyrule.StringOrTemplate{{
+				Template: "testresource:{{namespacedName}}#creator@user:{{user.Name}}",
+			}, {
+				Template: "testresource:{{name}}#namespace@namespace:{{namespace}}",
+			}},
+		}}
+	}
+
+	deleteTestResource = func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "testresources",
+				Verbs:        []string{"delete"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "testresource:{{namespacedName}}#edit@user:{{user.Name}}",
+			}},
+			Updates: []proxyrule.StringOrTemplate{{
+				Template: "testresource:{{namespacedName}}#creator@user:{{user.Name}}",
+			}, {
+				Template: "testresource:{{name}}#namespace@namespace:{{namespace}}",
+			}},
+		}}
+	}
+
+	getTestResource = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "testresources",
+				Verbs:        []string{"get"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "testresource:{{namespacedName}}#view@user:{{user.Name}}",
+			}},
+		},
+	}
+
+	updateTestResource = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "testresources",
+				Verbs:        []string{"update", "patch"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "testresource:{{namespacedName}}#edit@user:{{user.Name}}",
+			}},
+		},
+	}
+
+	listWatchTestResource = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "testresources",
+				Verbs:        []string{"list", "watch"},
+			}},
+			PreFilters: []proxyrule.PreFilter{{
+				Namespace:  "splitNamespace(resourceId)",
+				Name:       "splitName(resourceId)",
+				ByResource: &proxyrule.StringOrTemplate{Template: "testresource:$resourceID#view@user:{{user.Name}}"},
+			}},
+		},
+	}
+
 	createNamespace = func() proxyrule.Config {
 		return proxyrule.Config{Spec: proxyrule.Spec{
 			Locking: proxyrule.OptimisticLockMode,
@@ -762,6 +1119,11 @@ func testOptimisticMatcher() rules.MapMatcher {
 		getPod,
 		updatePod,
 		listWatchPod,
+		createTestResource(),
+		deleteTestResource(),
+		getTestResource,
+		updateTestResource,
+		listWatchTestResource,
 	})
 	Expect(err).To(Succeed())
 	return matcher
@@ -785,6 +1147,14 @@ func testPessimisticMatcher() rules.MapMatcher {
 	pessimisticDeletePod := deletePod()
 	pessimisticDeletePod.Locking = proxyrule.PessimisticLockMode
 
+	pessimisticCreateTestResource := createTestResource()
+	pessimisticCreateTestResource.Locking = proxyrule.PessimisticLockMode
+	pessimisticCreateTestResource.MustNot = []proxyrule.StringOrTemplate{{
+		Template: "testresource:{{object.metadata.name}}#namespace@namespace:{{request.Namespace}}",
+	}}
+	pessimisticDeleteTestResource := deleteTestResource()
+	pessimisticDeleteTestResource.Locking = proxyrule.PessimisticLockMode
+
 	matcher, err := rules.NewMapMatcher([]proxyrule.Config{
 		pessimisticCreateNamespace,
 		pessimisticDeleteNamespace,
@@ -795,6 +1165,11 @@ func testPessimisticMatcher() rules.MapMatcher {
 		getPod,
 		updatePod,
 		listWatchPod,
+		pessimisticCreateTestResource,
+		pessimisticDeleteTestResource,
+		getTestResource,
+		updateTestResource,
+		listWatchTestResource,
 	})
 	Expect(err).To(Succeed())
 	return matcher

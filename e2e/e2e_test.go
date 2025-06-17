@@ -19,15 +19,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
+	goruntime "runtime"
 	"testing"
 	"time"
 
-	"github.com/go-logr/zapr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/afero"
-	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery/cached/disk"
 	"k8s.io/client-go/informers"
@@ -41,6 +39,7 @@ import (
 	"k8s.io/controller-manager/pkg/informerfactory"
 	"k8s.io/kubernetes/pkg/controller/garbagecollector"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/env"
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/remote"
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/store"
@@ -78,6 +77,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	// this runs only once, no matter how many processes are running tests
 	testEnv = &envtest.Environment{
 		ControlPlaneStopTimeout: 3 * time.Minute,
+		CRDDirectoryPaths:       []string{"testresource-crd.yaml"},
 	}
 
 	ConfigureApiserver()
@@ -149,18 +149,13 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 })
 
 func ConfigureApiserver() {
-	logCfg := zap.NewDevelopmentConfig()
-	logCfg.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	zapLog, err := logCfg.Build()
-	Expect(err).To(Succeed())
-	log := zapr.NewLogger(zapLog)
+	log := zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true))
 
 	e := &env.Env{
 		Log: log,
-		Client: &remote.Client{
-			Log:    log,
-			Bucket: "kubebuilder-tools",
-			Server: "storage.googleapis.com",
+		Client: &remote.HTTPClient{
+			Log:      log,
+			IndexURL: remote.DefaultIndexURL,
 		},
 		Version: versions.Spec{
 			Selector:    versions.TildeSelector{},
@@ -170,15 +165,16 @@ func ConfigureApiserver() {
 		ForceDownload: false,
 		Platform: versions.PlatformItem{
 			Platform: versions.Platform{
-				OS:   runtime.GOOS,
-				Arch: runtime.GOARCH,
+				OS:   goruntime.GOOS,
+				Arch: goruntime.GOARCH,
 			},
 		},
 		FS:    afero.Afero{Fs: afero.NewOsFs()},
 		Store: store.NewAt("../testbin"),
 		Out:   os.Stdout,
 	}
-	e.Version, err = versions.FromExpr("~1.27.0")
+	var err error
+	e.Version, err = versions.FromExpr("~1.33.0")
 	Expect(err).To(Succeed())
 
 	workflows.Use{

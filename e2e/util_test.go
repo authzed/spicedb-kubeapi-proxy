@@ -31,6 +31,6 @@ func GetAllTuples(ctx context.Context, filter *v1.RelationshipFilter) []*v1.Read
 // of tuple strings.
 func RelRespToStrings(relResps []*v1.ReadRelationshipsResponse) []string {
 	return lo.Map(relResps, func(item *v1.ReadRelationshipsResponse, _ int) string {
-		return tuple.MustRelString(item.Relationship)
+		return tuple.MustV1RelString(item.Relationship)
 	})
 }
