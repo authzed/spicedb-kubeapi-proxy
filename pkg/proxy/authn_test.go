@@ -185,8 +185,11 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 		return rules.NewResolveInputFromHttp(req)
 	})
 
-	require.NoError(t, opts.Complete(ctx))
-	proxySrv, err := NewServer(ctx, *opts)
+	c, err := opts.Complete(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, c)
+
+	proxySrv, err := NewServer(ctx, c)
 	require.NoError(t, err)
 
 	// Start the server in a separate context that won't be cancelled until we're done

@@ -28,14 +28,19 @@ func TestKubeConfig(t *testing.T) {
 	opts := optionsForTesting(t)
 	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
-	require.NoError(t, opts.Complete(context.Background()))
+
+	c, err := opts.Complete(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, c)
 
 	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 	opts = optionsForTesting(t)
 	opts.BackendKubeconfigPath = uuid.NewString()
-	err := opts.Complete(context.Background())
+
+	c, err = opts.Complete(context.Background())
 	require.ErrorContains(t, err, "couldn't load kubeconfig")
 	require.ErrorContains(t, err, opts.BackendKubeconfigPath)
+	require.Nil(t, c, "expected nil config on error")
 }
 
 func TestInClusterConfig(t *testing.T) {
@@ -46,9 +51,12 @@ func TestInClusterConfig(t *testing.T) {
 	opts.BackendKubeconfigPath = ""
 	opts.UseInClusterConfig = true
 	require.Empty(t, opts.Validate())
-	err := opts.Complete(context.Background())
+
+	c, err := opts.Complete(context.Background())
 	require.NoError(t, err)
+	require.NotNil(t, c)
 	require.NotNil(t, opts.RestConfigFunc, "missing kube client REST config")
+
 	_, _, err = opts.RestConfigFunc()
 	require.ErrorContains(t, err, "unable to load in-cluster configuration")
 }
@@ -57,7 +65,11 @@ func TestEmbeddedSpiceDB(t *testing.T) {
 	opts := optionsForTesting(t)
 	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
-	require.NoError(t, opts.Complete(context.Background()))
+
+	c, err := opts.Complete(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, c)
+
 	require.NotNil(t, opts.SpiceDBOptions.EmbeddedSpiceDB)
 	require.NotNil(t, opts.PermissionsClient)
 	require.NotNil(t, opts.WatchClient)
@@ -79,13 +91,16 @@ func TestRemoteSpiceDB(t *testing.T) {
 	opts.SpiceDBOptions.Insecure = true
 	opts.SpiceDBOptions.SecureSpiceDBTokensBySpace = "foobar"
 	require.Empty(t, opts.Validate())
-	require.NoError(t, opts.Complete(context.Background()))
+
+	c, err := opts.Complete(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, c)
 
 	require.Nil(t, opts.SpiceDBOptions.EmbeddedSpiceDB)
 	require.NotNil(t, opts.PermissionsClient)
 	require.NotNil(t, opts.WatchClient)
 
-	_, err := opts.PermissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{})
+	_, err = opts.PermissionsClient.CheckPermission(ctx, &v1.CheckPermissionRequest{})
 	grpcutil.RequireStatus(t, codes.InvalidArgument, err)
 }
 
@@ -95,14 +110,19 @@ func TestRemoteSpiceDBCerts(t *testing.T) {
 	opts.SpiceDBOptions.SecureSpiceDBTokensBySpace = "foobar"
 	opts.SpiceDBOptions.SpicedbCAPath = "test"
 	require.Empty(t, opts.Validate())
-	require.ErrorContains(t, opts.Complete(context.Background()), "unable to load custom certificates")
+
+	_, err := opts.Complete(context.Background())
+	require.ErrorContains(t, err, "unable to load custom certificates")
 }
 
 func TestRuleConfig(t *testing.T) {
 	opts := optionsForTesting(t)
 	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
-	require.NoError(t, opts.Complete(context.Background()))
+
+	c, err := opts.Complete(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, c)
 
 	rules := opts.Matcher.Match(&request.RequestInfo{
 		APIGroup:   "authzed.com",
@@ -135,7 +155,9 @@ prefilter:
 	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	opts.RuleConfigFile = errConfigFile
 	require.Empty(t, opts.Validate())
-	require.ErrorContains(t, opts.Complete(context.Background()), "SyntaxError")
+
+	_, err = opts.Complete(context.Background())
+	require.ErrorContains(t, err, "SyntaxError")
 }
 
 func optionsForTesting(t *testing.T) *Options {
