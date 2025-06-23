@@ -49,6 +49,7 @@ type Options struct {
 	Authentication Authentication                                    `debugmap:"hidden"`
 	Logs           *logs.Options                                     `debugmap:"hidden"`
 
+	// TODO: use genericclioptions.ConfigFlags instead of this?
 	BackendKubeconfigPath string                                          `debugmap:"visible"`
 	RestConfigFunc        func() (*rest.Config, http.RoundTripper, error) `debugmap:"hidden"`
 	OverrideUpstream      bool                                            `debugmap:"visible"`
@@ -221,7 +222,7 @@ func (o *Options) Complete(ctx context.Context) error {
 	if err := o.SecureServing.ApplyTo(&o.ServingInfo, &loopbackClientConfig); err != nil {
 		return err
 	}
-	if err := o.Authentication.ApplyTo(&o.AuthenticationInfo, o.ServingInfo); err != nil {
+	if err := o.Authentication.ApplyTo(ctx, &o.AuthenticationInfo, o.ServingInfo); err != nil {
 		return err
 	}
 

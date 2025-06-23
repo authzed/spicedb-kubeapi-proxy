@@ -110,11 +110,11 @@ func (r *RollbackRelationships) Cleanup(ctx workflow.Context) {
 		if _, err := f.Get(ctx); err != nil {
 			if s, ok := status.FromError(err); ok {
 				if s.Code() == codes.InvalidArgument {
-					fmt.Println("unrecoverable error when rolling back tuples", err)
+					klog.ErrorS(err, "unrecoverable error when rolling back tuples")
 					break
 				}
 			}
-			fmt.Println("error rolling back tuples", err)
+			klog.ErrorS(err, "error rolling back tuples")
 			continue
 		}
 		// no error, delete succeeded, exit loop
@@ -168,9 +168,9 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 		arg).Get(ctx)
 	if err != nil {
 		// request failed for some reason
-		fmt.Println("spicedb write failed", err)
+		klog.ErrorS(err, "spicedb write failed")
 		for _, u := range updates {
-			fmt.Println(u.String(), u)
+			klog.V(3).InfoS("update details", "update", u.String(), "relationship", u)
 		}
 
 		rollback.WithRels(updates...).Cleanup(ctx)
@@ -197,7 +197,7 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 			input.toKubeReqInput()).Get(ctx)
 		if err != nil {
 			// didn't get a response from kube, try again
-			fmt.Println("kube write failed", err)
+			klog.V(2).ErrorS(err, "kube write failed, retrying")
 			time.Sleep(backoff.Step())
 			continue
 		}
@@ -264,7 +264,7 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 		}).Get(ctx)
 	if err != nil {
 		rollback.Cleanup(ctx)
-		fmt.Println("SpiceDB WRITE ERR", err)
+		klog.ErrorS(err, "SpiceDB write failed")
 		// report spicedb write errors as conflicts
 		return KubeConflict(err, input), nil
 	}

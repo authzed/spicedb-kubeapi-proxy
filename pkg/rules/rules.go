@@ -12,13 +12,18 @@ import (
 	"github.com/kyverno/go-jmespath"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
-	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/client-go/kubernetes/scheme"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
+)
+
+var (
+	codecs = serializer.NewCodecFactory(scheme.Scheme)
 )
 
 // RequestMeta uniquely identifies the type of request, and is used to find
@@ -159,11 +164,12 @@ func NewResolveInputFromHttp(req *http.Request) (*ResolveInput, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unable to read request body: %w", err)
 		}
-		decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(body), 100)
 		var pom metav1.PartialObjectMetadata
-		if err := decoder.Decode(&pom); err != nil {
+		_, _, err = codecs.UniversalDeserializer().Decode(body, nil, &pom)
+		if err != nil {
 			return nil, fmt.Errorf("unable to decode request body as kube object: %w", err)
 		}
+
 		object = &pom
 
 		req.Body = io.NopCloser(bytes.NewReader(body))

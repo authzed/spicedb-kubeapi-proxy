@@ -100,15 +100,49 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 		ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(200)
-			fmt.Fprintf(w, `{
-				"apiVersion": "v1",
-				"data": {},
-				"kind": "ConfigMap",
-				"metadata": {
-					"name": "auth",
-					"namespace": "ns"
-				}
-			}`)
+
+			// Handle different API discovery and resource requests
+			switch r.URL.Path {
+			case "/api":
+				fmt.Fprintf(w, `{
+					"kind": "APIVersions",
+					"versions": ["v1"],
+					"serverAddressByClientCIDRs": [{"clientCIDR": "0.0.0.0/0", "serverAddress": "127.0.0.1:65471"}]
+				}`)
+			case "/apis":
+				fmt.Fprintf(w, `{
+					"kind": "APIGroupList",
+					"groups": []
+				}`)
+			case "/api/v1":
+				fmt.Fprintf(w, `{
+					"kind": "APIResourceList",
+					"apiVersion": "v1",
+					"groupVersion": "v1",
+					"resources": [
+						{
+							"name": "configmaps",
+							"singularName": "configmap",
+							"namespaced": true,
+							"kind": "ConfigMap",
+							"verbs": ["create", "delete", "deletecollection", "get", "list", "patch", "update", "watch"]
+						}
+					]
+				}`)
+			case "/api/v1/namespaces/ns/configmaps/auth":
+				fmt.Fprintf(w, `{
+					"apiVersion": "v1",
+					"data": {},
+					"kind": "ConfigMap",
+					"metadata": {
+						"name": "auth",
+						"namespace": "ns"
+					}
+				}`)
+			default:
+				// Default response for any other requests
+				fmt.Fprintf(w, `{}`)
+			}
 		}))
 		ts.EnableHTTP2 = true
 		ts.StartTLS()
@@ -155,9 +189,23 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 	proxySrv, err := NewServer(ctx, *opts)
 	require.NoError(t, err)
 
+	// Start the server in a separate context that won't be cancelled until we're done
+	serverCtx, serverCancel := context.WithCancel(context.Background())
+	t.Cleanup(serverCancel)
+
+	serverReady := make(chan struct{})
+	serverDone := make(chan error, 1)
+
 	go func() {
-		proxySrv.Run(ctx)
+		defer close(serverDone)
+		// Wait a bit for the server to be ready to accept connections
+		time.Sleep(100 * time.Millisecond)
+		close(serverReady)
+		serverDone <- proxySrv.Run(serverCtx)
 	}()
+
+	// Wait for the server to be ready
+	<-serverReady
 
 	_, err = client.CoreV1().ConfigMaps("ns").Get(ctx, "auth", metav1.GetOptions{})
 	require.NoError(t, err)

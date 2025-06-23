@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"slices"
 
@@ -218,12 +217,12 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 
 				byteIn, err := json.Marshal(wrapper{ResourceID: u.Relationship.Resource.ObjectId, SubjectID: u.Relationship.Subject.Object.ObjectId})
 				if err != nil {
-					fmt.Println(err)
+					klog.V(3).ErrorS(err, "error marshaling wrapper in filterWatch")
 					return
 				}
 				var data any
 				if err := json.Unmarshal(byteIn, &data); err != nil {
-					fmt.Println(err)
+					klog.V(3).ErrorS(err, "error unmarshaling data in filterWatch")
 					return
 				}
 
