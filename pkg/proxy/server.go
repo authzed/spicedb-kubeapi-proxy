@@ -44,9 +44,13 @@ type Server struct {
 	Matcher        *rules.Matcher
 }
 
-func NewServer(ctx context.Context, o Options) (*Server, error) {
+func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
+	if c == nil {
+		return nil, fmt.Errorf("nil completed config")
+	}
+
 	s := &Server{
-		opts: o,
+		opts: *c.config,
 	}
 
 	var err error
@@ -126,7 +130,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 	workflowClient, worker, err := distributedtx.SetupWithSQLiteBackend(ctx,
 		s.opts.PermissionsClient,
 		s.KubeClient.RESTClient(),
-		o.WorkflowDatabasePath)
+		c.config.WorkflowDatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize distributed transaction handling: %w", err)
 	}
@@ -134,7 +138,7 @@ func NewServer(ctx context.Context, o Options) (*Server, error) {
 
 	// Matcher is a pointer to an interface to make it easy to swap at runtime in tests
 	s.Matcher = &s.opts.Matcher
-	handler, err := authz.WithAuthorization(clusterProxy, failHandler, restMapper, o.PermissionsClient, o.WatchClient, workflowClient, s.Matcher, s.opts.InputExtractor)
+	handler, err := authz.WithAuthorization(clusterProxy, failHandler, restMapper, c.config.PermissionsClient, c.config.WatchClient, workflowClient, s.Matcher, s.opts.InputExtractor)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
 	}

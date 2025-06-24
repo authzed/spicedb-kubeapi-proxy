@@ -126,7 +126,11 @@ func (o *Options) FromConfigFlags(configFlags *genericclioptions.ConfigFlags) *O
 			return nil, nil, fmt.Errorf("unable to load kube REST config: %w", err)
 		}
 
-		return restConfig, restConfig.WrapTransport(http.DefaultTransport), nil
+		transport, err := rest.TransportFor(restConfig)
+		if err != nil {
+			return nil, nil, fmt.Errorf("unable to create transport: %w", err)
+		}
+		return restConfig, transport, nil
 	}
 	return o
 }
@@ -144,9 +148,13 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.RuleConfigFile, "rule-config", "", "The path to a file containing proxy rule configuration")
 }
 
-func (o *Options) Complete(ctx context.Context) error {
+type CompletedConfig struct {
+	config *Options
+}
+
+func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
 	if err := logsv1.ValidateAndApply(o.Logs, utilfeature.DefaultFeatureGate); err != nil {
-		return err
+		return nil, err
 	}
 
 	var err error
@@ -171,7 +179,7 @@ func (o *Options) Complete(ctx context.Context) error {
 		default:
 			backendConfig, err := o.configFromPath()
 			if err != nil {
-				return fmt.Errorf("couldn't load kubeconfig from path: %w", err)
+				return nil, fmt.Errorf("couldn't load kubeconfig from path: %w", err)
 			}
 
 			o.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
@@ -195,15 +203,15 @@ func (o *Options) Complete(ctx context.Context) error {
 	if o.Matcher == nil {
 		ruleFile, err := os.Open(o.RuleConfigFile)
 		if err != nil {
-			return fmt.Errorf("couldn't open rule config file: %w", err)
+			return nil, fmt.Errorf("couldn't open rule config file: %w", err)
 		}
 		ruleConfigs, err := proxyrule.Parse(ruleFile)
 		if err != nil {
-			return fmt.Errorf("couldn't parse rule config file: %w", err)
+			return nil, fmt.Errorf("couldn't parse rule config file: %w", err)
 		}
 		o.Matcher, err = rules.NewMapMatcher(ruleConfigs)
 		if err != nil {
-			return fmt.Errorf("couldn't compile rule configs: %w", err)
+			return nil, fmt.Errorf("couldn't compile rule configs: %w", err)
 		}
 	}
 	if o.InputExtractor == nil {
@@ -215,22 +223,22 @@ func (o *Options) Complete(ctx context.Context) error {
 	}
 
 	if err := o.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}, nil); err != nil {
-		return err
+		return nil, err
 	}
 
 	var loopbackClientConfig *rest.Config
 	if err := o.SecureServing.ApplyTo(&o.ServingInfo, &loopbackClientConfig); err != nil {
-		return err
+		return nil, err
 	}
 	if err := o.Authentication.ApplyTo(ctx, &o.AuthenticationInfo, o.ServingInfo); err != nil {
-		return err
+		return nil, err
 	}
 
 	o.AdditionalAuthEnabled = o.Authentication.AdditionalAuthEnabled()
 
 	spicedbURl, err := url.Parse(o.SpiceDBOptions.SpiceDBEndpoint)
 	if err != nil {
-		return fmt.Errorf("unable to parse SpiceDB endpoint URL: %w", err)
+		return nil, fmt.Errorf("unable to parse SpiceDB endpoint URL: %w", err)
 	}
 
 	var conn *grpc.ClientConn
@@ -238,12 +246,12 @@ func (o *Options) Complete(ctx context.Context) error {
 		klog.FromContext(ctx).WithValues("spicedb-endpoint", spicedbURl).Info("using embedded SpiceDB")
 		o.SpiceDBOptions.EmbeddedSpiceDB, err = spicedb.NewServer(ctx, spicedbURl.Path)
 		if err != nil {
-			return fmt.Errorf("unable to stand up embedded SpiceDB: %w", err)
+			return nil, fmt.Errorf("unable to stand up embedded SpiceDB: %w", err)
 		}
 
 		conn, err = o.SpiceDBOptions.EmbeddedSpiceDB.GRPCDialContext(ctx, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			return fmt.Errorf("unable to open gRPC connection with embedded SpiceDB: %w", err)
+			return nil, fmt.Errorf("unable to open gRPC connection with embedded SpiceDB: %w", err)
 		}
 	} else {
 		klog.FromContext(ctx).WithValues("spicedb-endpoint", o.SpiceDBOptions.SpiceDBEndpoint).
@@ -255,7 +263,7 @@ func (o *Options) Complete(ctx context.Context) error {
 
 		tokens := strings.Split(o.SpiceDBOptions.SecureSpiceDBTokensBySpace, ",")
 		if len(tokens) == 0 {
-			return fmt.Errorf("no SpiceDB token defined")
+			return nil, fmt.Errorf("no SpiceDB token defined")
 		}
 
 		token := strings.TrimSpace(tokens[0])
@@ -272,12 +280,12 @@ func (o *Options) Complete(ctx context.Context) error {
 			if len(o.SpiceDBOptions.SpicedbCAPath) > 0 {
 				certs, err = grpcutil.WithCustomCerts(verification, o.SpiceDBOptions.SpicedbCAPath)
 				if err != nil {
-					return fmt.Errorf("unable to load custom certificates: %w", err)
+					return nil, fmt.Errorf("unable to load custom certificates: %w", err)
 				}
 			} else {
 				certs, err = grpcutil.WithSystemCerts(verification)
 				if err != nil {
-					return fmt.Errorf("unable to load system certificates: %w", err)
+					return nil, fmt.Errorf("unable to load system certificates: %w", err)
 				}
 			}
 
@@ -289,7 +297,7 @@ func (o *Options) Complete(ctx context.Context) error {
 		defer cancel()
 		conn, err = grpc.DialContext(timeoutCtx, o.SpiceDBOptions.SpiceDBEndpoint, opts...)
 		if err != nil {
-			return fmt.Errorf("unable to open gRPC connection to remote SpiceDB at %s: %w", o.SpiceDBOptions.SpiceDBEndpoint, err)
+			return nil, fmt.Errorf("unable to open gRPC connection to remote SpiceDB at %s: %w", o.SpiceDBOptions.SpiceDBEndpoint, err)
 		}
 	}
 
@@ -301,7 +309,7 @@ func (o *Options) Complete(ctx context.Context) error {
 		o.WatchClient = v1.NewWatchServiceClient(conn)
 	}
 
-	return nil
+	return &CompletedConfig{o}, nil
 }
 
 func (o *Options) configFromPath() (*clientcmdapi.Config, error) {

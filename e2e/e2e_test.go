@@ -133,8 +133,11 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	opts.SpiceDBOptions.SpiceDBEndpoint = proxy.EmbeddedSpiceDBEndpoint
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
 	opts.Authentication.BuiltInOptions.ClientCert.ClientCA = clientCA.Path()
-	Expect(opts.Complete(ctx)).To(Succeed())
-	proxySrv, err = proxy.NewServer(ctx, *opts)
+
+	c, err := opts.Complete(ctx)
+	Expect(err).To(Succeed())
+
+	proxySrv, err = proxy.NewServer(ctx, c)
 	Expect(err).To(Succeed())
 
 	// speed up backoff for tests
