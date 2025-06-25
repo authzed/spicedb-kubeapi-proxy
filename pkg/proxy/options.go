@@ -23,7 +23,6 @@ import (
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	apiserveroptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -117,13 +116,12 @@ func NewOptions() *Options {
 	return o
 }
 
-func (o *Options) FromConfigFlags(configFlags *genericclioptions.ConfigFlags) *Options {
+func (o *Options) FromRESTConfig(restConfig *rest.Config) *Options {
 	o.OverrideUpstream = false
 	o.UseInClusterConfig = false
 	o.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
-		restConfig, err := configFlags.ToRESTConfig()
-		if err != nil {
-			return nil, nil, fmt.Errorf("unable to load kube REST config: %w", err)
+		if restConfig == nil {
+			return nil, nil, fmt.Errorf("nil REST config provided")
 		}
 
 		transport, err := rest.TransportFor(restConfig)
