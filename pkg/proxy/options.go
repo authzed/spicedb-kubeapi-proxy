@@ -65,6 +65,9 @@ type Options struct {
 
 	CertDir string `debugmap:"visible"`
 
+	// Embedded mode configuration
+	EmbeddedMode bool `debugmap:"visible"`
+
 	AuthenticationInfo    genericapiserver.AuthenticationInfo `debugmap:"hidden"`
 	ServingInfo           *genericapiserver.SecureServingInfo `debugmap:"hidden"`
 	AdditionalAuthEnabled bool                                `debugmap:"visible"`
@@ -224,18 +227,24 @@ func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
 		o.InputExtractor = rules.ResolveInputExtractorFunc(rules.NewResolveInputFromHttp)
 	}
 
-	if !filepath.IsAbs(o.SecureServing.ServerCert.CertDirectory) {
-		o.SecureServing.ServerCert.CertDirectory = filepath.Join(o.CertDir, o.SecureServing.ServerCert.CertDirectory)
+	// Set embedded mode in authentication
+	o.Authentication.Embedded.Enabled = o.EmbeddedMode
+
+	if !o.EmbeddedMode {
+		if !filepath.IsAbs(o.SecureServing.ServerCert.CertDirectory) {
+			o.SecureServing.ServerCert.CertDirectory = filepath.Join(o.CertDir, o.SecureServing.ServerCert.CertDirectory)
+		}
+
+		if err := o.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}, nil); err != nil {
+			return nil, err
+		}
+
+		var loopbackClientConfig *rest.Config
+		if err := o.SecureServing.ApplyTo(&o.ServingInfo, &loopbackClientConfig); err != nil {
+			return nil, err
+		}
 	}
 
-	if err := o.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}, nil); err != nil {
-		return nil, err
-	}
-
-	var loopbackClientConfig *rest.Config
-	if err := o.SecureServing.ApplyTo(&o.ServingInfo, &loopbackClientConfig); err != nil {
-		return nil, err
-	}
 	if err := o.Authentication.ApplyTo(ctx, &o.AuthenticationInfo, o.ServingInfo); err != nil {
 		return nil, err
 	}
@@ -349,7 +358,7 @@ func (o *Options) configFromPath() (*clientcmdapi.Config, error) {
 func (o *Options) Validate() []error {
 	var errs []error
 
-	if len(o.BackendKubeconfigPath) == 0 && !o.UseInClusterConfig {
+	if len(o.BackendKubeconfigPath) == 0 && !o.UseInClusterConfig && o.RestConfigFunc == nil {
 		errs = append(errs, fmt.Errorf("either --backend-kubeconfig or --use-in-cluster-config must be specified"))
 	}
 
@@ -357,9 +366,9 @@ func (o *Options) Validate() []error {
 		errs = append(errs, fmt.Errorf("--rule-config is required"))
 	}
 
-	errs = append(errs, o.SecureServing.Validate()...)
-	errs = append(errs, o.Authentication.Validate()...)
-
+	if !o.EmbeddedMode {
+		errs = append(errs, o.SecureServing.Validate()...)
+	}
 	return errs
 }
 

@@ -34,6 +34,7 @@ import (
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz/distributedtx"
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/inmemory"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
@@ -77,16 +78,18 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 	clusterHost = restConfig.Host
 	klog.FromContext(ctx).WithValues("host", clusterHost).Info("created upstream client")
 
+	// Embedded mode setup is done after handler is ready
+
 	mux := http.NewServeMux()
 
 	mux.Handle("/readyz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("OK"))
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
 	}))
 
 	mux.Handle("/livez", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("OK"))
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
 	}))
 
 	clusterProxy := &httputil.ReverseProxy{
@@ -172,14 +175,18 @@ func (s *Server) Run(ctx context.Context) error {
 		return s.WorkflowWorker.Start(ctx)
 	})
 
-	g.Go(func() error {
-		done, _, err := s.opts.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
-		if err != nil {
-			return err
-		}
-		<-done
-		return nil
-	})
+	if !s.opts.EmbeddedMode {
+		// For regular mode, use TLS serving
+		g.Go(func() error {
+			done, _, err := s.opts.ServingInfo.Serve(s.Handler, time.Second*60, ctx.Done())
+			if err != nil {
+				return err
+			}
+			<-done
+			return nil
+		})
+	}
+	// For embedded mode, connections are handled on-demand via GetEmbeddedClient()
 
 	if err := g.Wait(); err != nil {
 		ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
@@ -256,3 +263,12 @@ func computeDiscoverCacheDir(parentDir, host string) string {
 
 // overlyCautiousIllegalFileCharacters matches characters that *might* not be supported.  Windows is really restrictive, so this is really restrictive
 var overlyCautiousIllegalFileCharacters = regexp.MustCompile(`[^(\w/.)]`)
+
+// GetEmbeddedClient returns an HTTP client that connects directly to the handler
+func (s *Server) GetEmbeddedClient() *http.Client {
+	if !s.opts.EmbeddedMode || s.Handler == nil {
+		return nil
+	}
+
+	return inmemory.NewClient(s.Handler)
+}
