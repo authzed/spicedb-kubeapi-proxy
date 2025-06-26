@@ -164,14 +164,19 @@ opts := proxy.NewOptions()
 opts.EmbeddedMode = true
 opts.SpiceDBOptions.SpiceDBEndpoint = "embedded://"
 
-// Customize authentication headers (optional)
-opts.Authentication.Embedded.UsernameHeaders = []string{"Custom-User"}
-opts.Authentication.Embedded.GroupHeaders = []string{"Custom-Groups"}
-opts.Authentication.Embedded.ExtraHeaderPrefixes = []string{"Custom-Extra-"}
+// Complete configuration
+completedConfig, _ := opts.Complete(ctx)
+proxySrv, _ := proxy.NewServer(ctx, completedConfig)
 
-// Create and use the embedded proxy
-proxySrv, _ := proxy.NewServer(ctx, *opts)
-client := proxySrv.GetEmbeddedClient()
+// Get client with automatic authentication headers
+client := proxySrv.GetEmbeddedClient(
+    proxy.WithUser("alice"),
+    proxy.WithGroups("developers", "admin"),
+    proxy.WithExtra("department", "engineering"),
+)
+
+// Or get a basic client without authentication
+basicClient := proxySrv.GetEmbeddedClient()
 ```
 
 See [docs/embedding.md](docs/embedding.md) for detailed usage examples.

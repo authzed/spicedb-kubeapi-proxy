@@ -264,11 +264,125 @@ func computeDiscoverCacheDir(parentDir, host string) string {
 // overlyCautiousIllegalFileCharacters matches characters that *might* not be supported.  Windows is really restrictive, so this is really restrictive
 var overlyCautiousIllegalFileCharacters = regexp.MustCompile(`[^(\w/.)]`)
 
+// EmbeddedClientOption configures the embedded client
+type EmbeddedClientOption func(*embeddedClientConfig)
+
+// embeddedClientConfig holds configuration for embedded client
+type embeddedClientConfig struct {
+	username string
+	groups   []string
+	extra    map[string]string
+}
+
+// WithUser sets the username for the embedded client
+func WithUser(username string) EmbeddedClientOption {
+	return func(config *embeddedClientConfig) {
+		config.username = username
+	}
+}
+
+// WithGroups sets the groups for the embedded client
+func WithGroups(groups ...string) EmbeddedClientOption {
+	return func(config *embeddedClientConfig) {
+		config.groups = groups
+	}
+}
+
+// WithExtra sets extra attributes for the embedded client
+func WithExtra(key, value string) EmbeddedClientOption {
+	return func(config *embeddedClientConfig) {
+		if config.extra == nil {
+			config.extra = make(map[string]string)
+		}
+		config.extra[key] = value
+	}
+}
+
 // GetEmbeddedClient returns an HTTP client that connects directly to the handler
-func (s *Server) GetEmbeddedClient() *http.Client {
+func (s *Server) GetEmbeddedClient(opts ...EmbeddedClientOption) *http.Client {
 	if !s.opts.EmbeddedMode || s.Handler == nil {
 		return nil
 	}
 
-	return inmemory.NewClient(s.Handler)
+	// Create base client
+	client := inmemory.NewClient(s.Handler)
+
+	// If no options provided, return basic client
+	if len(opts) == 0 {
+		return client
+	}
+
+	// Apply options to configuration
+	config := &embeddedClientConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	// Get configured header names from embedded authentication
+	usernameHeaders := s.opts.Authentication.Embedded.UsernameHeaders
+	if len(usernameHeaders) == 0 {
+		usernameHeaders = []string{"X-Remote-User"}
+	}
+
+	groupHeaders := s.opts.Authentication.Embedded.GroupHeaders
+	if len(groupHeaders) == 0 {
+		groupHeaders = []string{"X-Remote-Group"}
+	}
+
+	extraHeaderPrefixes := s.opts.Authentication.Embedded.ExtraHeaderPrefixes
+	if len(extraHeaderPrefixes) == 0 {
+		extraHeaderPrefixes = []string{"X-Remote-Extra-"}
+	}
+
+	// Wrap the transport to add authentication headers automatically
+	client.Transport = &authHeaderTransport{
+		base:                client.Transport,
+		username:            config.username,
+		groups:              config.groups,
+		extra:               config.extra,
+		usernameHeaders:     usernameHeaders,
+		groupHeaders:        groupHeaders,
+		extraHeaderPrefixes: extraHeaderPrefixes,
+	}
+
+	return client
+}
+
+// authHeaderTransport automatically adds authentication headers based on configuration
+type authHeaderTransport struct {
+	base                http.RoundTripper
+	username            string
+	groups              []string
+	extra               map[string]string
+	usernameHeaders     []string
+	groupHeaders        []string
+	extraHeaderPrefixes []string
+}
+
+func (t *authHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone request to avoid modifying original
+	newReq := req.Clone(req.Context())
+
+	// Add username header (use first configured header)
+	if t.username != "" && len(t.usernameHeaders) > 0 {
+		newReq.Header.Set(t.usernameHeaders[0], t.username)
+	}
+
+	// Add group headers (use first configured header for all groups)
+	if len(t.groups) > 0 && len(t.groupHeaders) > 0 {
+		for _, group := range t.groups {
+			newReq.Header.Add(t.groupHeaders[0], group)
+		}
+	}
+
+	// Add extra headers (use first configured prefix)
+	if len(t.extra) > 0 && len(t.extraHeaderPrefixes) > 0 {
+		prefix := t.extraHeaderPrefixes[0]
+		for key, value := range t.extra {
+			headerName := prefix + strings.ToLower(key)
+			newReq.Header.Set(headerName, value)
+		}
+	}
+
+	return t.base.RoundTrip(newReq)
 }
