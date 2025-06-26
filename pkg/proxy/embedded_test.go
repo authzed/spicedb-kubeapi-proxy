@@ -19,6 +19,7 @@ import (
 )
 
 func TestEmbeddedMode(t *testing.T) {
+	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 	ctx := t.Context()
 
 	opts := createEmbeddedTestOptions(t)
@@ -258,6 +259,144 @@ func TestEmbeddedModeDefaults(t *testing.T) {
 	// Read body
 	_, err = io.ReadAll(resp.Body)
 	require.NoError(t, err)
+}
+
+func TestEmbeddedClientFunctionalOptions(t *testing.T) {
+	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// Create one proxy server for all subtests to avoid logging config issues
+	opts := createEmbeddedTestOptions(t)
+	completedConfig, err := opts.Complete(ctx)
+	require.NoError(t, err)
+
+	proxySrv, err := NewServer(ctx, completedConfig)
+	require.NoError(t, err)
+
+	t.Run("basic client without options", func(t *testing.T) {
+		client := proxySrv.GetEmbeddedClient()
+		require.NotNil(t, client)
+
+		// Basic client should not add any authentication headers automatically
+		req, err := http.NewRequestWithContext(ctx, "GET", "http://embedded/healthz", nil)
+		require.NoError(t, err)
+
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		require.NotEqual(t, 0, resp.StatusCode)
+		_, err = io.ReadAll(resp.Body)
+		require.NoError(t, err)
+	})
+
+	t.Run("transport adds headers correctly", func(t *testing.T) {
+		// Test the authHeaderTransport directly
+		baseTransport := &testTransport{}
+		transport := &authHeaderTransport{
+			base:                baseTransport,
+			username:            "test-user",
+			groups:              []string{"developers", "admin"},
+			extra:               map[string]string{"department": "engineering", "location": "remote"},
+			usernameHeaders:     []string{"X-Remote-User"},
+			groupHeaders:        []string{"X-Remote-Group"},
+			extraHeaderPrefixes: []string{"X-Remote-Extra-"},
+		}
+
+		req, err := http.NewRequest("GET", "http://example.com/test", nil)
+		require.NoError(t, err)
+
+		_, err = transport.RoundTrip(req)
+		require.NoError(t, err)
+
+		// Check that baseTransport received the request with added headers
+		capturedReq := baseTransport.lastRequest
+		require.NotNil(t, capturedReq)
+
+		// Check username header
+		require.Equal(t, "test-user", capturedReq.Header.Get("X-Remote-User"))
+
+		// Check group headers
+		groups := capturedReq.Header.Values("X-Remote-Group")
+		require.Contains(t, groups, "developers")
+		require.Contains(t, groups, "admin")
+		require.Len(t, groups, 2)
+
+		// Check extra headers
+		require.Equal(t, "engineering", capturedReq.Header.Get("X-Remote-Extra-department"))
+		require.Equal(t, "remote", capturedReq.Header.Get("X-Remote-Extra-location"))
+	})
+
+	t.Run("functional options create correct transport", func(t *testing.T) {
+		client := proxySrv.GetEmbeddedClient(
+			WithUser("alice"),
+			WithGroups("security", "reviewers"),
+			WithExtra("team", "platform"),
+		)
+		require.NotNil(t, client)
+
+		// Check that the transport is wrapped
+		transport, ok := client.Transport.(*authHeaderTransport)
+		require.True(t, ok, "transport should be wrapped with authHeaderTransport")
+
+		// Check configuration
+		require.Equal(t, "alice", transport.username)
+		require.Equal(t, []string{"security", "reviewers"}, transport.groups)
+		require.Equal(t, "platform", transport.extra["team"])
+		require.Equal(t, []string{"X-Remote-User"}, transport.usernameHeaders)
+		require.Equal(t, []string{"X-Remote-Group"}, transport.groupHeaders)
+		require.Equal(t, []string{"X-Remote-Extra-"}, transport.extraHeaderPrefixes)
+	})
+
+}
+
+func TestEmbeddedClientCustomHeaderConfig(t *testing.T) {
+	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// Create proxy with custom header names
+	customOpts := createEmbeddedTestOptions(t)
+	customOpts.Authentication.Embedded.UsernameHeaders = []string{"Custom-User"}
+	customOpts.Authentication.Embedded.GroupHeaders = []string{"Custom-Groups"}
+	customOpts.Authentication.Embedded.ExtraHeaderPrefixes = []string{"Custom-Extra-"}
+
+	customCompletedConfig, err := customOpts.Complete(ctx)
+	require.NoError(t, err)
+
+	customProxySrv, err := NewServer(ctx, customCompletedConfig)
+	require.NoError(t, err)
+
+	client := customProxySrv.GetEmbeddedClient(
+		WithUser("charlie"),
+		WithGroups("security"),
+		WithExtra("team", "infrastructure"),
+	)
+	require.NotNil(t, client)
+
+	// Check that custom header names are used
+	transport, ok := client.Transport.(*authHeaderTransport)
+	require.True(t, ok)
+	require.Equal(t, []string{"Custom-User"}, transport.usernameHeaders)
+	require.Equal(t, []string{"Custom-Groups"}, transport.groupHeaders)
+	require.Equal(t, []string{"Custom-Extra-"}, transport.extraHeaderPrefixes)
+}
+
+// testTransport is a simple transport that captures the last request
+type testTransport struct {
+	lastRequest *http.Request
+}
+
+func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.lastRequest = req
+	return &http.Response{
+		StatusCode: 200,
+		Body:       http.NoBody,
+		Header:     make(http.Header),
+	}, nil
 }
 
 // createEmbeddedTestOptions creates minimal options for embedded testing
