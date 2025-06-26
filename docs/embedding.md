@@ -51,10 +51,15 @@ func main() {
     }
 
     // Get an HTTP client that connects directly to the embedded proxy
-    embeddedClient := proxySrv.GetEmbeddedClient()
+    // Use functional options to automatically add authentication headers
+    embeddedClient := proxySrv.GetEmbeddedClient(
+        proxy.WithUser("my-user"),
+        proxy.WithGroups("my-group", "admin"),
+        proxy.WithExtra("department", "engineering"),
+    )
 
     // Create a Kubernetes client that uses the embedded proxy
-    k8sClient := createKubernetesClient(embeddedClient, "my-user", []string{"my-group"})
+    k8sClient := createKubernetesClient(embeddedClient)
 
     // Use the client normally - all requests go through SpiceDB authorization
     pods, err := k8sClient.CoreV1().Pods("default").List(ctx, metav1.ListOptions{})
@@ -65,19 +70,10 @@ func main() {
     fmt.Printf("Found %d pods\n", len(pods.Items))
 }
 
-func createKubernetesClient(embeddedClient *http.Client, username string, groups []string) *kubernetes.Clientset {
+func createKubernetesClient(embeddedClient *http.Client) *kubernetes.Clientset {
     restConfig := &rest.Config{
         Host:      "http://embedded", // Special URL for embedded mode
         Transport: embeddedClient.Transport,
-    }
-
-    // Add authentication headers
-    restConfig.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
-        return &authTransport{
-            username: username,
-            groups:   groups,
-            rt:       rt,
-        }
     }
 
     k8sClient, err := kubernetes.NewForConfig(restConfig)
@@ -86,22 +82,6 @@ func createKubernetesClient(embeddedClient *http.Client, username string, groups
     }
 
     return k8sClient
-}
-
-type authTransport struct {
-    username string
-    groups   []string
-    rt       http.RoundTripper
-}
-
-func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-    // Add authentication headers (using default header names)
-    // These can be customized using --embedded-* flags
-    req.Header.Set("X-Remote-User", t.username)
-    for _, group := range t.groups {
-        req.Header.Add("X-Remote-Group", group)
-    }
-    return t.base.RoundTrip(req)
 }
 ```
 
@@ -163,14 +143,73 @@ opts.EmbeddedMode = true
 opts.Authentication.Embedded.UsernameHeaders = []string{"Custom-User"}
 opts.Authentication.Embedded.GroupHeaders = []string{"Custom-Groups"}
 opts.Authentication.Embedded.ExtraHeaderPrefixes = []string{"Custom-Extra-"}
-```
 
-Then use custom headers in requests:
-```
-Custom-User: alice
-Custom-Groups: developers
-Custom-Groups: admin
-Custom-Extra-Department: engineering
+// Complete and create the proxy server
+completedConfig, _ := opts.Complete(ctx)
+proxySrv, _ := proxy.NewServer(ctx, completedConfig)
+
+// The client will automatically use the custom header names
+embeddedClient := proxySrv.GetEmbeddedClient(
+    proxy.WithUser("alice"),
+    proxy.WithGroups("developers", "admin"),
+    proxy.WithExtra("department", "engineering"),
+)
+// Headers will be: Custom-User: alice, Custom-Groups: developers, etc.
 ```
 
 This is similar to Kubernetes' request header authentication, but uses a separate dedicated `EmbeddedAuthentication` type for embedded mode and doesn't require client certificate configuration (the requests are trusted because the server is embedded).
+
+### Functional Options for GetEmbeddedClient
+
+The `GetEmbeddedClient()` method supports functional options that automatically add authentication headers based on your configured header names. This eliminates the need to manually add headers to each request:
+
+```go
+// Basic client without authentication
+client := proxySrv.GetEmbeddedClient()
+
+// Client with user authentication
+client := proxySrv.GetEmbeddedClient(
+    proxy.WithUser("alice"),
+)
+
+// Client with user and groups
+client := proxySrv.GetEmbeddedClient(
+    proxy.WithUser("alice"),
+    proxy.WithGroups("developers", "admin", "reviewers"),
+)
+
+// Client with user, groups, and extra attributes
+client := proxySrv.GetEmbeddedClient(
+    proxy.WithUser("alice"),
+    proxy.WithGroups("developers", "admin"),
+    proxy.WithExtra("department", "engineering"),
+    proxy.WithExtra("team", "platform"),
+    proxy.WithExtra("location", "remote"),
+)
+```
+
+The functional options automatically use the header names you've configured in `opts.Authentication.Embedded`. For example, if you've configured custom header names:
+
+```go
+opts.Authentication.Embedded.UsernameHeaders = []string{"My-User"}
+opts.Authentication.Embedded.GroupHeaders = []string{"My-Groups"}
+opts.Authentication.Embedded.ExtraHeaderPrefixes = []string{"My-Extra-"}
+
+// This client will automatically add:
+// My-User: alice
+// My-Groups: developers
+// My-Groups: admin  
+// My-Extra-department: engineering
+client := proxySrv.GetEmbeddedClient(
+    proxy.WithUser("alice"),
+    proxy.WithGroups("developers", "admin"),
+    proxy.WithExtra("department", "engineering"),
+)
+```
+
+Available functional options:
+- `WithUser(username string)`: Sets the username
+- `WithGroups(groups ...string)`: Sets group memberships  
+- `WithExtra(key, value string)`: Sets extra user attributes (can be called multiple times)
+
+This approach provides a clean, type-safe way to configure authentication without manually managing headers.
