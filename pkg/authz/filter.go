@@ -7,7 +7,6 @@ import (
 	"io"
 	"slices"
 
-	"github.com/kyverno/go-jmespath"
 	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -125,7 +124,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 			}
 
 			klog.V(4).InfoS("received list filter event", "event", string(byteIn))
-			name, err := filter.Name.Search(data)
+			name, err := filter.Name.Query(data)
 			if err != nil {
 				handleFilterListError(err)
 				return
@@ -135,15 +134,15 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				return
 			}
 
-			namespace, err := filter.Namespace.Search(data)
+			namespace, err := filter.Namespace.Query(data)
 			if err != nil {
-				if _, ok := err.(jmespath.NotFoundError); !ok {
-					handleFilterListError(err)
-					return
-				}
+				handleFilterListError(err)
+				return
 			}
 			if namespace == nil {
-				namespace, err = filter.Namespace.Search(input)
+				// Convert input to Bloblang format
+				inputData := convertInputToBloblangData(input)
+				namespace, err = filter.Namespace.Query(inputData)
 				if err != nil {
 					handleFilterListError(err)
 					return
@@ -226,9 +225,9 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					return
 				}
 
-				name, err := filter.Name.Search(data)
+				name, err := filter.Name.Query(data)
 				if err != nil {
-					klog.V(3).ErrorS(err, "error on filter.Name.Search")
+					klog.V(3).ErrorS(err, "error on filter.Name.Query")
 					return
 				}
 
@@ -236,9 +235,9 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					return
 				}
 
-				namespace, err := filter.Namespace.Search(data)
+				namespace, err := filter.Namespace.Query(data)
 				if err != nil {
-					klog.V(3).ErrorS(err, "error on filter.Namespace.Search")
+					klog.V(3).ErrorS(err, "error on filter.Namespace.Query")
 					return
 				}
 				if namespace == nil {
@@ -257,4 +256,64 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 			}
 		}
 	}()
+}
+
+// convertInputToBloblangData converts ResolveInput to a format suitable for Bloblang
+func convertInputToBloblangData(input *rules.ResolveInput) any {
+	// Convert to a map structure that Bloblang can navigate
+	data := map[string]any{
+		"name":           input.Name,
+		"namespace":      input.Namespace,
+		"namespacedName": input.NamespacedName,
+		"headers":        input.Headers,
+	}
+	
+	// Convert request info to map
+	if input.Request != nil {
+		data["request"] = map[string]any{
+			"verb":       input.Request.Verb,
+			"apiGroup":   input.Request.APIGroup,
+			"apiVersion": input.Request.APIVersion,
+			"resource":   input.Request.Resource,
+			"name":       input.Request.Name,
+			"namespace":  input.Request.Namespace,
+		}
+	}
+	
+	// Convert user info to map
+	if input.User != nil {
+		data["user"] = map[string]any{
+			"name":   input.User.Name,
+			"uid":    input.User.UID,
+			"groups": input.User.Groups,
+			"extra":  input.User.Extra,
+		}
+	}
+	
+	if input.Object != nil {
+		// Convert ObjectMeta to a simpler map structure for Bloblang
+		labels := make(map[string]any)
+		if input.Object.ObjectMeta.Labels != nil {
+			for k, v := range input.Object.ObjectMeta.Labels {
+				labels[k] = v
+			}
+		}
+		
+		objectData := map[string]any{
+			"metadata": map[string]any{
+				"name":      input.Object.ObjectMeta.Name,
+				"namespace": input.Object.ObjectMeta.Namespace,
+				"labels":    labels,
+			},
+		}
+		data["object"] = objectData
+		// Also add metadata directly for easier access
+		data["metadata"] = objectData["metadata"]
+	}
+	
+	if len(input.Body) > 0 {
+		data["body"] = input.Body
+	}
+	
+	return data
 }

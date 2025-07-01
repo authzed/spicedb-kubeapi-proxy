@@ -64,11 +64,11 @@ type StringOrTemplate struct {
 // of allowed object (name, namespace) pairs ahead of / in parallel with
 // the kube request.
 type PreFilter struct {
-	// Name is a jmespath defining how to construct an allowed Name from an
+	// Name is a Bloblang expression defining how to construct an allowed Name from an
 	// LR or LS response.
 	Name string `json:"name"`
 
-	// Namespace is a jmespath defining how to construct an allowed Namespace
+	// Namespace is a Bloblang expression defining how to construct an allowed Namespace
 	// from an LR or LS response.
 	Namespace string `json:"namespace,omitempty"`
 

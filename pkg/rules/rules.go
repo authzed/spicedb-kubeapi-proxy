@@ -9,12 +9,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/kyverno/go-jmespath"
+	"github.com/warpstreamlabs/bento/public/bloblang"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -103,15 +102,15 @@ type UncompiledRelExpr struct {
 	SubjectRelation  string
 }
 
-// RelExpr represents a relationship with optional JMESExpr
+// RelExpr represents a relationship with optional Bloblang
 // expressions for field values.
 type RelExpr struct {
-	ResourceType     *jmespath.JMESPath
-	ResourceID       *jmespath.JMESPath
-	ResourceRelation *jmespath.JMESPath
-	SubjectType      *jmespath.JMESPath
-	SubjectID        *jmespath.JMESPath
-	SubjectRelation  *jmespath.JMESPath
+	ResourceType     *bloblang.Executor
+	ResourceID       *bloblang.Executor
+	ResourceRelation *bloblang.Executor
+	SubjectType      *bloblang.Executor
+	SubjectID        *bloblang.Executor
+	SubjectRelation  *bloblang.Executor
 }
 
 // ResolvedRel holds values after all expressions have been evaluated.
@@ -219,46 +218,38 @@ func NewResolveInput(req *request.RequestInfo, user *user.DefaultInfo, object *m
 }
 
 func ResolveRel(expr *RelExpr, input *ResolveInput) (*ResolvedRel, error) {
-	// It would be nice to not have to marshal/unmarshal this data, it might
-	// be saner to document a nested map format and use it directly as input.
-	byteIn, err := json.Marshal(input)
-	if err != nil {
-		return nil, fmt.Errorf("error converting input: %w", err)
-	}
-	var data any
-	if err := json.Unmarshal(byteIn, &data); err != nil {
-		return nil, fmt.Errorf("error converting input: %w", err)
-	}
+	// Convert input to interface{} for Bloblang
+	data := convertToBloblangInput(input)
 
-	rt, err := expr.ResourceType.Search(data)
+	rt, err := expr.ResourceType.Query(data)
 	if err != nil {
 		return nil, fmt.Errorf("error resolving relationship: %w", err)
 	}
 	if rt == nil {
 		return nil, fmt.Errorf("error resolving relationship: empty resource type")
 	}
-	ri, err := expr.ResourceID.Search(data)
+	ri, err := expr.ResourceID.Query(data)
 	if err != nil {
 		return nil, fmt.Errorf("error resolving relationship: %w", err)
 	}
 	if ri == nil {
 		return nil, fmt.Errorf("error resolving relationship: empty resource id")
 	}
-	rr, err := expr.ResourceRelation.Search(data)
+	rr, err := expr.ResourceRelation.Query(data)
 	if err != nil {
 		return nil, fmt.Errorf("error resolving relationship: %w", err)
 	}
 	if rr == nil {
 		return nil, fmt.Errorf("error resolving relationship: empty relation")
 	}
-	st, err := expr.SubjectType.Search(data)
+	st, err := expr.SubjectType.Query(data)
 	if err != nil {
 		return nil, fmt.Errorf("error resolving relationship: %w", err)
 	}
 	if st == nil {
 		return nil, fmt.Errorf("error resolving relationship: empty subject type")
 	}
-	si, err := expr.SubjectID.Search(data)
+	si, err := expr.SubjectID.Query(data)
 	if err != nil {
 		return nil, fmt.Errorf("error resolving relationship: %w", err)
 	}
@@ -274,7 +265,7 @@ func ResolveRel(expr *RelExpr, input *ResolveInput) (*ResolvedRel, error) {
 		SubjectID:        si.(string),
 	}
 	if expr.SubjectRelation != nil {
-		sr, err := expr.SubjectRelation.Search(data)
+		sr, err := expr.SubjectRelation.Query(data)
 		if err != nil {
 			return nil, fmt.Errorf("error resolving relationship: %w", err)
 		}
@@ -285,6 +276,67 @@ func ResolveRel(expr *RelExpr, input *ResolveInput) (*ResolvedRel, error) {
 	}
 
 	return rel, nil
+}
+
+// convertToBloblangInput converts ResolveInput to a format suitable for Bloblang
+func convertToBloblangInput(input *ResolveInput) any {
+	// Convert to a map structure that Bloblang can navigate
+	data := map[string]any{
+		"name":           input.Name,
+		"namespace":      input.Namespace,
+		"namespacedName": input.NamespacedName,
+		"resourceId":     input.NamespacedName, // Add resourceId field for compatibility
+		"headers":        input.Headers,
+	}
+
+	// Convert request info to map
+	if input.Request != nil {
+		data["request"] = map[string]any{
+			"verb":       input.Request.Verb,
+			"apiGroup":   input.Request.APIGroup,
+			"apiVersion": input.Request.APIVersion,
+			"resource":   input.Request.Resource,
+			"name":       input.Request.Name,
+			"namespace":  input.Request.Namespace,
+		}
+	}
+
+	// Convert user info to map
+	if input.User != nil {
+		data["user"] = map[string]any{
+			"name":   input.User.Name,
+			"uid":    input.User.UID,
+			"groups": input.User.Groups,
+			"extra":  input.User.Extra,
+		}
+	}
+
+	if input.Object != nil {
+		// Convert ObjectMeta to a simpler map structure for Bloblang
+		labels := make(map[string]any)
+		if input.Object.ObjectMeta.Labels != nil {
+			for k, v := range input.Object.ObjectMeta.Labels {
+				labels[k] = v
+			}
+		}
+
+		objectData := map[string]any{
+			"metadata": map[string]any{
+				"name":      input.Object.ObjectMeta.Name,
+				"namespace": input.Object.ObjectMeta.Namespace,
+				"labels":    labels,
+			},
+		}
+		data["object"] = objectData
+		// Also add metadata directly for easier access
+		data["metadata"] = objectData["metadata"]
+	}
+
+	if len(input.Body) > 0 {
+		data["body"] = input.Body
+	}
+
+	return data
 }
 
 // RunnableRule is a set of checks, writes, and filters with fully compiled
@@ -310,22 +362,22 @@ const (
 // the name/namespace of the kube objects.
 type PreFilter struct {
 	LookupType
-	Name, Namespace *jmespath.JMESPath
+	Name, Namespace *bloblang.Executor
 	Rel             *RelExpr
 }
 
 // ResolvedPreFilter contains a resolved Rel that determines how to make the
-// LR / LS request. Name and Namespace are still jmespath expressions because
-// the operate over the LR / LS response.
+// LR / LS request. Name and Namespace are still Bloblang expressions because
+// they operate over the LR / LS response.
 type ResolvedPreFilter struct {
 	LookupType
-	Name, Namespace *jmespath.JMESPath
+	Name, Namespace *bloblang.Executor
 	Rel             *ResolvedRel
 }
 
 // Compile creates a RunnableRule from a passed in config object. String
 // templates are parsed into relationship template expressions and any
-// jmespath expressions are pre-compiled and stored.
+// Bloblang expressions are pre-compiled and stored.
 func Compile(config proxyrule.Config) (*RunnableRule, error) {
 	runnable := &RunnableRule{
 		LockMode: config.Locking,
@@ -348,22 +400,14 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 		return nil, err
 	}
 	for _, f := range config.PreFilters {
-		name, err := jmespath.Compile(f.Name)
+		name, err := CompileBloblangExpression(f.Name)
 		if err != nil {
 			return nil, err
 		}
-		name.Register(splitName)
-		name.Register(splitNamespace)
-		if f.Namespace == "" {
-			// this will compile to the jmespath expression returning ""
-			f.Namespace = "''"
-		}
-		namespace, err := jmespath.Compile(f.Namespace)
+		namespace, err := CompileBloblangExpression(f.Namespace)
 		if err != nil {
-			return nil, fmt.Errorf("failed to compile jmespath: %w", err)
+			return nil, fmt.Errorf("failed to compile bloblang: %w", err)
 		}
-		namespace.Register(splitName)
-		namespace.Register(splitNamespace)
 		filter := &PreFilter{
 			Name:      name,
 			Namespace: namespace,
@@ -425,28 +469,28 @@ func compileStringOrObjTemplates(tmpls []proxyrule.StringOrTemplate) ([]*RelExpr
 func compileUnparsedRelExpr(u *UncompiledRelExpr) (*RelExpr, error) {
 	expr := RelExpr{}
 	var err error
-	expr.ResourceType, err = CompileJMESPathExpression(u.ResourceType)
+	expr.ResourceType, err = CompileBloblangExpression(u.ResourceType)
 	if err != nil {
 		return nil, fmt.Errorf("error compiling resource type %q: %w", u.ResourceType, err)
 	}
-	expr.ResourceID, err = CompileJMESPathExpression(u.ResourceID)
+	expr.ResourceID, err = CompileBloblangExpression(u.ResourceID)
 	if err != nil {
 		return nil, fmt.Errorf("error compiling resource id %q: %w", u.ResourceID, err)
 	}
-	expr.ResourceRelation, err = CompileJMESPathExpression(u.ResourceRelation)
+	expr.ResourceRelation, err = CompileBloblangExpression(u.ResourceRelation)
 	if err != nil {
 		return nil, fmt.Errorf("error compiling resource relation %q: %w", u.ResourceRelation, err)
 	}
-	expr.SubjectType, err = CompileJMESPathExpression(u.SubjectType)
+	expr.SubjectType, err = CompileBloblangExpression(u.SubjectType)
 	if err != nil {
 		return nil, fmt.Errorf("error compiling subject type %q: %w", u.SubjectType, err)
 	}
-	expr.SubjectID, err = CompileJMESPathExpression(u.SubjectID)
+	expr.SubjectID, err = CompileBloblangExpression(u.SubjectID)
 	if err != nil {
 		return nil, fmt.Errorf("error compiling subject id %q: %w", u.SubjectID, err)
 	}
 	if len(u.SubjectRelation) > 0 {
-		expr.SubjectRelation, err = CompileJMESPathExpression(u.SubjectRelation)
+		expr.SubjectRelation, err = CompileBloblangExpression(u.SubjectRelation)
 		if err != nil {
 			return nil, fmt.Errorf("error compiling subject relation %q: %w", u.SubjectRelation, err)
 		}
@@ -454,20 +498,28 @@ func compileUnparsedRelExpr(u *UncompiledRelExpr) (*RelExpr, error) {
 	return &expr, nil
 }
 
-// CompileJMESPathExpression checks to see if its argument is an expression of
-// the form `{{ ... }}` where ... is a JMESPath expression. If the argument
+// CompileBloblangExpression checks to see if its argument is an expression of
+// the form `{{ ... }}` where ... is a Bloblang expression. If the argument
 // doesn't appear to be an expression, it is returned as a literal expression.
-func CompileJMESPathExpression(expr string) (*jmespath.JMESPath, error) {
+func CompileBloblangExpression(expr string) (*bloblang.Executor, error) {
+	// Special case for empty string
 	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return customBloblangEnv.Parse(`""`)
+	}
+
 	expr, hasPrefix := strings.CutPrefix(expr, "{{")
 	expr, hasSuffix := strings.CutSuffix(expr, "}}")
 	if !hasPrefix || !hasSuffix {
 		// Return the expression that returns a literal
 		// This makes downstream processing simple (everything is an expression)
 		// but is low-hanging fruit for optimization if needed in the future.
-		return jmespath.Compile("'" + expr + "'")
+		if expr == "" {
+			return customBloblangEnv.Parse(`""`)
+		}
+		return customBloblangEnv.Parse(`"` + expr + `"`)
 	}
-	return jmespath.Compile(expr)
+	return customBloblangEnv.Parse(expr)
 }
 
 var relRegex = regexp.MustCompile(
@@ -493,32 +545,4 @@ func ParseRelSring(tpl string) (*UncompiledRelExpr, error) {
 		parsed.SubjectRelation = groups[subjectRelIndex]
 	}
 	return &parsed, nil
-}
-
-var splitName = jmespath.FunctionEntry{
-	Name: "splitName",
-	Arguments: []jmespath.ArgSpec{
-		{Types: []jmespath.JpType{jmespath.JpString}},
-	},
-	Handler: func(arguments []any) (any, error) {
-		_, name, ok := strings.Cut(arguments[0].(string), "/")
-		if !ok {
-			return arguments[0].(string), nil
-		}
-		return name, nil
-	},
-}
-
-var splitNamespace = jmespath.FunctionEntry{
-	Name: "splitNamespace",
-	Arguments: []jmespath.ArgSpec{
-		{Types: []jmespath.JpType{jmespath.JpString}},
-	},
-	Handler: func(arguments []any) (any, error) {
-		namespace, _, ok := strings.Cut(arguments[0].(string), "/")
-		if !ok {
-			return "", nil
-		}
-		return namespace, nil
-	},
 }

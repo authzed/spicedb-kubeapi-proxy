@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/kyverno/go-jmespath"
+	"github.com/warpstreamlabs/bento/public/bloblang"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -14,6 +14,15 @@ import (
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 )
+
+// mustCompileBloblang is a helper function for tests
+func mustCompileBloblang(expr string) *bloblang.Executor {
+	exec, err := bloblang.Parse(expr)
+	if err != nil {
+		panic(fmt.Sprintf("failed to compile bloblang expression %q: %v", expr, err))
+	}
+	return exec
+}
 
 func TestParseRelString(t *testing.T) {
 	tests := []struct {
@@ -69,7 +78,7 @@ func TestParseRelString(t *testing.T) {
 			},
 		},
 		{
-			name: "templated with jmespath features that use special characters",
+			name: "templated with bloblang features that use special characters",
 			tpl:  "org:{{locations[?state == 'WA'].name | sort(@)[0]}}#audit-cluster@user:{{sort_by(Contents, &Date)[*].{Key: Key, Size: Size}}}",
 			want: &UncompiledRelExpr{
 				ResourceType:     "org",
@@ -94,7 +103,7 @@ func TestParseRelString(t *testing.T) {
 	}
 }
 
-func TestCompileJMESPathExpression(t *testing.T) {
+func TestCompileBloblangExpression(t *testing.T) {
 	tests := []struct {
 		name           string
 		expr           string
@@ -122,20 +131,15 @@ func TestCompileJMESPathExpression(t *testing.T) {
 			want: "yes",
 		},
 		{
-			name:           "invalid expression",
-			expr:           "{{.matters}}",
-			data:           []byte(`{"matters": "yes"}`),
-			wantCompileErr: "Invalid token",
-		},
-		{
 			name: "non-matching expression",
 			expr: "{{matters}}",
 			data: []byte(`{"virus": "veryyes"}`),
+			want: nil,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			expr, err := CompileJMESPathExpression(tt.expr)
+			expr, err := CompileBloblangExpression(tt.expr)
 			if len(tt.wantCompileErr) > 0 {
 				require.Contains(t, err.Error(), tt.wantCompileErr)
 				return
@@ -144,7 +148,7 @@ func TestCompileJMESPathExpression(t *testing.T) {
 			}
 			var data interface{}
 			require.NoError(t, json.Unmarshal(tt.data, &data))
-			got, searchErr := expr.Search(data)
+			got, searchErr := expr.Query(data)
 
 			// TODO: not sure how to trigger a search error
 			if len(tt.wantSearchErr) > 0 {
@@ -164,7 +168,11 @@ func TestCompile(t *testing.T) {
 			"name": "testName",
 			"labels": {"org": "testOrg"}
 		},
-		"request": {
+		"user": {
+          "name": "testUser",
+          "groups": ["testGroup"]
+        },
+        "request": {
           "user": "testUser",
           "group": "testGroup"
         }, 
@@ -181,21 +189,21 @@ func TestCompile(t *testing.T) {
 		filters []ResolvedPreFilter
 	}
 
-	mustSearch := func(path *jmespath.JMESPath) any {
-		val, err := path.Search(testData)
+	mustQuery := func(executor *bloblang.Executor) any {
+		val, err := executor.Query(testData)
 		require.NoError(t, err)
 		return val
 	}
 
 	requireEqualUnderTestData := func(exprs []*RelExpr, res []ResolvedRel) {
 		for i, c := range exprs {
-			require.Equal(t, res[i].ResourceType, mustSearch(c.ResourceType))
-			require.Equal(t, res[i].ResourceID, mustSearch(c.ResourceID))
-			require.Equal(t, res[i].ResourceRelation, mustSearch(c.ResourceRelation))
-			require.Equal(t, res[i].SubjectType, mustSearch(c.SubjectType))
-			require.Equal(t, res[i].SubjectID, mustSearch(c.SubjectID))
+			require.Equal(t, res[i].ResourceType, mustQuery(c.ResourceType))
+			require.Equal(t, res[i].ResourceID, mustQuery(c.ResourceID))
+			require.Equal(t, res[i].ResourceRelation, mustQuery(c.ResourceRelation))
+			require.Equal(t, res[i].SubjectType, mustQuery(c.SubjectType))
+			require.Equal(t, res[i].SubjectID, mustQuery(c.SubjectID))
 			if c.SubjectRelation != nil {
-				require.Equal(t, res[i].SubjectRelation, mustSearch(c.SubjectRelation))
+				require.Equal(t, res[i].SubjectRelation, mustQuery(c.SubjectRelation))
 			}
 		}
 	}
@@ -203,8 +211,8 @@ func TestCompile(t *testing.T) {
 	requireFilterEqualUnderTestData := func(t *testing.T, filter []*PreFilter, res []ResolvedPreFilter) {
 		for i, f := range filter {
 			require.Equal(t, f.LookupType, res[i].LookupType)
-			require.Equal(t, mustSearch(res[i].Name), mustSearch(f.Name))
-			require.Equal(t, mustSearch(res[i].Namespace), mustSearch(f.Namespace))
+			require.Equal(t, mustQuery(res[i].Name), mustQuery(f.Name))
+			require.Equal(t, mustQuery(res[i].Namespace), mustQuery(f.Namespace))
 			requireEqualUnderTestData([]*RelExpr{f.Rel}, []ResolvedRel{*res[i].Rel})
 		}
 	}
@@ -225,12 +233,12 @@ func TestCompile(t *testing.T) {
 					Verbs:        []string{"create"},
 				}},
 				Checks: []proxyrule.StringOrTemplate{{
-					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{request.user}}",
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
 				}},
 				Updates: []proxyrule.StringOrTemplate{{
 					Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
 				}, {
-					Template: "wardles:{{metadata.name}}#creator@user:{{request.user}}",
+					Template: "wardles:{{metadata.name}}#creator@user:{{user.name}}",
 				}},
 			}},
 			want: result{
@@ -267,10 +275,10 @@ func TestCompile(t *testing.T) {
 					Verbs:        []string{"list"},
 				}},
 				Checks: []proxyrule.StringOrTemplate{{
-					Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{request.group}}#member",
+					Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{user.groups.index(0)}}#member",
 				}},
 				PreFilters: []proxyrule.PreFilter{{
-					Name: "response.ResourceObjectID",
+					Name: "{{response.ResourceObjectID}}",
 					ByResource: &proxyrule.StringOrTemplate{
 						RelationshipTemplate: &proxyrule.RelationshipTemplate{
 							Resource: proxyrule.ObjectTemplate{
@@ -280,7 +288,7 @@ func TestCompile(t *testing.T) {
 							},
 							Subject: proxyrule.ObjectTemplate{
 								Type: "user",
-								ID:   "{{request.user}}",
+								ID:   "{{user.name}}",
 							},
 						},
 					},
@@ -297,8 +305,8 @@ func TestCompile(t *testing.T) {
 				}},
 				filters: []ResolvedPreFilter{{
 					LookupType: LookupTypeResource,
-					Name:       jmespath.MustCompile("response.ResourceObjectID"),
-					Namespace:  jmespath.MustCompile("''"),
+					Name:       mustCompileBloblang("response.ResourceObjectID"),
+					Namespace:  mustCompileBloblang(`""`),
 					Rel: &ResolvedRel{
 						ResourceType:     "wardles",
 						ResourceID:       "$resourceID",
@@ -445,7 +453,7 @@ func TestResolveRel(t *testing.T) {
 		{
 			name: "basic",
 			expr: &UncompiledRelExpr{
-				ResourceType: "{{user.Name}}",
+				ResourceType: "{{user.name}}",
 			},
 			input: &ResolveInput{
 				Request: nil,
@@ -471,11 +479,11 @@ func TestResolveRel(t *testing.T) {
 		{
 			name: "fully templated",
 			expr: &UncompiledRelExpr{
-				ResourceType:     "{{request.Resource}}",
+				ResourceType:     "{{request.resource}}",
 				ResourceID:       "{{object.metadata.name}}",
 				ResourceRelation: "{{object.metadata.labels.rel}}",
 				SubjectType:      "{{object.metadata.labels.usertype}}",
-				SubjectID:        "{{user.Name}}",
+				SubjectID:        "{{user.name}}",
 				SubjectRelation:  "{{object.metadata.labels.sr}}",
 			},
 			input: &ResolveInput{

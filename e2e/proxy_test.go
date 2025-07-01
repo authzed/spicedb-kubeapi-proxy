@@ -905,7 +905,7 @@ var (
 				Verbs:        []string{"create"},
 			}},
 			Updates: []proxyrule.StringOrTemplate{{
-				Template: "testresource:{{namespacedName}}#creator@user:{{user.Name}}",
+				Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
 			}, {
 				Template: "testresource:{{name}}#namespace@namespace:{{namespace}}",
 			}},
@@ -921,10 +921,10 @@ var (
 				Verbs:        []string{"delete"},
 			}},
 			Checks: []proxyrule.StringOrTemplate{{
-				Template: "testresource:{{namespacedName}}#edit@user:{{user.Name}}",
+				Template: "testresource:{{namespacedName}}#edit@user:{{user.name}}",
 			}},
 			Updates: []proxyrule.StringOrTemplate{{
-				Template: "testresource:{{namespacedName}}#creator@user:{{user.Name}}",
+				Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
 			}, {
 				Template: "testresource:{{name}}#namespace@namespace:{{namespace}}",
 			}},
@@ -939,7 +939,7 @@ var (
 				Verbs:        []string{"get"},
 			}},
 			Checks: []proxyrule.StringOrTemplate{{
-				Template: "testresource:{{namespacedName}}#view@user:{{user.Name}}",
+				Template: "testresource:{{namespacedName}}#view@user:{{user.name}}",
 			}},
 		},
 	}
@@ -952,7 +952,7 @@ var (
 				Verbs:        []string{"update", "patch"},
 			}},
 			Checks: []proxyrule.StringOrTemplate{{
-				Template: "testresource:{{namespacedName}}#edit@user:{{user.Name}}",
+				Template: "testresource:{{namespacedName}}#edit@user:{{user.name}}",
 			}},
 		},
 	}
@@ -965,9 +965,9 @@ var (
 				Verbs:        []string{"list", "watch"},
 			}},
 			PreFilters: []proxyrule.PreFilter{{
-				Namespace:  "splitNamespace(resourceId)",
-				Name:       "splitName(resourceId)",
-				ByResource: &proxyrule.StringOrTemplate{Template: "testresource:$resourceID#view@user:{{user.Name}}"},
+				Namespace:  "{{split_namespace(resourceId)}}",
+				Name:       "{{split_name(resourceId)}}",
+				ByResource: &proxyrule.StringOrTemplate{Template: "testresource:$resourceID#view@user:{{user.name}}"},
 			}},
 		},
 	}
@@ -981,7 +981,7 @@ var (
 				Verbs:        []string{"create"},
 			}},
 			Updates: []proxyrule.StringOrTemplate{{
-				Template: "namespace:{{name}}#creator@user:{{user.Name}}",
+				Template: "namespace:{{name}}#creator@user:{{user.name}}",
 			}, {
 				Template: "namespace:{{name}}#cluster@cluster:cluster",
 			}},
@@ -997,7 +997,7 @@ var (
 				Verbs:        []string{"delete"},
 			}},
 			Updates: []proxyrule.StringOrTemplate{{
-				Template: "namespace:{{name}}#creator@user:{{user.Name}}",
+				Template: "namespace:{{name}}#creator@user:{{user.name}}",
 			}, {
 				Template: "namespace:{{name}}#cluster@cluster:cluster",
 			}},
@@ -1012,7 +1012,7 @@ var (
 				Verbs:        []string{"get"},
 			}},
 			Checks: []proxyrule.StringOrTemplate{{
-				Template: "namespace:{{name}}#view@user:{{user.Name}}",
+				Template: "namespace:{{name}}#view@user:{{user.name}}",
 			}},
 		},
 	}
@@ -1025,8 +1025,8 @@ var (
 				Verbs:        []string{"list", "watch"},
 			}},
 			PreFilters: []proxyrule.PreFilter{{
-				Name:       "resourceId",
-				ByResource: &proxyrule.StringOrTemplate{Template: "namespace:$resourceID#view@user:{{user.Name}}"},
+				Name:       "{{resourceId}}",
+				ByResource: &proxyrule.StringOrTemplate{Template: "namespace:*#view@user:{{user.name}}"},
 			}},
 		},
 	}
@@ -1040,7 +1040,7 @@ var (
 				Verbs:        []string{"create"},
 			}},
 			Updates: []proxyrule.StringOrTemplate{{
-				Template: "pod:{{namespacedName}}#creator@user:{{user.Name}}",
+				Template: "pod:{{namespacedName}}#creator@user:{{user.name}}",
 			}, {
 				Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
 			}},
@@ -1056,10 +1056,10 @@ var (
 				Verbs:        []string{"delete"},
 			}},
 			Checks: []proxyrule.StringOrTemplate{{
-				Template: "pod:{{namespacedName}}#edit@user:{{user.Name}}",
+				Template: "pod:{{namespacedName}}#edit@user:{{user.name}}",
 			}},
 			Updates: []proxyrule.StringOrTemplate{{
-				Template: "pod:{{namespacedName}}#creator@user:{{user.Name}}",
+				Template: "pod:{{namespacedName}}#creator@user:{{user.name}}",
 			}, {
 				Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
 			}},
@@ -1074,7 +1074,7 @@ var (
 				Verbs:        []string{"get"},
 			}},
 			Checks: []proxyrule.StringOrTemplate{{
-				Template: "pod:{{namespacedName}}#view@user:{{user.Name}}",
+				Template: "pod:{{namespacedName}}#view@user:{{user.name}}",
 			}},
 		},
 	}
@@ -1087,7 +1087,7 @@ var (
 				Verbs:        []string{"update", "patch"},
 			}},
 			Checks: []proxyrule.StringOrTemplate{{
-				Template: "pod:{{namespacedName}}#edit@user:{{user.Name}}",
+				Template: "pod:{{namespacedName}}#edit@user:{{user.name}}",
 			}},
 		},
 	}
@@ -1100,9 +1100,9 @@ var (
 				Verbs:        []string{"list", "watch"},
 			}},
 			PreFilters: []proxyrule.PreFilter{{
-				Namespace:  "splitNamespace(resourceId)",
-				Name:       "splitName(resourceId)",
-				ByResource: &proxyrule.StringOrTemplate{Template: "pod:$resourceID#view@user:{{user.Name}}"},
+				Namespace:  "{{split_namespace(resourceId)}}",
+				Name:       "{{split_name(resourceId)}}",
+				ByResource: &proxyrule.StringOrTemplate{Template: "pod:$resourceID#view@user:{{user.name}}"},
 			}},
 		},
 	}
@@ -1142,7 +1142,7 @@ func testPessimisticMatcher() rules.MapMatcher {
 	pessimisticCreatePod := createPod()
 	pessimisticCreatePod.Locking = proxyrule.PessimisticLockMode
 	pessimisticCreatePod.MustNot = []proxyrule.StringOrTemplate{{
-		Template: "pod:{{object.metadata.name}}#namespace@namespace:{{request.Namespace}}",
+		Template: "pod:{{object.metadata.name}}#namespace@namespace:{{request.namespace}}",
 	}}
 	pessimisticDeletePod := deletePod()
 	pessimisticDeletePod.Locking = proxyrule.PessimisticLockMode
@@ -1150,7 +1150,7 @@ func testPessimisticMatcher() rules.MapMatcher {
 	pessimisticCreateTestResource := createTestResource()
 	pessimisticCreateTestResource.Locking = proxyrule.PessimisticLockMode
 	pessimisticCreateTestResource.MustNot = []proxyrule.StringOrTemplate{{
-		Template: "testresource:{{object.metadata.name}}#namespace@namespace:{{request.Namespace}}",
+		Template: "testresource:{{object.metadata.name}}#namespace@namespace:{{request.namespace}}",
 	}}
 	pessimisticDeleteTestResource := deleteTestResource()
 	pessimisticDeleteTestResource.Locking = proxyrule.PessimisticLockMode

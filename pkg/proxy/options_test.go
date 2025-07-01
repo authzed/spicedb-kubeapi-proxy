@@ -145,7 +145,7 @@ match:
   resource: spicedbclusters
   verbs: ["list"]
 prefilter:
-- name: .request.name
+- name: "{{invalid bloblang syntax}}"
   byResource:
     tpl: "org:$resourceID#audit-cluster@user:{{request.user}}"
 `)
@@ -157,7 +157,7 @@ prefilter:
 	require.Empty(t, opts.Validate())
 
 	_, err = opts.Complete(context.Background())
-	require.ErrorContains(t, err, "SyntaxError")
+	require.ErrorContains(t, err, "expected")
 }
 
 func optionsForTesting(t *testing.T) *Options {

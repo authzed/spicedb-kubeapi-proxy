@@ -109,10 +109,10 @@ match:
   resource: spicedbclusters
   verbs: ["create"]
 check:
-- tpl: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}"
+- tpl: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}"
 update:
-- tpl: "spicedbclusters:{{.metadata.name}}#org@org:{{.metadata.labels.org}}"
-- tpl: "spicedbclusters:{{.metadata.name}}#creator@user:{{.request.user}}"
+- tpl: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}"
+- tpl: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}"
 `,
 			expectRules: []Config{{
 				TypeMeta: v1alpha1ProxyRule,
@@ -124,12 +124,12 @@ update:
 						Verbs:        []string{"create"},
 					}},
 					Checks: []StringOrTemplate{{
-						Template: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}",
+						Template: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}",
 					}},
 					Updates: []StringOrTemplate{{
-						Template: "spicedbclusters:{{.metadata.name}}#org@org:{{.metadata.labels.org}}",
+						Template: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}",
 					}, {
-						Template: "spicedbclusters:{{.metadata.name}}#creator@user:{{.request.user}}",
+						Template: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}",
 					}},
 				},
 			}},
@@ -145,10 +145,10 @@ match:
   resource: spicedbclusters
   verbs: ["create"]
 check:
-- tpl: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}"
+- tpl: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}"
 update:
-- tpl: "spicedbclusters:{{.metadata.name}}#org@org:{{.metadata.labels.org}}"
-- tpl: "spicedbclusters:{{.metadata.name}}#creator@user:{{.request.user}}"
+- tpl: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}"
+- tpl: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -173,12 +173,12 @@ prefilter:
 						Verbs:        []string{"create"},
 					}},
 					Checks: []StringOrTemplate{{
-						Template: "org:{{.metadata.labels.org}}#manage-cluster@user:{{.request.user}}",
+						Template: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}",
 					}},
 					Updates: []StringOrTemplate{{
-						Template: "spicedbclusters:{{.metadata.name}}#org@org:{{.metadata.labels.org}}",
+						Template: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}",
 					}, {
-						Template: "spicedbclusters:{{.metadata.name}}#creator@user:{{.request.user}}",
+						Template: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}",
 					}},
 				},
 			}, {

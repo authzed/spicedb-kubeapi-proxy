@@ -299,7 +299,7 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 // specific resource in kube.
 func ResourceLockRel(input *WriteObjInput, workflowID string) *v1.RelationshipUpdate {
 	// Delete names come from the request, Create names come from the object
-	// TODO: this could benefit from an objectid helper shared with jmespath
+	// TODO: this could benefit from an objectid helper shared with bloblang
 	name := input.RequestInfo.Name
 	if input.ObjectMeta != nil {
 		name = input.ObjectMeta.Name
