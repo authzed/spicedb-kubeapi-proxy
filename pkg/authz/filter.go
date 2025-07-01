@@ -12,6 +12,7 @@ import (
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
@@ -27,10 +28,10 @@ func filterResponse(ctx context.Context, matchingRules []*rules.RunnableRule, in
 			}
 
 			filter := &rules.ResolvedPreFilter{
-				LookupType: f.LookupType,
-				Rel:        rel,
-				Name:       f.Name,
-				Namespace:  f.Namespace,
+				LookupType:            f.LookupType,
+				Rel:                   rel,
+				NameFromObjectID:      f.NameFromObjectID,
+				NamespaceFromObjectID: f.NamespaceFromObjectID,
 			}
 
 			switch input.Request.Verb {
@@ -75,6 +76,11 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 		defer authzData.Unlock()
 		defer close(authzData.allowedNNC)
 		defer close(authzData.removedNNC)
+
+		if filter.Rel.ResourceID != proxyrule.MatchingIDFieldValue {
+			handleFilterListError(errors.New("filterList called with non-$ resource ID"))
+			return
+		}
 
 		req := &v1.LookupResourcesRequest{
 			Consistency: &v1.Consistency{
@@ -124,7 +130,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 			}
 
 			klog.V(4).InfoS("received list filter event", "event", string(byteIn))
-			name, err := filter.Name.Query(data)
+			name, err := filter.NameFromObjectID.Query(data)
 			if err != nil {
 				handleFilterListError(err)
 				return
@@ -134,7 +140,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				return
 			}
 
-			namespace, err := filter.Namespace.Query(data)
+			namespace, err := filter.NamespaceFromObjectID.Query(data)
 			if err != nil {
 				handleFilterListError(err)
 				return
@@ -142,7 +148,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 			if namespace == nil {
 				// Convert input to Bloblang format
 				inputData := convertInputToBloblangData(input)
-				namespace, err = filter.Namespace.Query(inputData)
+				namespace, err = filter.NamespaceFromObjectID.Query(inputData)
 				if err != nil {
 					handleFilterListError(err)
 					return
@@ -225,7 +231,7 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					return
 				}
 
-				name, err := filter.Name.Query(data)
+				name, err := filter.NameFromObjectID.Query(data)
 				if err != nil {
 					klog.V(3).ErrorS(err, "error on filter.Name.Query")
 					return
@@ -235,7 +241,7 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					return
 				}
 
-				namespace, err := filter.Namespace.Query(data)
+				namespace, err := filter.NamespaceFromObjectID.Query(data)
 				if err != nil {
 					klog.V(3).ErrorS(err, "error on filter.Namespace.Query")
 					return
@@ -267,7 +273,7 @@ func convertInputToBloblangData(input *rules.ResolveInput) any {
 		"namespacedName": input.NamespacedName,
 		"headers":        input.Headers,
 	}
-	
+
 	// Convert request info to map
 	if input.Request != nil {
 		data["request"] = map[string]any{
@@ -279,7 +285,7 @@ func convertInputToBloblangData(input *rules.ResolveInput) any {
 			"namespace":  input.Request.Namespace,
 		}
 	}
-	
+
 	// Convert user info to map
 	if input.User != nil {
 		data["user"] = map[string]any{
@@ -289,7 +295,7 @@ func convertInputToBloblangData(input *rules.ResolveInput) any {
 			"extra":  input.User.Extra,
 		}
 	}
-	
+
 	if input.Object != nil {
 		// Convert ObjectMeta to a simpler map structure for Bloblang
 		labels := make(map[string]any)
@@ -298,7 +304,7 @@ func convertInputToBloblangData(input *rules.ResolveInput) any {
 				labels[k] = v
 			}
 		}
-		
+
 		objectData := map[string]any{
 			"metadata": map[string]any{
 				"name":      input.Object.ObjectMeta.Name,
@@ -310,10 +316,10 @@ func convertInputToBloblangData(input *rules.ResolveInput) any {
 		// Also add metadata directly for easier access
 		data["metadata"] = objectData["metadata"]
 	}
-	
+
 	if len(input.Body) > 0 {
 		data["body"] = input.Body
 	}
-	
+
 	return data
 }

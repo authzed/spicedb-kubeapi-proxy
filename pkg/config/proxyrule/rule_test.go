@@ -158,10 +158,10 @@ match:
   resource: spicedbclusters
   verbs: ["list"]
 prefilter:
-- name: response.ResourceObjectID
-  namespace: request.Namespace
-  byResource:
-    tpl: "spicedbclusters:$resourceID#view@user:{{request.user}}"
+- fromObjectIDNameExpr: "{{response.ResourceObjectID}}"
+  fromObjectIDNamespaceExpr: "{{request.Namespace}}"
+  lookupMatchingResources:
+    tpl: "spicedbclusters:$#view@user:{{request.user}}"
 `,
 			expectRules: []Config{{
 				TypeMeta: v1alpha1ProxyRule,
@@ -191,9 +191,9 @@ prefilter:
 						Verbs:        []string{"list"},
 					}},
 					PreFilters: []PreFilter{{
-						Name:       "response.ResourceObjectID",
-						Namespace:  "request.Namespace",
-						ByResource: &StringOrTemplate{Template: "spicedbclusters:$resourceID#view@user:{{request.user}}"},
+						FromObjectIDNameExpr:      "{{response.ResourceObjectID}}",
+						FromObjectIDNamespaceExpr: "{{request.Namespace}}",
+						LookupMatchingResources:   &StringOrTemplate{Template: "spicedbclusters:$#view@user:{{request.user}}"},
 					}},
 				},
 			}},

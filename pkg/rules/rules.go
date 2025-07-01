@@ -11,6 +11,7 @@ import (
 
 	"github.com/warpstreamlabs/bento/public/bloblang"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
@@ -219,7 +220,10 @@ func NewResolveInput(req *request.RequestInfo, user *user.DefaultInfo, object *m
 
 func ResolveRel(expr *RelExpr, input *ResolveInput) (*ResolvedRel, error) {
 	// Convert input to interface{} for Bloblang
-	data := convertToBloblangInput(input)
+	data, err := convertToBloblangInput(input)
+	if err != nil {
+		return nil, fmt.Errorf("error converting input to bloblang input: %w", err)
+	}
 
 	rt, err := expr.ResourceType.Query(data)
 	if err != nil {
@@ -279,7 +283,7 @@ func ResolveRel(expr *RelExpr, input *ResolveInput) (*ResolvedRel, error) {
 }
 
 // convertToBloblangInput converts ResolveInput to a format suitable for Bloblang
-func convertToBloblangInput(input *ResolveInput) any {
+func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 	// Convert to a map structure that Bloblang can navigate
 	data := map[string]any{
 		"name":           input.Name,
@@ -320,15 +324,16 @@ func convertToBloblangInput(input *ResolveInput) any {
 			}
 		}
 
-		objectData := map[string]any{
-			"metadata": map[string]any{
-				"name":      input.Object.ObjectMeta.Name,
-				"namespace": input.Object.ObjectMeta.Namespace,
-				"labels":    labels,
-			},
+		obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(input.Object)
+		if err != nil {
+			return nil, fmt.Errorf("error converting object metadata to unstructured: %w", err)
 		}
+
+		objectData := map[string]any{
+			"metadata": obj["metadata"],
+		}
+
 		data["object"] = objectData
-		// Also add metadata directly for easier access
 		data["metadata"] = objectData["metadata"]
 	}
 
@@ -336,7 +341,7 @@ func convertToBloblangInput(input *ResolveInput) any {
 		data["body"] = input.Body
 	}
 
-	return data
+	return data, nil
 }
 
 // RunnableRule is a set of checks, writes, and filters with fully compiled
@@ -355,15 +360,14 @@ type LookupType uint8
 
 const (
 	LookupTypeResource = iota
-	LookupTypeSubject
 )
 
 // PreFilter defines a filter that returns values that will be used to filter
 // the name/namespace of the kube objects.
 type PreFilter struct {
 	LookupType
-	Name, Namespace *bloblang.Executor
-	Rel             *RelExpr
+	NameFromObjectID, NamespaceFromObjectID *bloblang.Executor
+	Rel                                     *RelExpr
 }
 
 // ResolvedPreFilter contains a resolved Rel that determines how to make the
@@ -371,8 +375,8 @@ type PreFilter struct {
 // they operate over the LR / LS response.
 type ResolvedPreFilter struct {
 	LookupType
-	Name, Namespace *bloblang.Executor
-	Rel             *ResolvedRel
+	NameFromObjectID, NamespaceFromObjectID *bloblang.Executor
+	Rel                                     *ResolvedRel
 }
 
 // Compile creates a RunnableRule from a passed in config object. String
@@ -400,34 +404,42 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 		return nil, err
 	}
 	for _, f := range config.PreFilters {
-		name, err := CompileBloblangExpression(f.Name)
+		name, err := CompileBloblangExpression(f.FromObjectIDNameExpr)
 		if err != nil {
 			return nil, err
 		}
-		namespace, err := CompileBloblangExpression(f.Namespace)
+		namespace, err := CompileBloblangExpression(f.FromObjectIDNamespaceExpr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compile bloblang: %w", err)
 		}
 		filter := &PreFilter{
-			Name:      name,
-			Namespace: namespace,
+			NameFromObjectID:      name,
+			NamespaceFromObjectID: namespace,
 		}
-		if f.ByResource != nil {
-			byResource, err := compileStringOrObjTemplates([]proxyrule.StringOrTemplate{*f.ByResource})
+		if f.LookupMatchingResources != nil {
+			byResource, err := compileStringOrObjTemplates([]proxyrule.StringOrTemplate{*f.LookupMatchingResources})
 			if err != nil {
 				return nil, err
 			}
+			if len(byResource) != 1 {
+				return nil, fmt.Errorf("pre-filter must have exactly one LookupMatchingResources template")
+			}
+
+			processedResourceID, err := byResource[0].ResourceID.Query(map[string]any{"resourceId": "$"})
+			if err != nil {
+				return nil, fmt.Errorf("error processing resource ID in LookupMatchingResources: %w", err)
+			}
+
+			if processedResourceID != proxyrule.MatchingIDFieldValue {
+				return nil, fmt.Errorf("LookupMatchingResources resourceID must be set to $ to match all resources, got %q", processedResourceID)
+			}
+
 			filter.Rel = byResource[0]
 			filter.LookupType = LookupTypeResource
+		} else {
+			return nil, fmt.Errorf("pre-filter must have LookupMatchingResources defined")
 		}
-		if f.BySubject != nil {
-			bySubject, err := compileStringOrObjTemplates([]proxyrule.StringOrTemplate{*f.BySubject})
-			if err != nil {
-				return nil, err
-			}
-			filter.Rel = bySubject[0]
-			filter.LookupType = LookupTypeSubject
-		}
+
 		runnable.PreFilter = append(runnable.PreFilter, filter)
 	}
 

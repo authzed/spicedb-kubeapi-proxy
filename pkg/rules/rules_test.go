@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/warpstreamlabs/bento/public/bloblang"
 	"github.com/stretchr/testify/require"
+	"github.com/warpstreamlabs/bento/public/bloblang"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -136,6 +136,12 @@ func TestCompileBloblangExpression(t *testing.T) {
 			data: []byte(`{"virus": "veryyes"}`),
 			want: nil,
 		},
+		{
+			name:           "invalid expression",
+			expr:           "{{.matters}}",
+			data:           []byte(`{"matters": "yes"}`),
+			wantCompileErr: "expected import, map, or assignment",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -211,8 +217,8 @@ func TestCompile(t *testing.T) {
 	requireFilterEqualUnderTestData := func(t *testing.T, filter []*PreFilter, res []ResolvedPreFilter) {
 		for i, f := range filter {
 			require.Equal(t, f.LookupType, res[i].LookupType)
-			require.Equal(t, mustQuery(res[i].Name), mustQuery(f.Name))
-			require.Equal(t, mustQuery(res[i].Namespace), mustQuery(f.Namespace))
+			require.Equal(t, mustQuery(res[i].NameFromObjectID), mustQuery(f.NameFromObjectID))
+			require.Equal(t, mustQuery(res[i].NamespaceFromObjectID), mustQuery(f.NamespaceFromObjectID))
 			requireEqualUnderTestData([]*RelExpr{f.Rel}, []ResolvedRel{*res[i].Rel})
 		}
 	}
@@ -278,12 +284,12 @@ func TestCompile(t *testing.T) {
 					Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{user.groups.index(0)}}#member",
 				}},
 				PreFilters: []proxyrule.PreFilter{{
-					Name: "{{response.ResourceObjectID}}",
-					ByResource: &proxyrule.StringOrTemplate{
+					FromObjectIDNameExpr: "{{response.ResourceObjectID}}",
+					LookupMatchingResources: &proxyrule.StringOrTemplate{
 						RelationshipTemplate: &proxyrule.RelationshipTemplate{
 							Resource: proxyrule.ObjectTemplate{
 								Type:     "wardles",
-								ID:       "$resourceID",
+								ID:       "$",
 								Relation: "view",
 							},
 							Subject: proxyrule.ObjectTemplate{
@@ -304,12 +310,12 @@ func TestCompile(t *testing.T) {
 					SubjectRelation:  "member",
 				}},
 				filters: []ResolvedPreFilter{{
-					LookupType: LookupTypeResource,
-					Name:       mustCompileBloblang("response.ResourceObjectID"),
-					Namespace:  mustCompileBloblang(`""`),
+					LookupType:            LookupTypeResource,
+					NameFromObjectID:      mustCompileBloblang("response.ResourceObjectID"),
+					NamespaceFromObjectID: mustCompileBloblang(`""`),
 					Rel: &ResolvedRel{
 						ResourceType:     "wardles",
-						ResourceID:       "$resourceID",
+						ResourceID:       "$",
 						ResourceRelation: "view",
 						SubjectType:      "user",
 						SubjectID:        "testUser",
@@ -317,11 +323,72 @@ func TestCompile(t *testing.T) {
 				}},
 			},
 		},
+		{
+			name: "prefilter with non-$ resource ID",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"list"},
+				}},
+				PreFilters: []proxyrule.PreFilter{{
+					FromObjectIDNameExpr: "{{response.ResourceObjectID}}",
+					LookupMatchingResources: &proxyrule.StringOrTemplate{
+						RelationshipTemplate: &proxyrule.RelationshipTemplate{
+							Resource: proxyrule.ObjectTemplate{
+								Type:     "wardles",
+								ID:       "invalid-id",
+								Relation: "view",
+							},
+							Subject: proxyrule.ObjectTemplate{
+								Type: "user",
+								ID:   "{{user.name}}",
+							},
+						},
+					},
+				}},
+			}},
+			wantErr: fmt.Errorf("LookupMatchingResources resourceID must be set to $ to match all resources, got \"invalid-id\""),
+		},
+		{
+			name: "prefilter with template expression evaluating to literal value",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"list"},
+				}},
+				PreFilters: []proxyrule.PreFilter{{
+					FromObjectIDNameExpr: "{{response.ResourceObjectID}}",
+					LookupMatchingResources: &proxyrule.StringOrTemplate{
+						RelationshipTemplate: &proxyrule.RelationshipTemplate{
+							Resource: proxyrule.ObjectTemplate{
+								Type:     "wardles",
+								ID:       `{{"literal-value"}}`,
+								Relation: "view",
+							},
+							Subject: proxyrule.ObjectTemplate{
+								Type: "user",
+								ID:   "{{user.name}}",
+							},
+						},
+					},
+				}},
+			}},
+			wantErr: fmt.Errorf("LookupMatchingResources resourceID must be set to $ to match all resources, got \"literal-value\""),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := Compile(tt.config)
-			require.Equal(t, tt.wantErr, err)
+			if tt.wantErr != nil {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.wantErr.Error())
+				return
+			}
+			require.NoError(t, err)
 
 			requireEqualUnderTestData(got.Checks, tt.want.checks)
 			requireEqualUnderTestData(got.Updates, tt.want.updates)
@@ -357,12 +424,12 @@ func TestMapMatcherMatch(t *testing.T) {
 			Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{request.group}}#member",
 		}},
 		PreFilters: []proxyrule.PreFilter{{
-			Name: "response.ResourceObjectID",
-			ByResource: &proxyrule.StringOrTemplate{
+			FromObjectIDNameExpr: "response.ResourceObjectID",
+			LookupMatchingResources: &proxyrule.StringOrTemplate{
 				RelationshipTemplate: &proxyrule.RelationshipTemplate{
 					Resource: proxyrule.ObjectTemplate{
 						Type:     "wardles",
-						ID:       "$resourceID",
+						ID:       "$",
 						Relation: "view",
 					},
 					Subject: proxyrule.ObjectTemplate{

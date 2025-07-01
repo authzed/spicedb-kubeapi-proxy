@@ -38,9 +38,9 @@ match:
   resource: namespaces
   verbs: ["list", "watch"]
 prefilter:
-- name: "{{resourceId}}"
-  byResource:
-    tpl: "namespace:{{resourceId}}#view@user:{{user.name}}"
+- fromObjectIDNameExpr: "{{resourceId}}"
+  lookupMatchingResources:
+    tpl: "namespace:$#view@user:{{user.name}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -82,7 +82,7 @@ match:
   resource: pods
   verbs: ["list", "watch"]
 prefilter:
-- namespace: "{{split_namespace(resourceId)}}"
-  name: "{{split_name(resourceId)}}"
-  byResource:
-    tpl: "pod:{{resourceId}}#view@user:{{user.name}}"
+- fromObjectIDNamespaceExpr: "{{split_namespace(resourceId)}}"
+  fromObjectIDNameExpr: "{{split_name(resourceId)}}"
+  lookupMatchingResources:
+    tpl: "pod:$#view@user:{{user.name}}"

@@ -965,9 +965,9 @@ var (
 				Verbs:        []string{"list", "watch"},
 			}},
 			PreFilters: []proxyrule.PreFilter{{
-				Namespace:  "{{split_namespace(resourceId)}}",
-				Name:       "{{split_name(resourceId)}}",
-				ByResource: &proxyrule.StringOrTemplate{Template: "testresource:$resourceID#view@user:{{user.name}}"},
+				FromObjectIDNamespaceExpr: "{{split_namespace(resourceId)}}",
+				FromObjectIDNameExpr:      "{{split_name(resourceId)}}",
+				LookupMatchingResources:   &proxyrule.StringOrTemplate{Template: "testresource:$#view@user:{{user.name}}"},
 			}},
 		},
 	}
@@ -1025,8 +1025,8 @@ var (
 				Verbs:        []string{"list", "watch"},
 			}},
 			PreFilters: []proxyrule.PreFilter{{
-				Name:       "{{resourceId}}",
-				ByResource: &proxyrule.StringOrTemplate{Template: "namespace:*#view@user:{{user.name}}"},
+				FromObjectIDNameExpr:    "{{resourceId}}",
+				LookupMatchingResources: &proxyrule.StringOrTemplate{Template: "namespace:$#view@user:{{user.name}}"},
 			}},
 		},
 	}
@@ -1100,9 +1100,9 @@ var (
 				Verbs:        []string{"list", "watch"},
 			}},
 			PreFilters: []proxyrule.PreFilter{{
-				Namespace:  "{{split_namespace(resourceId)}}",
-				Name:       "{{split_name(resourceId)}}",
-				ByResource: &proxyrule.StringOrTemplate{Template: "pod:$resourceID#view@user:{{user.name}}"},
+				FromObjectIDNamespaceExpr: "{{split_namespace(resourceId)}}",
+				FromObjectIDNameExpr:      "{{split_name(resourceId)}}",
+				LookupMatchingResources:   &proxyrule.StringOrTemplate{Template: "pod:$#view@user:{{user.name}}"},
 			}},
 		},
 	}
