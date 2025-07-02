@@ -904,11 +904,13 @@ var (
 				Resource:     "testresources",
 				Verbs:        []string{"create"},
 			}},
-			Updates: []proxyrule.StringOrTemplate{{
-				Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
-			}, {
-				Template: "testresource:{{name}}#namespace@namespace:{{namespace}}",
-			}},
+			Update: proxyrule.Update{
+				CreateRelationships: []proxyrule.StringOrTemplate{{
+					Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
+				}, {
+					Template: "testresource:{{name}}#namespace@namespace:{{namespace}}",
+				}},
+			},
 		}}
 	}
 
@@ -923,11 +925,13 @@ var (
 			Checks: []proxyrule.StringOrTemplate{{
 				Template: "testresource:{{namespacedName}}#edit@user:{{user.name}}",
 			}},
-			Updates: []proxyrule.StringOrTemplate{{
-				Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
-			}, {
-				Template: "testresource:{{name}}#namespace@namespace:{{namespace}}",
-			}},
+			Update: proxyrule.Update{
+				DeleteRelationships: []proxyrule.StringOrTemplate{{
+					Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
+				}, {
+					Template: "testresource:{{name}}#namespace@namespace:{{namespace}}",
+				}},
+			},
 		}}
 	}
 
@@ -980,11 +984,13 @@ var (
 				Resource:     "namespaces",
 				Verbs:        []string{"create"},
 			}},
-			Updates: []proxyrule.StringOrTemplate{{
-				Template: "namespace:{{name}}#creator@user:{{user.name}}",
-			}, {
-				Template: "namespace:{{name}}#cluster@cluster:cluster",
-			}},
+			Update: proxyrule.Update{
+				CreateRelationships: []proxyrule.StringOrTemplate{{
+					Template: "namespace:{{name}}#creator@user:{{user.name}}",
+				}, {
+					Template: "namespace:{{name}}#cluster@cluster:cluster",
+				}},
+			},
 		}}
 	}
 
@@ -996,11 +1002,13 @@ var (
 				Resource:     "namespaces",
 				Verbs:        []string{"delete"},
 			}},
-			Updates: []proxyrule.StringOrTemplate{{
-				Template: "namespace:{{name}}#creator@user:{{user.name}}",
-			}, {
-				Template: "namespace:{{name}}#cluster@cluster:cluster",
-			}},
+			Update: proxyrule.Update{
+				DeleteRelationships: []proxyrule.StringOrTemplate{{
+					Template: "namespace:{{name}}#creator@user:{{user.name}}",
+				}, {
+					Template: "namespace:{{name}}#cluster@cluster:cluster",
+				}},
+			},
 		}}
 	}
 
@@ -1039,11 +1047,13 @@ var (
 				Resource:     "pods",
 				Verbs:        []string{"create"},
 			}},
-			Updates: []proxyrule.StringOrTemplate{{
-				Template: "pod:{{namespacedName}}#creator@user:{{user.name}}",
-			}, {
-				Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
-			}},
+			Update: proxyrule.Update{
+				CreateRelationships: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{namespacedName}}#creator@user:{{user.name}}",
+				}, {
+					Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
+				}},
+			},
 		}}
 	}
 
@@ -1058,11 +1068,13 @@ var (
 			Checks: []proxyrule.StringOrTemplate{{
 				Template: "pod:{{namespacedName}}#edit@user:{{user.name}}",
 			}},
-			Updates: []proxyrule.StringOrTemplate{{
-				Template: "pod:{{namespacedName}}#creator@user:{{user.name}}",
-			}, {
-				Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
-			}},
+			Update: proxyrule.Update{
+				DeleteRelationships: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{namespacedName}}#creator@user:{{user.name}}",
+				}, {
+					Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
+				}},
+			},
 		}}
 	}
 
@@ -1131,7 +1143,7 @@ func testOptimisticMatcher() rules.MapMatcher {
 
 func testPessimisticMatcher() rules.MapMatcher {
 	pessimisticCreateNamespace := createNamespace()
-	pessimisticCreateNamespace.MustNot = []proxyrule.StringOrTemplate{{
+	pessimisticCreateNamespace.Update.PreconditionDoesNotExist = []proxyrule.StringOrTemplate{{
 		Template: "namespace:{{object.metadata.name}}#cluster@cluster:cluster",
 	}}
 	pessimisticCreateNamespace.Locking = proxyrule.PessimisticLockMode
@@ -1141,7 +1153,7 @@ func testPessimisticMatcher() rules.MapMatcher {
 
 	pessimisticCreatePod := createPod()
 	pessimisticCreatePod.Locking = proxyrule.PessimisticLockMode
-	pessimisticCreatePod.MustNot = []proxyrule.StringOrTemplate{{
+	pessimisticCreatePod.Update.PreconditionDoesNotExist = []proxyrule.StringOrTemplate{{
 		Template: "pod:{{object.metadata.name}}#namespace@namespace:{{request.namespace}}",
 	}}
 	pessimisticDeletePod := deletePod()
@@ -1149,7 +1161,7 @@ func testPessimisticMatcher() rules.MapMatcher {
 
 	pessimisticCreateTestResource := createTestResource()
 	pessimisticCreateTestResource.Locking = proxyrule.PessimisticLockMode
-	pessimisticCreateTestResource.MustNot = []proxyrule.StringOrTemplate{{
+	pessimisticCreateTestResource.Update.PreconditionDoesNotExist = []proxyrule.StringOrTemplate{{
 		Template: "testresource:{{object.metadata.name}}#namespace@namespace:{{request.namespace}}",
 	}}
 	pessimisticDeleteTestResource := deleteTestResource()

@@ -349,10 +349,16 @@ func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 type RunnableRule struct {
 	LockMode  proxyrule.LockMode
 	Checks    []*RelExpr
-	Must      []*RelExpr
-	MustNot   []*RelExpr
-	Updates   []*RelExpr
+	Update    *UpdateSet
 	PreFilter []*PreFilter
+}
+
+type UpdateSet struct {
+	MustExist    []*RelExpr
+	MustNotExist []*RelExpr
+	Creates      []*RelExpr
+	Touches      []*RelExpr
+	Deletes      []*RelExpr
 }
 
 // LookupType defines whether an LR or LS request is made for a filter
@@ -391,18 +397,72 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	runnable.Must, err = compileStringOrObjTemplates(config.Must)
-	if err != nil {
-		return nil, err
+
+	var updateSet *UpdateSet
+
+	if config.Update.PreconditionExists != nil {
+		if updateSet == nil {
+			updateSet = &UpdateSet{}
+		}
+
+		must, err := compileStringOrObjTemplates(config.Update.PreconditionExists)
+		if err != nil {
+			return nil, err
+		}
+		updateSet.MustExist = must
 	}
-	runnable.MustNot, err = compileStringOrObjTemplates(config.MustNot)
-	if err != nil {
-		return nil, err
+
+	if config.Update.PreconditionDoesNotExist != nil {
+		if updateSet == nil {
+			updateSet = &UpdateSet{}
+		}
+
+		mustNot, err := compileStringOrObjTemplates(config.Update.PreconditionDoesNotExist)
+		if err != nil {
+			return nil, err
+		}
+		updateSet.MustNotExist = mustNot
 	}
-	runnable.Updates, err = compileStringOrObjTemplates(config.Updates)
-	if err != nil {
-		return nil, err
+
+	if config.Update.CreateRelationships != nil {
+		if updateSet == nil {
+			updateSet = &UpdateSet{}
+		}
+
+		creates, err := compileStringOrObjTemplates(config.Update.CreateRelationships)
+		if err != nil {
+			return nil, err
+		}
+		updateSet.Creates = creates
 	}
+
+	if config.Update.TouchRelationships != nil {
+		if updateSet == nil {
+			updateSet = &UpdateSet{}
+		}
+
+		touches, err := compileStringOrObjTemplates(config.Update.TouchRelationships)
+		if err != nil {
+			return nil, err
+		}
+		updateSet.Touches = touches
+	}
+
+	if config.Update.DeleteRelationships != nil {
+		if updateSet == nil {
+			updateSet = &UpdateSet{}
+		}
+
+		deletes, err := compileStringOrObjTemplates(config.Update.DeleteRelationships)
+		if err != nil {
+			return nil, err
+		}
+
+		updateSet.Deletes = deletes
+	}
+
+	runnable.Update = updateSet
+
 	for _, f := range config.PreFilters {
 		name, err := CompileBloblangExpression(f.FromObjectIDNameExpr)
 		if err != nil {

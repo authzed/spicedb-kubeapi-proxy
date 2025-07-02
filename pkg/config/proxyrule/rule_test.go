@@ -33,20 +33,21 @@ check:
     type: user
     id: request.user
 update:
-- resource:
-    type: spicedbclusters
-    id: metadata.name
-    relation: org
-  subject:
-    type: org
-    id: metadata.labels.org
-- resource:
-    type: spicedbclusters
-    id: metadata.name
-    relation: creator
-  subject:
-    type: user
-    id: request.user
+  creates:
+  - resource:
+      type: spicedbclusters
+      id: metadata.name
+      relation: org
+    subject:
+      type: org
+      id: metadata.labels.org
+  - resource:
+      type: spicedbclusters
+      id: metadata.name
+      relation: creator
+    subject:
+      type: user
+      id: request.user
 `,
 			expectRules: []Config{{
 				TypeMeta: v1alpha1ProxyRule,
@@ -70,31 +71,33 @@ update:
 							},
 						},
 					}},
-					Updates: []StringOrTemplate{{
-						RelationshipTemplate: &RelationshipTemplate{
-							Resource: ObjectTemplate{
-								Type:     "spicedbclusters",
-								ID:       "metadata.name",
-								Relation: "org",
+					Update: Update{
+						CreateRelationships: []StringOrTemplate{{
+							RelationshipTemplate: &RelationshipTemplate{
+								Resource: ObjectTemplate{
+									Type:     "spicedbclusters",
+									ID:       "metadata.name",
+									Relation: "org",
+								},
+								Subject: ObjectTemplate{
+									Type: "org",
+									ID:   "metadata.labels.org",
+								},
 							},
-							Subject: ObjectTemplate{
-								Type: "org",
-								ID:   "metadata.labels.org",
+						}, {
+							RelationshipTemplate: &RelationshipTemplate{
+								Resource: ObjectTemplate{
+									Type:     "spicedbclusters",
+									ID:       "metadata.name",
+									Relation: "creator",
+								},
+								Subject: ObjectTemplate{
+									Type: "user",
+									ID:   "request.user",
+								},
 							},
-						},
-					}, {
-						RelationshipTemplate: &RelationshipTemplate{
-							Resource: ObjectTemplate{
-								Type:     "spicedbclusters",
-								ID:       "metadata.name",
-								Relation: "creator",
-							},
-							Subject: ObjectTemplate{
-								Type: "user",
-								ID:   "request.user",
-							},
-						},
-					}},
+						}},
+					},
 				},
 			}},
 		},
@@ -111,8 +114,9 @@ match:
 check:
 - tpl: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}"
 update:
-- tpl: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}"
-- tpl: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}"
+  creates:
+  - tpl: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}"
+  - tpl: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}"
 `,
 			expectRules: []Config{{
 				TypeMeta: v1alpha1ProxyRule,
@@ -126,11 +130,13 @@ update:
 					Checks: []StringOrTemplate{{
 						Template: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}",
 					}},
-					Updates: []StringOrTemplate{{
-						Template: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}",
-					}, {
-						Template: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}",
-					}},
+					Update: Update{
+						CreateRelationships: []StringOrTemplate{{
+							Template: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}",
+						}, {
+							Template: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}",
+						}},
+					},
 				},
 			}},
 		},
@@ -147,8 +153,9 @@ match:
 check:
 - tpl: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}"
 update:
-- tpl: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}"
-- tpl: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}"
+  creates:
+  - tpl: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}"
+  - tpl: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -175,11 +182,13 @@ prefilter:
 					Checks: []StringOrTemplate{{
 						Template: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}",
 					}},
-					Updates: []StringOrTemplate{{
-						Template: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}",
-					}, {
-						Template: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}",
-					}},
+					Update: Update{
+						CreateRelationships: []StringOrTemplate{{
+							Template: "spicedbclusters:{{metadata.name}}#org@org:{{metadata.labels.org}}",
+						}, {
+							Template: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}",
+						}},
+					},
 				},
 			}, {
 				TypeMeta: v1alpha1ProxyRule,

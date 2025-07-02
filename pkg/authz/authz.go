@@ -62,8 +62,15 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 		}
 
 		// if this request is a write, perform the dual write and return
-		if rule := getWriteRule(matchingRules); rule != nil {
-			if err := write(ctx, w, rule, input, workflowClient); err != nil {
+		rule, err := getSingleUpdateRule(matchingRules)
+		if err != nil {
+			klog.V(2).ErrorS(err, "unable to get single update rule", "input", input)
+			handleError(w, failed, req, err)
+			return
+		}
+
+		if rule != nil {
+			if err := performUpdate(ctx, w, rule, input, workflowClient); err != nil {
 				handleError(w, failed, req, err)
 				return
 			}

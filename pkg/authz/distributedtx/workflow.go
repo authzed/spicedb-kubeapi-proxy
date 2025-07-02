@@ -40,13 +40,16 @@ var KubeBackoff = wait.Backoff{
 }
 
 type WriteObjInput struct {
-	RequestInfo   *request.RequestInfo
-	Header        http.Header
-	UserInfo      *user.DefaultInfo
-	ObjectMeta    *metav1.ObjectMeta
-	UpdateRels    []*v1.Relationship
-	Preconditions []*v1.Precondition
-	Body          []byte
+	RequestInfo *request.RequestInfo
+	Header      http.Header
+	UserInfo    *user.DefaultInfo
+	ObjectMeta  *metav1.ObjectMeta
+	Body        []byte
+
+	Preconditions       []*v1.Precondition
+	CreateRelationships []*v1.Relationship
+	TouchRelationships  []*v1.Relationship
+	DeleteRelationships []*v1.Relationship
 }
 
 func (input *WriteObjInput) validate() error {
@@ -143,16 +146,22 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 	}
 	preconditions = append(preconditions, input.Preconditions...)
 
-	rels := input.UpdateRels
-	operation := v1.RelationshipUpdate_OPERATION_TOUCH
-	if input.RequestInfo.Verb == "delete" {
-		operation = v1.RelationshipUpdate_OPERATION_DELETE
-	}
-
-	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
-	for _, r := range rels {
+	updates := make([]*v1.RelationshipUpdate, 0, len(input.CreateRelationships)+len(input.TouchRelationships)+len(input.DeleteRelationships))
+	for _, r := range input.CreateRelationships {
 		updates = append(updates, &v1.RelationshipUpdate{
-			Operation:    operation,
+			Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
+			Relationship: r,
+		})
+	}
+	for _, r := range input.TouchRelationships {
+		updates = append(updates, &v1.RelationshipUpdate{
+			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
+			Relationship: r,
+		})
+	}
+	for _, r := range input.DeleteRelationships {
+		updates = append(updates, &v1.RelationshipUpdate{
+			Operation:    v1.RelationshipUpdate_OPERATION_DELETE,
 			Relationship: r,
 		})
 	}
@@ -241,16 +250,22 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 	}
 
 	// TODO: this could optionally use dry-run to preflight the kube request
-	rels := input.UpdateRels
-	operation := v1.RelationshipUpdate_OPERATION_CREATE
-	if input.RequestInfo.Verb == "delete" {
-		operation = v1.RelationshipUpdate_OPERATION_DELETE
-	}
-
-	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
-	for _, r := range rels {
+	updates := make([]*v1.RelationshipUpdate, 0, len(input.CreateRelationships)+len(input.TouchRelationships)+len(input.DeleteRelationships))
+	for _, r := range input.CreateRelationships {
 		updates = append(updates, &v1.RelationshipUpdate{
-			Operation:    operation,
+			Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
+			Relationship: r,
+		})
+	}
+	for _, r := range input.TouchRelationships {
+		updates = append(updates, &v1.RelationshipUpdate{
+			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
+			Relationship: r,
+		})
+	}
+	for _, r := range input.DeleteRelationships {
+		updates = append(updates, &v1.RelationshipUpdate{
+			Operation:    v1.RelationshipUpdate_OPERATION_DELETE,
 			Relationship: r,
 		})
 	}

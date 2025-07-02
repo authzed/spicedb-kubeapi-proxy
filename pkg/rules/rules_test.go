@@ -190,9 +190,13 @@ func TestCompile(t *testing.T) {
 	require.NoError(t, json.Unmarshal(testDataBytes, &testData))
 
 	type result struct {
-		checks  []ResolvedRel
-		updates []ResolvedRel
-		filters []ResolvedPreFilter
+		checks         []ResolvedRel
+		creates        []ResolvedRel
+		touches        []ResolvedRel
+		deletes        []ResolvedRel
+		mustExist      []ResolvedRel
+		mustNotExist   []ResolvedRel
+		filters        []ResolvedPreFilter
 	}
 
 	mustQuery := func(executor *bloblang.Executor) any {
@@ -241,11 +245,13 @@ func TestCompile(t *testing.T) {
 				Checks: []proxyrule.StringOrTemplate{{
 					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
 				}},
-				Updates: []proxyrule.StringOrTemplate{{
-					Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
-				}, {
-					Template: "wardles:{{metadata.name}}#creator@user:{{user.name}}",
-				}},
+				Update: proxyrule.Update{
+					CreateRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
+					}, {
+						Template: "wardles:{{metadata.name}}#creator@user:{{user.name}}",
+					}},
+				},
 			}},
 			want: result{
 				checks: []ResolvedRel{{
@@ -255,7 +261,7 @@ func TestCompile(t *testing.T) {
 					SubjectType:      "user",
 					SubjectID:        "testUser",
 				}},
-				updates: []ResolvedRel{{
+				creates: []ResolvedRel{{
 					ResourceType:     "wardles",
 					ResourceID:       "testName",
 					ResourceRelation: "org",
@@ -321,6 +327,174 @@ func TestCompile(t *testing.T) {
 						SubjectID:        "testUser",
 					},
 				}},
+			},
+		},
+		{
+			name: "rule with touches and deletes",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"update"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					TouchRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#last-modified@user:{{user.name}}",
+					}},
+					DeleteRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#temp-access@user:*",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org", 
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				touches: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName", 
+					ResourceRelation: "last-modified",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletes: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "temp-access", 
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "rule with preconditions",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"delete"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					PreconditionExists: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#creator@user:{{user.name}}",
+					}},
+					PreconditionDoesNotExist: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#protected@user:*",
+					}},
+					DeleteRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#creator@user:{{user.name}}",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg", 
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				mustExist: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "creator",
+					SubjectType:      "user", 
+					SubjectID:        "testUser",
+				}},
+				mustNotExist: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "protected",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				deletes: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "creator", 
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "complex rule with all update types",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"patch"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					PreconditionExists: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#exists@user:*",
+					}},
+					CreateRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#patched-by@user:{{user.name}}",
+					}},
+					TouchRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#last-modified@user:{{user.name}}",
+					}},
+					DeleteRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#old-data@user:*",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles", 
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				mustExist: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "exists",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				creates: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName", 
+					ResourceRelation: "patched-by",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				touches: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "last-modified",
+					SubjectType:      "user",
+					SubjectID:        "testUser", 
+				}},
+				deletes: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "old-data",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				filters: []ResolvedPreFilter{},
 			},
 		},
 		{
@@ -391,7 +565,23 @@ func TestCompile(t *testing.T) {
 			require.NoError(t, err)
 
 			requireEqualUnderTestData(got.Checks, tt.want.checks)
-			requireEqualUnderTestData(got.Updates, tt.want.updates)
+			if got.Update != nil {
+				if got.Update.Creates != nil {
+					requireEqualUnderTestData(got.Update.Creates, tt.want.creates)
+				}
+				if got.Update.Touches != nil {
+					requireEqualUnderTestData(got.Update.Touches, tt.want.touches)
+				}
+				if got.Update.Deletes != nil {
+					requireEqualUnderTestData(got.Update.Deletes, tt.want.deletes)
+				}
+				if got.Update.MustExist != nil {
+					requireEqualUnderTestData(got.Update.MustExist, tt.want.mustExist)
+				}
+				if got.Update.MustNotExist != nil {
+					requireEqualUnderTestData(got.Update.MustNotExist, tt.want.mustNotExist)
+				}
+			}
 			requireFilterEqualUnderTestData(t, got.PreFilter, tt.want.filters)
 		})
 	}
@@ -408,11 +598,13 @@ func TestMapMatcherMatch(t *testing.T) {
 		Checks: []proxyrule.StringOrTemplate{{
 			Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{request.user}}",
 		}},
-		Updates: []proxyrule.StringOrTemplate{{
-			Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
-		}, {
-			Template: "wardles:{{metadata.name}}#creator@user:{{request.user}}",
-		}},
+		Update: proxyrule.Update{
+			CreateRelationships: []proxyrule.StringOrTemplate{{
+				Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
+			}, {
+				Template: "wardles:{{metadata.name}}#creator@user:{{request.user}}",
+			}},
+		},
 	}}, {Spec: proxyrule.Spec{
 		Locking: proxyrule.PessimisticLockMode,
 		Matches: []proxyrule.Match{{
@@ -447,7 +639,7 @@ func TestMapMatcherMatch(t *testing.T) {
 		name        string
 		match       *request.RequestInfo
 		wantChecks  int
-		wantUpdates int
+		wantCreates int
 		wantFilters int
 	}{
 		{
@@ -459,7 +651,7 @@ func TestMapMatcherMatch(t *testing.T) {
 				Verb:       "create",
 			},
 			wantChecks:  1,
-			wantUpdates: 2,
+			wantCreates: 2,
 		},
 		{
 			name: "non-matching create request",
@@ -496,14 +688,16 @@ func TestMapMatcherMatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := m.Match(tt.match)
-			var totalCheck, totalUpdate, totalFilter int
+			var totalCheck, totalCreate, totalFilter int
 			for _, r := range got {
 				totalCheck += len(r.Checks)
-				totalUpdate += len(r.Updates)
+				if r.Update != nil && r.Update.Creates != nil {
+					totalCreate += len(r.Update.Creates)
+				}
 				totalFilter += len(r.PreFilter)
 			}
 			require.Equal(t, tt.wantChecks, totalCheck)
-			require.Equal(t, tt.wantUpdates, totalUpdate)
+			require.Equal(t, tt.wantCreates, totalCreate)
 			require.Equal(t, tt.wantFilters, totalFilter)
 		})
 	}
