@@ -145,9 +145,9 @@ match:
   resource: spicedbclusters
   verbs: ["list"]
 prefilter:
-- name: .request.name
-  byResource:
-    tpl: "org:$resourceID#audit-cluster@user:{{request.user}}"
+- fromObjectIDNameExpr: "{{invalid bloblang syntax}}"
+  lookupMatchingResources:
+    tpl: "org:$#audit-cluster@user:{{request.user}}"
 `)
 	errConfigFile := path.Join(t.TempDir(), "rulesbad.yaml")
 	require.NoError(t, os.WriteFile(errConfigFile, errConfigBytes, 0o600))
@@ -157,7 +157,7 @@ prefilter:
 	require.Empty(t, opts.Validate())
 
 	_, err = opts.Complete(context.Background())
-	require.ErrorContains(t, err, "SyntaxError")
+	require.ErrorContains(t, err, "expected")
 }
 
 func optionsForTesting(t *testing.T) *Options {
@@ -244,9 +244,9 @@ match:
   resource: spicedbclusters 
   verbs: ["list"]
 prefilter:
-- name: request.name
-  byResource:
-    tpl: "org:$resourceID#audit-cluster@user:{{request.user}}"
+- fromObjectIDNameExpr: "{{request.name}}"
+  lookupMatchingResources:
+    tpl: "org:$#audit-cluster@user:{{request.user}}"
 `)
 	configFile := path.Join(t.TempDir(), "rules.yaml")
 	require.NoError(t, os.WriteFile(configFile, configBytes, 0o600))

@@ -8,7 +8,7 @@ match:
 mustNot:
 - tpl: "namespace:{{name}}#cluster@cluster:cluster"
 update:
-- tpl: "namespace:{{name}}#creator@user:{{user.Name}}"
+- tpl: "namespace:{{name}}#creator@user:{{user.name}}"
 - tpl: "namespace:{{name}}#cluster@cluster:cluster"
 ---
 apiVersion: authzed.com/v1alpha1
@@ -19,7 +19,7 @@ match:
   resource: namespaces
   verbs: ["delete"]
 update:
-- tpl: "namespace:{{name}}#creator@user:{{user.Name}}"
+- tpl: "namespace:{{name}}#creator@user:{{user.name}}"
 - tpl: "namespace:{{name}}#cluster@cluster:cluster"
 ---
 apiVersion: authzed.com/v1alpha1
@@ -29,7 +29,7 @@ match:
   resource: namespaces
   verbs: ["get"]
 check:
-- tpl: "namespace:{{name}}#view@user:{{user.Name}}"
+- tpl: "namespace:{{name}}#view@user:{{user.name}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -38,9 +38,9 @@ match:
   resource: namespaces
   verbs: ["list", "watch"]
 prefilter:
-- name: "resourceId"
-  byResource:
-    tpl: "namespace:$resourceID#view@user:{{user.Name}}"
+- fromObjectIDNameExpr: "{{resourceId}}"
+  lookupMatchingResources:
+    tpl: "namespace:$#view@user:{{user.name}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -52,7 +52,7 @@ match:
 mustNot:
 - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 update:
-- tpl: "pod:{{namespacedName}}#creator@user:{{user.Name}}"
+- tpl: "pod:{{namespacedName}}#creator@user:{{user.name}}"
 - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 ---
 apiVersion: authzed.com/v1alpha1
@@ -63,7 +63,7 @@ match:
   resource: pods
   verbs: ["delete"]
 update:
-- tpl: "pod:{{namespacedName}}#creator@user:{{user.Name}}"
+- tpl: "pod:{{namespacedName}}#creator@user:{{user.name}}"
 - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 ---
 apiVersion: authzed.com/v1alpha1
@@ -73,7 +73,7 @@ match:
   resource: pods
   verbs: ["get"]
 check:
-- tpl: "pod:{{namespacedName}}#view@user:{{user.Name}}"
+- tpl: "pod:{{namespacedName}}#view@user:{{user.name}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -82,7 +82,7 @@ match:
   resource: pods
   verbs: ["list", "watch"]
 prefilter:
-- namespace: "splitNamespace(resourceId)"
-  name: "splitName(resourceId)"
-  byResource:
-    tpl: "pod:$resourceID#view@user:{{user.Name}}"
+- fromObjectIDNamespaceExpr: "{{split_namespace(resourceId)}}"
+  fromObjectIDNameExpr: "{{split_name(resourceId)}}"
+  lookupMatchingResources:
+    tpl: "pod:$#view@user:{{user.name}}"
