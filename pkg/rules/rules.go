@@ -354,11 +354,12 @@ type RunnableRule struct {
 }
 
 type UpdateSet struct {
-	MustExist    []*RelExpr
-	MustNotExist []*RelExpr
-	Creates      []*RelExpr
-	Touches      []*RelExpr
-	Deletes      []*RelExpr
+	MustExist       []*RelExpr
+	MustNotExist    []*RelExpr
+	Creates         []*RelExpr
+	Touches         []*RelExpr
+	Deletes         []*RelExpr
+	DeletesByFilter []*RelExpr
 }
 
 // LookupType defines whether an LR or LS request is made for a filter
@@ -395,19 +396,16 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 	var err error
 	runnable.Checks, err = compileStringOrObjTemplates(config.Checks)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error compiling checks: %w", err)
 	}
 
 	var updateSet *UpdateSet
 
 	if config.Update.PreconditionExists != nil {
-		if updateSet == nil {
-			updateSet = &UpdateSet{}
-		}
-
+		updateSet = &UpdateSet{}
 		must, err := compileStringOrObjTemplates(config.Update.PreconditionExists)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error compiling preconditionExists: %w", err)
 		}
 		updateSet.MustExist = must
 	}
@@ -419,7 +417,7 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 
 		mustNot, err := compileStringOrObjTemplates(config.Update.PreconditionDoesNotExist)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error compiling preconditionDoesNotExist: %w", err)
 		}
 		updateSet.MustNotExist = mustNot
 	}
@@ -431,7 +429,7 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 
 		creates, err := compileStringOrObjTemplates(config.Update.CreateRelationships)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error compiling createRelationships: %w", err)
 		}
 		updateSet.Creates = creates
 	}
@@ -455,10 +453,23 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 
 		deletes, err := compileStringOrObjTemplates(config.Update.DeleteRelationships)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error compiling deleteRelationships: %w", err)
 		}
 
 		updateSet.Deletes = deletes
+	}
+
+	if config.Update.DeleteByFilter != nil {
+		if updateSet == nil {
+			updateSet = &UpdateSet{}
+		}
+
+		deletesByFilter, err := compileStringOrObjTemplates(config.Update.DeleteByFilter)
+		if err != nil {
+			return nil, fmt.Errorf("error compiling deleteByFilter: %w", err)
+		}
+
+		updateSet.DeletesByFilter = deletesByFilter
 	}
 
 	runnable.Update = updateSet
@@ -466,7 +477,7 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 	for _, f := range config.PreFilters {
 		name, err := CompileBloblangExpression(f.FromObjectIDNameExpr)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to compile bloblang: %w", err)
 		}
 		namespace, err := CompileBloblangExpression(f.FromObjectIDNamespaceExpr)
 		if err != nil {
@@ -479,7 +490,7 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 		if f.LookupMatchingResources != nil {
 			byResource, err := compileStringOrObjTemplates([]proxyrule.StringOrTemplate{*f.LookupMatchingResources})
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("error compiling LookupMatchingResources: %w", err)
 			}
 			if len(byResource) != 1 {
 				return nil, fmt.Errorf("pre-filter must have exactly one LookupMatchingResources template")
@@ -603,7 +614,7 @@ var relRegex = regexp.MustCompile(
 func ParseRelSring(tpl string) (*UncompiledRelExpr, error) {
 	groups := relRegex.FindStringSubmatch(tpl)
 	if len(groups) == 0 {
-		return nil, fmt.Errorf("invalid template")
+		return nil, fmt.Errorf("invalid template: `%s`", tpl)
 	}
 	parsed := UncompiledRelExpr{
 		ResourceType:     groups[slices.Index(relRegex.SubexpNames(), "resourceType")],

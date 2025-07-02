@@ -194,6 +194,7 @@ func TestCompile(t *testing.T) {
 		creates        []ResolvedRel
 		touches        []ResolvedRel
 		deletes        []ResolvedRel
+		deletesByFilter []ResolvedRel
 		mustExist      []ResolvedRel
 		mustNotExist   []ResolvedRel
 		filters        []ResolvedPreFilter
@@ -498,6 +499,152 @@ func TestCompile(t *testing.T) {
 			},
 		},
 		{
+			name: "rule with delete by filter",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"delete"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					DeleteByFilter: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#*@user:{{user.name}}",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletesByFilter: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "*",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "rule with multiple delete by filter operations",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"update"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					DeleteByFilter: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#temp-access@user:*",
+					}, {
+						Template: "wardles:{{metadata.name}}#legacy-perm@group:*",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletesByFilter: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "temp-access",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}, {
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "legacy-perm",
+					SubjectType:      "group",
+					SubjectID:        "*",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "rule with delete by filter and other operations",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"patch"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					CreateRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#updated-by@user:{{user.name}}",
+					}},
+					TouchRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#last-modified@user:{{user.name}}",
+					}},
+					DeleteRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#old-state@user:{{user.name}}",
+					}},
+					DeleteByFilter: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#temp-*@user:*",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				creates: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "updated-by",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				touches: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "last-modified",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletes: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "old-state",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletesByFilter: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "temp-*",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
 			name: "prefilter with non-$ resource ID",
 			config: proxyrule.Config{Spec: proxyrule.Spec{
 				Locking: proxyrule.PessimisticLockMode,
@@ -574,6 +721,9 @@ func TestCompile(t *testing.T) {
 				}
 				if got.Update.Deletes != nil {
 					requireEqualUnderTestData(got.Update.Deletes, tt.want.deletes)
+				}
+				if got.Update.DeletesByFilter != nil {
+					requireEqualUnderTestData(got.Update.DeletesByFilter, tt.want.deletesByFilter)
 				}
 				if got.Update.MustExist != nil {
 					requireEqualUnderTestData(got.Update.MustExist, tt.want.mustExist)

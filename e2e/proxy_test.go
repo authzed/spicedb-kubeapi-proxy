@@ -97,6 +97,12 @@ var _ = Describe("Proxy", func() {
 			_ = adminDynamicClient.Resource(gvr).Namespace(sharedNamespace).Delete(ctx, paulCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
 			_ = adminDynamicClient.Resource(gvr).Namespace(sharedNamespace).Delete(ctx, chaniCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
 
+			gvr = schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "anothertestresources"}
+			_ = adminDynamicClient.Resource(gvr).Namespace(paulNamespace).Delete(ctx, paulCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
+			_ = adminDynamicClient.Resource(gvr).Namespace(chaniNamespace).Delete(ctx, chaniCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
+			_ = adminDynamicClient.Resource(gvr).Namespace(sharedNamespace).Delete(ctx, paulCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
+			_ = adminDynamicClient.Resource(gvr).Namespace(sharedNamespace).Delete(ctx, chaniCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
+
 			// ensure there are no remaining locks
 			Expect(len(GetAllTuples(ctx, &v1.RelationshipFilter{
 				ResourceType:          "lock",
@@ -350,6 +356,36 @@ var _ = Describe("Proxy", func() {
 			})
 		}
 
+		CreateAnotherTestResource := func(ctx context.Context, client dynamic.Interface, namespace, name string) error {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "anothertestresources"}
+			resource := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "example.com/v1",
+					"kind":       "AnotherTestResource",
+					"metadata": map[string]interface{}{
+						"name":      name,
+						"namespace": namespace,
+					},
+					"spec": map[string]interface{}{
+						"message": "another test message",
+					},
+				},
+			}
+			_, err := client.Resource(gvr).Namespace(namespace).Create(ctx, resource, metav1.CreateOptions{})
+			return err
+		}
+
+		DeleteAnotherTestResource := func(ctx context.Context, client dynamic.Interface, namespace, name string) error {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "anothertestresources"}
+			return client.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		}
+
+		GetAnotherTestResource := func(ctx context.Context, client dynamic.Interface, namespace, name string) error {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "anothertestresources"}
+			_, err := client.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+			return err
+		}
+
 		WatchTestResources := func(ctx context.Context, client dynamic.Interface, namespace string, expected int, timeout time.Duration) []string {
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
@@ -452,6 +488,39 @@ var _ = Describe("Proxy", func() {
 				// delete
 				Expect(DeleteTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
 				Expect(DeleteTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+			})
+
+			It("supports deletions by filters", func(ctx context.Context) {
+				// create
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+				Expect(CreateAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+
+				// get
+				Expect(GetAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+				Expect(GetAnotherTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
+
+				// delete
+				Expect(DeleteAnotherTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
+				Expect(DeleteAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+
+				Expect(GetAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
+			})
+
+			It("recovers when there is a failure in reading relationships for deletions by filters", func(ctx context.Context) {
+				// create
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+				Expect(CreateAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+
+				// get
+				Expect(GetAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+				Expect(GetAnotherTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
+
+				// delete
+				failpoints.EnableFailPoint("panicReadSpiceDB", 1)
+				Expect(DeleteAnotherTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
+				Expect(DeleteAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+
+				Expect(GetAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
 			})
 
 			It("filters table format responses for get and list operations", func(ctx context.Context) {
@@ -976,6 +1045,58 @@ var (
 		},
 	}
 
+	createAnotherTestResource = func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "anothertestresources",
+				Verbs:        []string{"create"},
+			}},
+			Update: proxyrule.Update{
+				CreateRelationships: []proxyrule.StringOrTemplate{{
+					Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
+				}, {
+					Template: "testresource:{{name}}#namespace@namespace:{{namespace}}",
+				}},
+			},
+		}}
+	}
+
+	deleteAnotherTestResource = func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "anothertestresources",
+				Verbs:        []string{"delete"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "testresource:{{namespacedName}}#edit@user:{{user.name}}",
+			}},
+			Update: proxyrule.Update{
+				DeleteByFilter: []proxyrule.StringOrTemplate{{
+					Template: "testresource:{{namespacedName}}#$resourceRelation@$subjectType:$subjectID",
+				}, {
+					Template: "testresource:{{name}}#$resourceRelation@$subjectType:$subjectID",
+				}},
+			},
+		}}
+	}
+
+	getAnotherTestResource = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "anothertestresources",
+				Verbs:        []string{"get"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "testresource:{{namespacedName}}#view@user:{{user.name}}",
+			}},
+		},
+	}
+
 	createNamespace = func() proxyrule.Config {
 		return proxyrule.Config{Spec: proxyrule.Spec{
 			Locking: proxyrule.OptimisticLockMode,
@@ -1136,6 +1257,9 @@ func testOptimisticMatcher() rules.MapMatcher {
 		getTestResource,
 		updateTestResource,
 		listWatchTestResource,
+		getAnotherTestResource,
+		createAnotherTestResource(),
+		deleteAnotherTestResource(),
 	})
 	Expect(err).To(Succeed())
 	return matcher
@@ -1167,6 +1291,15 @@ func testPessimisticMatcher() rules.MapMatcher {
 	pessimisticDeleteTestResource := deleteTestResource()
 	pessimisticDeleteTestResource.Locking = proxyrule.PessimisticLockMode
 
+	pessimisticCreateAnotherTestResource := createAnotherTestResource()
+	pessimisticCreateAnotherTestResource.Locking = proxyrule.PessimisticLockMode
+	pessimisticCreateAnotherTestResource.Update.PreconditionDoesNotExist = []proxyrule.StringOrTemplate{{
+		Template: "testresource:{{object.metadata.name}}#namespace@namespace:{{request.namespace}}",
+	}}
+
+	pessimisticDeleteAnotherTestResource := deleteAnotherTestResource()
+	pessimisticDeleteAnotherTestResource.Locking = proxyrule.PessimisticLockMode
+
 	matcher, err := rules.NewMapMatcher([]proxyrule.Config{
 		pessimisticCreateNamespace,
 		pessimisticDeleteNamespace,
@@ -1182,6 +1315,9 @@ func testPessimisticMatcher() rules.MapMatcher {
 		getTestResource,
 		updateTestResource,
 		listWatchTestResource,
+		getAnotherTestResource,
+		pessimisticCreateAnotherTestResource,
+		pessimisticDeleteAnotherTestResource,
 	})
 	Expect(err).To(Succeed())
 	return matcher

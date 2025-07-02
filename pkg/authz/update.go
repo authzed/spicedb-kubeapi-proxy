@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/client"
@@ -21,7 +22,7 @@ func relsFromExprs(exprs []*rules.RelExpr, input *rules.ResolveInput) ([]*v1.Rel
 		if err != nil {
 			return nil, fmt.Errorf("unable to resolve write rule (%v): %w", rel, err)
 		}
-		rels = append(rels, &v1.Relationship{
+		relationship := &v1.Relationship{
 			Resource: &v1.ObjectReference{
 				ObjectType: rel.ResourceType,
 				ObjectId:   rel.ResourceID,
@@ -34,7 +35,11 @@ func relsFromExprs(exprs []*rules.RelExpr, input *rules.ResolveInput) ([]*v1.Rel
 				},
 				OptionalRelation: rel.SubjectRelation,
 			},
-		})
+		}
+		if err := relationship.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid relationship `%s`: %w", relationship, err)
+		}
+		rels = append(rels, relationship)
 	}
 	return rels, nil
 }
@@ -63,7 +68,13 @@ func performUpdate(ctx context.Context, w http.ResponseWriter, r *rules.Runnable
 		if err != nil {
 			return fmt.Errorf("unable to resolve must rule (%v): %w", rel, err)
 		}
-		p := preconditionFromRel(rel)
+		filterFromRel, err := filterFromRel(rel)
+		if err != nil {
+			return fmt.Errorf("unable to create filter from relationship (%v): %w", rel, err)
+		}
+		p := &v1.Precondition{
+			Filter: filterFromRel,
+		}
 		p.Operation = v1.Precondition_OPERATION_MUST_MATCH
 		preconditions = append(preconditions, p)
 	}
@@ -72,12 +83,32 @@ func performUpdate(ctx context.Context, w http.ResponseWriter, r *rules.Runnable
 		if err != nil {
 			return fmt.Errorf("unable to resolve must not rule (%v): %w", rel, err)
 		}
-		p := preconditionFromRel(rel)
+		filterFromRel, err := filterFromRel(rel)
+		if err != nil {
+			return fmt.Errorf("unable to create filter from relationship (%v): %w", rel, err)
+		}
+		p := &v1.Precondition{
+			Filter: filterFromRel,
+		}
 		p.Operation = v1.Precondition_OPERATION_MUST_NOT_MATCH
 		preconditions = append(preconditions, p)
 	}
 
-	resp, err := dualWrite(ctx, workflowClient, input, createRels, touchRels, deleteRels, preconditions, r.LockMode)
+	deleteByFilter := make([]*v1.RelationshipFilter, 0, len(r.Update.DeletesByFilter))
+	for _, deleteByFilterExpr := range r.Update.DeletesByFilter {
+		rel, err := rules.ResolveRel(deleteByFilterExpr, input)
+		if err != nil {
+			return fmt.Errorf("unable to resolve delete by filter (%v): %w", deleteByFilterExpr, err)
+		}
+
+		filter, err := filterFromRel(rel)
+		if err != nil {
+			return fmt.Errorf("unable to create filter from relationship (%v): %w", rel, err)
+		}
+		deleteByFilter = append(deleteByFilter, filter)
+	}
+
+	resp, err := dualWrite(ctx, workflowClient, input, createRels, touchRels, deleteRels, preconditions, deleteByFilter, r.LockMode)
 	if err != nil {
 		return fmt.Errorf("dual write failed: %w", err)
 	}
@@ -127,6 +158,7 @@ func dualWrite(
 	touchRels []*v1.Relationship,
 	deleteRels []*v1.Relationship,
 	preconditions []*v1.Precondition,
+	deleteByFilter []*v1.RelationshipFilter,
 	lockMode proxyrule.LockMode,
 ) (*distributedtx.KubeResp, error) {
 	writeInput := &distributedtx.WriteObjInput{
@@ -138,6 +170,7 @@ func dualWrite(
 		CreateRelationships: createRels,
 		TouchRelationships:  touchRels,
 		DeleteRelationships: deleteRels,
+		DeleteByFilter:      deleteByFilter,
 	}
 	if input.Object != nil {
 		writeInput.ObjectMeta = &input.Object.ObjectMeta
@@ -160,31 +193,78 @@ func dualWrite(
 	return &resp, nil
 }
 
-func preconditionFromRel(rel *rules.ResolvedRel) *v1.Precondition {
-	p := &v1.Precondition{
-		Filter: &v1.RelationshipFilter{
-			ResourceType: rel.ResourceType,
-		},
+func validateFieldForDollarUsage(field, fieldName string, allowedTemplate string) error {
+	if !strings.Contains(field, "$") {
+		return nil
+	}
+	if field == allowedTemplate {
+		return nil
+	}
+	return fmt.Errorf("invalid use of '$' in %s field '%s': only '%s' is allowed", fieldName, field, allowedTemplate)
+}
+
+func filterFromRel(rel *rules.ResolvedRel) (*v1.RelationshipFilter, error) {
+	if err := validateFieldForDollarUsage(rel.ResourceType, "resourceType", "$resourceType"); err != nil {
+		return nil, err
+	}
+	if err := validateFieldForDollarUsage(rel.ResourceID, "resourceID", "$resourceID"); err != nil {
+		return nil, err
+	}
+	if err := validateFieldForDollarUsage(rel.ResourceRelation, "resourceRelation", "$resourceRelation"); err != nil {
+		return nil, err
+	}
+	if err := validateFieldForDollarUsage(rel.SubjectType, "subjectType", "$subjectType"); err != nil {
+		return nil, err
+	}
+	if err := validateFieldForDollarUsage(rel.SubjectID, "subjectID", "$subjectID"); err != nil {
+		return nil, err
+	}
+	if err := validateFieldForDollarUsage(rel.SubjectRelation, "subjectRelation", "$subjectRelation"); err != nil {
+		return nil, err
+	}
+
+	f := &v1.RelationshipFilter{}
+
+	if rel.ResourceType != "$resourceType" {
+		f.ResourceType = rel.ResourceType
 	}
 	if rel.ResourceID != "$resourceID" {
-		p.Filter.OptionalResourceId = rel.ResourceID
+		f.OptionalResourceId = rel.ResourceID
 	}
 	if rel.ResourceRelation != "$resourceRelation" {
-		p.Filter.OptionalRelation = rel.ResourceRelation
+		f.OptionalRelation = rel.ResourceRelation
 	}
-	if rel.SubjectType != "$subjectType" || rel.SubjectID != "$subjectID" || rel.SubjectRelation != "$subjectRelation" {
-		p.Filter.OptionalSubjectFilter = &v1.SubjectFilter{}
+	needsSubjectFilter := false
+
+	if rel.SubjectType != "$subjectType" && rel.SubjectType != "" {
+		needsSubjectFilter = true
 	}
-	if rel.SubjectType != "$subjectType" {
-		p.Filter.OptionalSubjectFilter.SubjectType = rel.SubjectType
-	}
-	if rel.SubjectID != "$subjectID" {
-		p.Filter.OptionalSubjectFilter.OptionalSubjectId = rel.SubjectID
+	if rel.SubjectID != "$subjectID" && rel.SubjectID != "" {
+		needsSubjectFilter = true
 	}
 	if rel.SubjectRelation != "$subjectRelation" && rel.SubjectRelation != "" {
-		p.Filter.OptionalSubjectFilter.OptionalRelation = &v1.SubjectFilter_RelationFilter{
-			Relation: rel.SubjectRelation,
+		needsSubjectFilter = true
+	}
+
+	if needsSubjectFilter {
+		f.OptionalSubjectFilter = &v1.SubjectFilter{}
+
+		if rel.SubjectType != "$subjectType" && rel.SubjectType != "" {
+			f.OptionalSubjectFilter.SubjectType = rel.SubjectType
+		}
+		if rel.SubjectID != "$subjectID" && rel.SubjectID != "" {
+			f.OptionalSubjectFilter.OptionalSubjectId = rel.SubjectID
+		}
+		if rel.SubjectRelation != "$subjectRelation" && rel.SubjectRelation != "" {
+			f.OptionalSubjectFilter.OptionalRelation = &v1.SubjectFilter_RelationFilter{
+				Relation: rel.SubjectRelation,
+			}
 		}
 	}
-	return p
+
+	if err := f.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid relationship filter: %w", err)
+	}
+
+	return f, nil
 }

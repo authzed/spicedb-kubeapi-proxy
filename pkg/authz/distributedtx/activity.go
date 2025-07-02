@@ -2,6 +2,8 @@ package distributedtx
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -38,6 +40,29 @@ func (h *ActivityHandler) WriteToSpiceDB(ctx context.Context, input *v1.WriteRel
 	out, err := h.PermissionClient.WriteRelationships(ctx, input)
 	failpoints.FailPoint("panicSpiceDBReadResp")
 	return out, err
+}
+
+// ReadRelationships reads relationships from spicedb and returns any errors.
+func (h *ActivityHandler) ReadRelationships(ctx context.Context, input *v1.ReadRelationshipsRequest) ([]*v1.ReadRelationshipsResponse, error) {
+	failpoints.FailPoint("panicReadSpiceDB")
+	resp, err := h.PermissionClient.ReadRelationships(ctx, input)
+	failpoints.FailPoint("panicSpiceDBReadResp")
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*v1.ReadRelationshipsResponse, 0)
+	for {
+		resp, err := resp.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return results, nil // end of stream
+			}
+			return results, err
+		}
+
+		results = append(results, resp)
+	}
 }
 
 // WriteToKube performs a Kube API Server POST, specified in a KubeReqInput
