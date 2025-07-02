@@ -207,6 +207,138 @@ prefilter:
 				},
 			}},
 		},
+		{
+			name: "rule with deleteByFilter (yaml)",
+			config: `
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters
+  verbs: ["delete"]
+check:
+- tpl: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}"
+update:
+  deleteByFilter:
+  - tpl: "spicedbclusters:{{metadata.name}}#*@*"
+`,
+			expectRules: []Config{{
+				TypeMeta: v1alpha1ProxyRule,
+				Spec: Spec{
+					Locking: PessimisticLockMode,
+					Matches: []Match{{
+						GroupVersion: "authzed.com/v1alpha1",
+						Resource:     "spicedbclusters",
+						Verbs:        []string{"delete"},
+					}},
+					Checks: []StringOrTemplate{{
+						Template: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}",
+					}},
+					Update: Update{
+						DeleteByFilter: []StringOrTemplate{{
+							Template: "spicedbclusters:{{metadata.name}}#*@*",
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "rule with mixed update operations including deleteByFilter",
+			config: `
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Optimistic
+match:
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters
+  verbs: ["update"]
+check:
+- tpl: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}"
+update:
+  creates:
+  - tpl: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}"
+  deletes:
+  - tpl: "spicedbclusters:{{metadata.name}}#old-creator@user:{{request.oldUser}}"
+  deleteByFilter:
+  - tpl: "spicedbclusters:{{metadata.name}}#viewer@*"
+  - resource:
+      type: spicedbclusters
+      id: metadata.name
+      relation: editor
+    subject:
+      type: user
+      id: "*"
+`,
+			expectRules: []Config{{
+				TypeMeta: v1alpha1ProxyRule,
+				Spec: Spec{
+					Locking: OptimisticLockMode,
+					Matches: []Match{{
+						GroupVersion: "authzed.com/v1alpha1",
+						Resource:     "spicedbclusters",
+						Verbs:        []string{"update"},
+					}},
+					Checks: []StringOrTemplate{{
+						Template: "org:{{metadata.labels.org}}#manage-cluster@user:{{request.user}}",
+					}},
+					Update: Update{
+						CreateRelationships: []StringOrTemplate{{
+							Template: "spicedbclusters:{{metadata.name}}#creator@user:{{request.user}}",
+						}},
+						DeleteRelationships: []StringOrTemplate{{
+							Template: "spicedbclusters:{{metadata.name}}#old-creator@user:{{request.oldUser}}",
+						}},
+						DeleteByFilter: []StringOrTemplate{{
+							Template: "spicedbclusters:{{metadata.name}}#viewer@*",
+						}, {
+							RelationshipTemplate: &RelationshipTemplate{
+								Resource: ObjectTemplate{
+									Type:     "spicedbclusters",
+									ID:       "metadata.name",
+									Relation: "editor",
+								},
+								Subject: ObjectTemplate{
+									Type: "user",
+									ID:   "*",
+								},
+							},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "rule with deleteByFilter using dollar variables",
+			config: `
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Pessimistic
+match:
+- apiVersion: authzed.com/v1alpha1
+  resource: spicedbclusters
+  verbs: ["delete"]
+update:
+  deleteByFilter:
+  - tpl: "$resourceType:$resourceID#$resourceRelation@$subjectType:$subjectID"
+`,
+			expectRules: []Config{{
+				TypeMeta: v1alpha1ProxyRule,
+				Spec: Spec{
+					Locking: PessimisticLockMode,
+					Matches: []Match{{
+						GroupVersion: "authzed.com/v1alpha1",
+						Resource:     "spicedbclusters",
+						Verbs:        []string{"delete"},
+					}},
+					Update: Update{
+						DeleteByFilter: []StringOrTemplate{{
+							Template: "$resourceType:$resourceID#$resourceRelation@$subjectType:$subjectID",
+						}},
+					},
+				},
+			}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

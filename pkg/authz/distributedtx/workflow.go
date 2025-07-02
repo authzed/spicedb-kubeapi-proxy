@@ -50,6 +50,7 @@ type WriteObjInput struct {
 	CreateRelationships []*v1.Relationship
 	TouchRelationships  []*v1.Relationship
 	DeleteRelationships []*v1.Relationship
+	DeleteByFilter      []*v1.RelationshipFilter
 }
 
 func (input *WriteObjInput) validate() error {
@@ -82,7 +83,6 @@ func (r *RollbackRelationships) WithRels(relationships ...*v1.RelationshipUpdate
 }
 
 func (r *RollbackRelationships) Cleanup(ctx workflow.Context) {
-
 	invert := func(op v1.RelationshipUpdate_Operation) v1.RelationshipUpdate_Operation {
 		switch op {
 		case v1.RelationshipUpdate_OPERATION_CREATE:
@@ -164,6 +164,13 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 			Operation:    v1.RelationshipUpdate_OPERATION_DELETE,
 			Relationship: r,
 		})
+	}
+
+	// Issue a read relationships for any delete filter(s) and add those relationships
+	// to be deleted to the updates list. This is to ensure we have consistent deletion
+	// on retries.
+	if err := appendDeletesFromFilters(ctx, input.DeleteByFilter, &updates); err != nil {
+		return nil, fmt.Errorf("failed to append deletes from filters: %w", err)
 	}
 
 	arg := &v1.WriteRelationshipsRequest{
@@ -270,6 +277,13 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 		})
 	}
 
+	// Issue a read relationships for any delete filter(s) and add those relationships
+	// to be deleted to the updates list. This is to ensure we have consistent deletion
+	// on retries.
+	if err := appendDeletesFromFilters(ctx, input.DeleteByFilter, &updates); err != nil {
+		return nil, fmt.Errorf("failed to append deletes from filters: %w", err)
+	}
+
 	rollback := NewRollbackRelationships(updates...)
 	_, err := workflow.ExecuteActivity[*v1.WriteRelationshipsResponse](ctx,
 		workflow.DefaultActivityOptions,
@@ -308,6 +322,43 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 	}
 
 	return out, nil
+}
+
+func appendDeletesFromFilters(
+	ctx workflow.Context,
+	filters []*v1.RelationshipFilter,
+	updates *[]*v1.RelationshipUpdate,
+) error {
+	for _, deleteByFilterExpr := range filters {
+		klog.V(3).InfoS("loading relationships for delete filter", "filter", deleteByFilterExpr.String())
+
+		// We need to read the relationships that match the filter and delete them
+		// in the updates list. This is to ensure we have consistent deletion on
+		// retries.
+		f := workflow.ExecuteActivity[[]*v1.ReadRelationshipsResponse](ctx,
+			workflow.DefaultActivityOptions,
+			activityHandler.ReadRelationships,
+			&v1.ReadRelationshipsRequest{
+				RelationshipFilter: deleteByFilterExpr,
+			})
+
+		results, err := f.Get(ctx)
+		if err != nil {
+			klog.V(3).ErrorS(err, "failed to read relationships for delete by filter", "filter", deleteByFilterExpr.String())
+			return fmt.Errorf("unable to read relationships for delete by filter (%v): %w", deleteByFilterExpr, err)
+		}
+
+		for _, resp := range results {
+			*updates = append(*updates, &v1.RelationshipUpdate{
+				Operation:    v1.RelationshipUpdate_OPERATION_DELETE,
+				Relationship: resp.Relationship,
+			})
+		}
+
+		klog.V(3).InfoS("found relationships for delete filter", "count", len(results), "filter", deleteByFilterExpr.String())
+	}
+
+	return nil
 }
 
 // ResourceLockRel generates a relationship representing a worfklow's lock over a

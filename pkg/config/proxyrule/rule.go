@@ -74,7 +74,7 @@ type Update struct {
 	// sign values:
 	// - `$resourceType` for the resource type
 	// - `$resourceID` for the resource ID
-	// - `$relation` for the relation
+	// - `$resourceRelation` for the relation
 	// - `$subjectType` for the subject type
 	// - `$subjectID` for the subject ID
 	// - `$subjectRelation` for the subject relation
@@ -86,7 +86,7 @@ type Update struct {
 	// sign values:
 	// - `$resourceType` for the resource type
 	// - `$resourceID` for the resource ID
-	// - `$relation` for the relation
+	// - `$resourceRelation` for the relation
 	// - `$subjectType` for the subject type
 	// - `$subjectID` for the subject ID
 	// - `$subjectRelation` for the subject relation
@@ -100,6 +100,20 @@ type Update struct {
 
 	// DeleteRelationships defines the specific relationships to delete in SpiceDB.
 	DeleteRelationships []StringOrTemplate `json:"deletes,omitempty"`
+
+	// DeleteByFilter defines a filter to delete relationships in SpiceDB.
+	// This is a more flexible way to delete relationships than specifying
+	// DeleteRelationships, as it allows for dynamic portions of the relationship
+	// to be specified.
+	// To specify dynamic portions of the relationship, use the following dollar
+	// sign values:
+	// - `$resourceType` for the resource type
+	// - `$resourceID` for the resource ID
+	// - `$resourceRelation` for the relation
+	// - `$subjectType` for the subject type
+	// - `$subjectID` for the subject ID
+	// - `$subjectRelation` for the subject relation
+	DeleteByFilter []StringOrTemplate `json:"deleteByFilter,omitempty"`
 }
 
 // Match determines which requests the rule applies to
