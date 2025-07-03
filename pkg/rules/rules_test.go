@@ -190,9 +190,14 @@ func TestCompile(t *testing.T) {
 	require.NoError(t, json.Unmarshal(testDataBytes, &testData))
 
 	type result struct {
-		checks  []ResolvedRel
-		updates []ResolvedRel
-		filters []ResolvedPreFilter
+		checks         []ResolvedRel
+		creates        []ResolvedRel
+		touches        []ResolvedRel
+		deletes        []ResolvedRel
+		deletesByFilter []ResolvedRel
+		mustExist      []ResolvedRel
+		mustNotExist   []ResolvedRel
+		filters        []ResolvedPreFilter
 	}
 
 	mustQuery := func(executor *bloblang.Executor) any {
@@ -241,11 +246,13 @@ func TestCompile(t *testing.T) {
 				Checks: []proxyrule.StringOrTemplate{{
 					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
 				}},
-				Updates: []proxyrule.StringOrTemplate{{
-					Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
-				}, {
-					Template: "wardles:{{metadata.name}}#creator@user:{{user.name}}",
-				}},
+				Update: proxyrule.Update{
+					CreateRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
+					}, {
+						Template: "wardles:{{metadata.name}}#creator@user:{{user.name}}",
+					}},
+				},
 			}},
 			want: result{
 				checks: []ResolvedRel{{
@@ -255,7 +262,7 @@ func TestCompile(t *testing.T) {
 					SubjectType:      "user",
 					SubjectID:        "testUser",
 				}},
-				updates: []ResolvedRel{{
+				creates: []ResolvedRel{{
 					ResourceType:     "wardles",
 					ResourceID:       "testName",
 					ResourceRelation: "org",
@@ -321,6 +328,320 @@ func TestCompile(t *testing.T) {
 						SubjectID:        "testUser",
 					},
 				}},
+			},
+		},
+		{
+			name: "rule with touches and deletes",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"update"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					TouchRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#last-modified@user:{{user.name}}",
+					}},
+					DeleteRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#temp-access@user:*",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org", 
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				touches: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName", 
+					ResourceRelation: "last-modified",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletes: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "temp-access", 
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "rule with preconditions",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"delete"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					PreconditionExists: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#creator@user:{{user.name}}",
+					}},
+					PreconditionDoesNotExist: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#protected@user:*",
+					}},
+					DeleteRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#creator@user:{{user.name}}",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg", 
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				mustExist: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "creator",
+					SubjectType:      "user", 
+					SubjectID:        "testUser",
+				}},
+				mustNotExist: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "protected",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				deletes: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "creator", 
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "complex rule with all update types",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"patch"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					PreconditionExists: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#exists@user:*",
+					}},
+					CreateRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#patched-by@user:{{user.name}}",
+					}},
+					TouchRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#last-modified@user:{{user.name}}",
+					}},
+					DeleteRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#old-data@user:*",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles", 
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				mustExist: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "exists",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				creates: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName", 
+					ResourceRelation: "patched-by",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				touches: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "last-modified",
+					SubjectType:      "user",
+					SubjectID:        "testUser", 
+				}},
+				deletes: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "old-data",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "rule with delete by filter",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"delete"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					DeleteByFilter: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#*@user:{{user.name}}",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletesByFilter: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "*",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "rule with multiple delete by filter operations",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"update"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					DeleteByFilter: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#temp-access@user:*",
+					}, {
+						Template: "wardles:{{metadata.name}}#legacy-perm@group:*",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletesByFilter: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "temp-access",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}, {
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "legacy-perm",
+					SubjectType:      "group",
+					SubjectID:        "*",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "rule with delete by filter and other operations",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "example.com/v1alpha1",
+					Resource:     "wardles",
+					Verbs:        []string{"patch"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{user.name}}",
+				}},
+				Update: proxyrule.Update{
+					CreateRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#updated-by@user:{{user.name}}",
+					}},
+					TouchRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#last-modified@user:{{user.name}}",
+					}},
+					DeleteRelationships: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#old-state@user:{{user.name}}",
+					}},
+					DeleteByFilter: []proxyrule.StringOrTemplate{{
+						Template: "wardles:{{metadata.name}}#temp-*@user:*",
+					}},
+				},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg",
+					ResourceRelation: "manage-wardles",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				creates: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "updated-by",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				touches: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "last-modified",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletes: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "old-state",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				deletesByFilter: []ResolvedRel{{
+					ResourceType:     "wardles",
+					ResourceID:       "testName",
+					ResourceRelation: "temp-*",
+					SubjectType:      "user",
+					SubjectID:        "*",
+				}},
+				filters: []ResolvedPreFilter{},
 			},
 		},
 		{
@@ -391,8 +712,309 @@ func TestCompile(t *testing.T) {
 			require.NoError(t, err)
 
 			requireEqualUnderTestData(got.Checks, tt.want.checks)
-			requireEqualUnderTestData(got.Updates, tt.want.updates)
+			if got.Update != nil {
+				if got.Update.Creates != nil {
+					requireEqualUnderTestData(got.Update.Creates, tt.want.creates)
+				}
+				if got.Update.Touches != nil {
+					requireEqualUnderTestData(got.Update.Touches, tt.want.touches)
+				}
+				if got.Update.Deletes != nil {
+					requireEqualUnderTestData(got.Update.Deletes, tt.want.deletes)
+				}
+				if got.Update.DeletesByFilter != nil {
+					requireEqualUnderTestData(got.Update.DeletesByFilter, tt.want.deletesByFilter)
+				}
+				if got.Update.MustExist != nil {
+					requireEqualUnderTestData(got.Update.MustExist, tt.want.mustExist)
+				}
+				if got.Update.MustNotExist != nil {
+					requireEqualUnderTestData(got.Update.MustNotExist, tt.want.mustNotExist)
+				}
+			}
 			requireFilterEqualUnderTestData(t, got.PreFilter, tt.want.filters)
+		})
+	}
+}
+
+func TestCELConditions(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  proxyrule.Config
+		input   *ResolveInput
+		want    bool
+		wantErr bool
+	}{
+		{
+			name: "no CEL conditions - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition on request verb - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"request.verb == 'get'"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition on request verb - should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"request.verb == 'create'"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			want: false,
+		},
+		{
+			name: "CEL condition on user name - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"user.name == 'admin'"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "admin"},
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition on user name - should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"user.name == 'admin'"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "user"},
+			},
+			want: false,
+		},
+		{
+			name: "multiple CEL conditions - all should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{
+					"request.verb == 'get'",
+					"user.name == 'admin'",
+					"request.resource == 'pods'",
+				},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "admin"},
+			},
+			want: true,
+		},
+		{
+			name: "multiple CEL conditions - one should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{
+					"request.verb == 'get'",
+					"user.name == 'admin'",
+					"request.resource == 'secrets'",
+				},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "admin"},
+			},
+			want: false,
+		},
+		{
+			name: "CEL condition on namespace - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"resourceNamespace == 'default'"},
+			}},
+			input: &ResolveInput{
+				Request:   &request.RequestInfo{Verb: "get", Resource: "pods"},
+				Namespace: "default",
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition on user groups - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"'system:masters' in user.groups"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "admin", Groups: []string{"system:masters", "system:authenticated"}},
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition with invalid syntax - should error",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"invalid syntax =="},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "CEL condition returning non-boolean - should error during compilation",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"request.verb"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compiled, err := Compile(tt.config)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+
+			result, err := EvaluateCELConditions(compiled.IfConditions, tt.input)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, result)
+		})
+	}
+}
+
+func TestFilterRulesWithCELConditions(t *testing.T) {
+	// Create test rules with different CEL conditions
+	ruleAlwaysTrue, err := Compile(proxyrule.Config{Spec: proxyrule.Spec{
+		Matches: []proxyrule.Match{{GroupVersion: "v1", Resource: "pods", Verbs: []string{"get"}}},
+		If:      []string{"true"},
+	}})
+	require.NoError(t, err)
+
+	ruleAlwaysFalse, err := Compile(proxyrule.Config{Spec: proxyrule.Spec{
+		Matches: []proxyrule.Match{{GroupVersion: "v1", Resource: "pods", Verbs: []string{"get"}}},
+		If:      []string{"false"},
+	}})
+	require.NoError(t, err)
+
+	ruleUserAdmin, err := Compile(proxyrule.Config{Spec: proxyrule.Spec{
+		Matches: []proxyrule.Match{{GroupVersion: "v1", Resource: "pods", Verbs: []string{"get"}}},
+		If:      []string{"user.name == 'admin'"},
+	}})
+	require.NoError(t, err)
+
+	ruleNoCEL, err := Compile(proxyrule.Config{Spec: proxyrule.Spec{
+		Matches: []proxyrule.Match{{GroupVersion: "v1", Resource: "pods", Verbs: []string{"get"}}},
+	}})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		rules []*RunnableRule
+		input *ResolveInput
+		want  int
+	}{
+		{
+			name:  "no rules",
+			rules: []*RunnableRule{},
+			input: &ResolveInput{},
+			want:  0,
+		},
+		{
+			name:  "rule with no CEL conditions",
+			rules: []*RunnableRule{ruleNoCEL},
+			input: &ResolveInput{},
+			want:  1,
+		},
+		{
+			name:  "rule always true",
+			rules: []*RunnableRule{ruleAlwaysTrue},
+			input: &ResolveInput{},
+			want:  1,
+		},
+		{
+			name:  "rule always false",
+			rules: []*RunnableRule{ruleAlwaysFalse},
+			input: &ResolveInput{},
+			want:  0,
+		},
+		{
+			name:  "mixed rules with admin user - admin rule should pass",
+			rules: []*RunnableRule{ruleAlwaysFalse, ruleUserAdmin, ruleNoCEL},
+			input: &ResolveInput{User: &user.DefaultInfo{Name: "admin"}},
+			want:  2, // ruleUserAdmin and ruleNoCEL should pass
+		},
+		{
+			name:  "mixed rules with regular user - admin rule should fail",
+			rules: []*RunnableRule{ruleAlwaysFalse, ruleUserAdmin, ruleNoCEL},
+			input: &ResolveInput{User: &user.DefaultInfo{Name: "user"}},
+			want:  1, // only ruleNoCEL should pass
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := FilterRulesWithCELConditions(tt.rules, tt.input)
+			require.NoError(t, err)
+			require.Len(t, result, tt.want)
 		})
 	}
 }
@@ -408,11 +1030,13 @@ func TestMapMatcherMatch(t *testing.T) {
 		Checks: []proxyrule.StringOrTemplate{{
 			Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{request.user}}",
 		}},
-		Updates: []proxyrule.StringOrTemplate{{
-			Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
-		}, {
-			Template: "wardles:{{metadata.name}}#creator@user:{{request.user}}",
-		}},
+		Update: proxyrule.Update{
+			CreateRelationships: []proxyrule.StringOrTemplate{{
+				Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
+			}, {
+				Template: "wardles:{{metadata.name}}#creator@user:{{request.user}}",
+			}},
+		},
 	}}, {Spec: proxyrule.Spec{
 		Locking: proxyrule.PessimisticLockMode,
 		Matches: []proxyrule.Match{{
@@ -447,7 +1071,7 @@ func TestMapMatcherMatch(t *testing.T) {
 		name        string
 		match       *request.RequestInfo
 		wantChecks  int
-		wantUpdates int
+		wantCreates int
 		wantFilters int
 	}{
 		{
@@ -459,7 +1083,7 @@ func TestMapMatcherMatch(t *testing.T) {
 				Verb:       "create",
 			},
 			wantChecks:  1,
-			wantUpdates: 2,
+			wantCreates: 2,
 		},
 		{
 			name: "non-matching create request",
@@ -496,14 +1120,16 @@ func TestMapMatcherMatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := m.Match(tt.match)
-			var totalCheck, totalUpdate, totalFilter int
+			var totalCheck, totalCreate, totalFilter int
 			for _, r := range got {
 				totalCheck += len(r.Checks)
-				totalUpdate += len(r.Updates)
+				if r.Update != nil && r.Update.Creates != nil {
+					totalCreate += len(r.Update.Creates)
+				}
 				totalFilter += len(r.PreFilter)
 			}
 			require.Equal(t, tt.wantChecks, totalCheck)
-			require.Equal(t, tt.wantUpdates, totalUpdate)
+			require.Equal(t, tt.wantCreates, totalCreate)
 			require.Equal(t, tt.wantFilters, totalFilter)
 		})
 	}
