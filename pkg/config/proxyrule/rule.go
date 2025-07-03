@@ -53,6 +53,27 @@ type Spec struct {
 	// Matches defines the requests that this rule applies to. Cannot be empty.
 	Matches []Match `json:"match"`
 
+	// If defines CEL expressions that must evaluate to true for this rule to apply.
+	// All expressions must evaluate to true for the rule to match.
+	//
+	// Available variables in CEL expressions:
+	// - request: request information (verb, resource, apiGroup, apiVersion, name, namespace)
+	// - user: user information (name, uid, groups, extra)
+	// - object: the Kubernetes object being operated on (for create/update/patch operations)
+	// - name: the name of the resource
+	// - resourceNamespace: the namespace of the resource
+	// - namespacedName: the namespaced name of the resource
+	// - headers: HTTP headers from the request
+	// - body: the request body (for create/update/patch operations)
+	//
+	// Example CEL expressions:
+	// - "request.verb == 'get'"
+	// - "user.name == 'admin'"
+	// - "'system:masters' in user.groups"
+	// - "resourceNamespace == 'default'"
+	// - "request.resource == 'pods' && request.verb in ['get', 'list']"
+	If []string `json:"if,omitempty"`
+
 	// Checks are the authorization checks to perform, in SpiceDB, if the request matches.
 	// If empty, the request will be allowed without any checks.
 	Checks []StringOrTemplate `json:"check,omitempty"`

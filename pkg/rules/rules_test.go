@@ -737,6 +737,288 @@ func TestCompile(t *testing.T) {
 	}
 }
 
+func TestCELConditions(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  proxyrule.Config
+		input   *ResolveInput
+		want    bool
+		wantErr bool
+	}{
+		{
+			name: "no CEL conditions - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition on request verb - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"request.verb == 'get'"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition on request verb - should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"request.verb == 'create'"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			want: false,
+		},
+		{
+			name: "CEL condition on user name - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"user.name == 'admin'"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "admin"},
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition on user name - should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"user.name == 'admin'"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "user"},
+			},
+			want: false,
+		},
+		{
+			name: "multiple CEL conditions - all should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{
+					"request.verb == 'get'",
+					"user.name == 'admin'",
+					"request.resource == 'pods'",
+				},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "admin"},
+			},
+			want: true,
+		},
+		{
+			name: "multiple CEL conditions - one should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{
+					"request.verb == 'get'",
+					"user.name == 'admin'",
+					"request.resource == 'secrets'",
+				},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "admin"},
+			},
+			want: false,
+		},
+		{
+			name: "CEL condition on namespace - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"resourceNamespace == 'default'"},
+			}},
+			input: &ResolveInput{
+				Request:   &request.RequestInfo{Verb: "get", Resource: "pods"},
+				Namespace: "default",
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition on user groups - should pass",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"'system:masters' in user.groups"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+				User:    &user.DefaultInfo{Name: "admin", Groups: []string{"system:masters", "system:authenticated"}},
+			},
+			want: true,
+		},
+		{
+			name: "CEL condition with invalid syntax - should error",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"invalid syntax =="},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "CEL condition returning non-boolean - should error during compilation",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				If: []string{"request.verb"},
+			}},
+			input: &ResolveInput{
+				Request: &request.RequestInfo{Verb: "get", Resource: "pods"},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compiled, err := Compile(tt.config)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+
+			result, err := EvaluateCELConditions(compiled.IfConditions, tt.input)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, result)
+		})
+	}
+}
+
+func TestFilterRulesWithCELConditions(t *testing.T) {
+	// Create test rules with different CEL conditions
+	ruleAlwaysTrue, err := Compile(proxyrule.Config{Spec: proxyrule.Spec{
+		Matches: []proxyrule.Match{{GroupVersion: "v1", Resource: "pods", Verbs: []string{"get"}}},
+		If:      []string{"true"},
+	}})
+	require.NoError(t, err)
+
+	ruleAlwaysFalse, err := Compile(proxyrule.Config{Spec: proxyrule.Spec{
+		Matches: []proxyrule.Match{{GroupVersion: "v1", Resource: "pods", Verbs: []string{"get"}}},
+		If:      []string{"false"},
+	}})
+	require.NoError(t, err)
+
+	ruleUserAdmin, err := Compile(proxyrule.Config{Spec: proxyrule.Spec{
+		Matches: []proxyrule.Match{{GroupVersion: "v1", Resource: "pods", Verbs: []string{"get"}}},
+		If:      []string{"user.name == 'admin'"},
+	}})
+	require.NoError(t, err)
+
+	ruleNoCEL, err := Compile(proxyrule.Config{Spec: proxyrule.Spec{
+		Matches: []proxyrule.Match{{GroupVersion: "v1", Resource: "pods", Verbs: []string{"get"}}},
+	}})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		rules []*RunnableRule
+		input *ResolveInput
+		want  int
+	}{
+		{
+			name:  "no rules",
+			rules: []*RunnableRule{},
+			input: &ResolveInput{},
+			want:  0,
+		},
+		{
+			name:  "rule with no CEL conditions",
+			rules: []*RunnableRule{ruleNoCEL},
+			input: &ResolveInput{},
+			want:  1,
+		},
+		{
+			name:  "rule always true",
+			rules: []*RunnableRule{ruleAlwaysTrue},
+			input: &ResolveInput{},
+			want:  1,
+		},
+		{
+			name:  "rule always false",
+			rules: []*RunnableRule{ruleAlwaysFalse},
+			input: &ResolveInput{},
+			want:  0,
+		},
+		{
+			name:  "mixed rules with admin user - admin rule should pass",
+			rules: []*RunnableRule{ruleAlwaysFalse, ruleUserAdmin, ruleNoCEL},
+			input: &ResolveInput{User: &user.DefaultInfo{Name: "admin"}},
+			want:  2, // ruleUserAdmin and ruleNoCEL should pass
+		},
+		{
+			name:  "mixed rules with regular user - admin rule should fail",
+			rules: []*RunnableRule{ruleAlwaysFalse, ruleUserAdmin, ruleNoCEL},
+			input: &ResolveInput{User: &user.DefaultInfo{Name: "user"}},
+			want:  1, // only ruleNoCEL should pass
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := FilterRulesWithCELConditions(tt.rules, tt.input)
+			require.NoError(t, err)
+			require.Len(t, result, tt.want)
+		})
+	}
+}
+
 func TestMapMatcherMatch(t *testing.T) {
 	m, err := NewMapMatcher([]proxyrule.Config{{Spec: proxyrule.Spec{
 		Locking: proxyrule.PessimisticLockMode,
