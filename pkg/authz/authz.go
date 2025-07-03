@@ -44,25 +44,44 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 				"Resource", input.Request.Resource)
 			handleError(w, failed, req, fmt.Errorf("request did not match any authorization rule"))
 			return
-		} else {
+		}
+
+		// Apply CEL condition filtering
+		filteredRules, err := rules.FilterRulesWithCELConditions(matchingRules, input)
+		if err != nil {
+			klog.V(2).ErrorS(err, "error evaluating CEL conditions", "input", input)
+			handleError(w, failed, req, err)
+			return
+		}
+
+		if len(filteredRules) == 0 {
 			klog.V(3).InfoSDepth(1,
-				"request matched authorization rule/s",
+				"request matched authorization rule/s but failed CEL conditions",
 				"verb", input.Request.Verb,
 				"APIGroup", input.Request.APIGroup,
 				"APIVersion", input.Request.APIVersion,
 				"Resource", input.Request.Resource)
-			klog.V(4).InfoSDepth(1, "authorization input details", "input", input)
+			handleError(w, failed, req, fmt.Errorf("request matched authorization rule/s but failed CEL conditions"))
+			return
 		}
 
+		klog.V(3).InfoSDepth(1,
+			"request matched authorization rule/s and passed CEL conditions",
+			"verb", input.Request.Verb,
+			"APIGroup", input.Request.APIGroup,
+			"APIVersion", input.Request.APIVersion,
+			"Resource", input.Request.Resource)
+		klog.V(4).InfoSDepth(1, "authorization input details", "input", input)
+
 		// run all checks for this request
-		if err := runAllMatchingChecks(ctx, matchingRules, input, permissionsClient); err != nil {
+		if err := runAllMatchingChecks(ctx, filteredRules, input, permissionsClient); err != nil {
 			klog.V(2).ErrorS(err, "input failed authorization checks", "input", input)
 			handleError(w, failed, req, err)
 			return
 		}
 
 		// if this request is a write, perform the dual write and return
-		rule, err := getSingleUpdateRule(matchingRules)
+		rule, err := getSingleUpdateRule(filteredRules)
 		if err != nil {
 			klog.V(2).ErrorS(err, "unable to get single update rule", "input", input)
 			handleError(w, failed, req, err)
@@ -85,7 +104,7 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 			allowedNN:  map[types.NamespacedName]struct{}{},
 		}
 		alreadyAuthorized(input, authzData)
-		if err := filterResponse(ctx, matchingRules, input, authzData, permissionsClient, watchClient); err != nil {
+		if err := filterResponse(ctx, filteredRules, input, authzData, permissionsClient, watchClient); err != nil {
 			failed.ServeHTTP(w, req)
 			return
 		}

@@ -961,6 +961,58 @@ var _ = Describe("Proxy", func() {
 				Expect(GetNamespace(ctx, paulClient, paulNamespace)).NotTo(Succeed())
 			})
 		})
+
+		When("rules with CEL 'if' conditions are used", func() {
+			BeforeEach(func() {
+				*proxySrv.Matcher = testCELIfMatcher()
+				lockMode = proxyrule.OptimisticLockMode
+			})
+
+			It("allows access when CEL conditions are met", func(ctx context.Context) {
+				// Create namespace as admin user (should meet the CEL condition)
+				Expect(CreateNamespace(ctx, adminClient, sharedNamespace)).To(Succeed())
+
+				// Admin should be able to get the namespace (CEL condition allows admin)
+				Expect(GetNamespace(ctx, adminClient, sharedNamespace)).To(Succeed())
+
+				// Paul should not be able to get the namespace (CEL condition blocks non-admin users)
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, sharedNamespace))).To(BeTrue())
+			})
+
+			It("denies access when CEL conditions are not met", func(ctx context.Context) {
+				// Paul tries to create a pod in non-default namespace (should be blocked by CEL)
+				Expect(CreateNamespace(ctx, adminClient, paulNamespace)).To(Succeed())
+
+				// Paul should not be able to create pods outside default namespace
+				Expect(k8serrors.IsUnauthorized(CreatePod(ctx, paulClient, paulNamespace, paulPod))).To(BeTrue())
+
+				// Create default namespace for testing (ignore if it already exists)
+				err := CreateNamespace(ctx, adminClient, "default")
+				if err != nil && !k8serrors.IsAlreadyExists(err) {
+					Expect(err).To(Succeed())
+				}
+
+				// Paul should be able to create pods in default namespace
+				Expect(CreatePod(ctx, paulClient, "default", paulPod)).To(Succeed())
+			})
+
+			It("evaluates multiple CEL conditions correctly", func(ctx context.Context) {
+				// Create namespaces (ignore if default already exists)
+				err := CreateNamespace(ctx, adminClient, "default")
+				if err != nil && !k8serrors.IsAlreadyExists(err) {
+					Expect(err).To(Succeed())
+				}
+
+				// Paul should be able to create pods in default namespace
+				Expect(CreatePod(ctx, paulClient, "default", paulPod)).To(Succeed())
+
+				// Paul should be able to perform read in the default namespace
+				Expect(GetPod(ctx, paulClient, "default", paulPod)).To(Succeed())
+
+				// Paul should not be able to perform write operations outside default namespace
+				Expect(k8serrors.IsUnauthorized(DeletePod(ctx, paulClient, paulNamespace, paulPod))).To(BeTrue())
+			})
+		})
 	})
 })
 
@@ -1318,6 +1370,113 @@ func testPessimisticMatcher() rules.MapMatcher {
 		getAnotherTestResource,
 		pessimisticCreateAnotherTestResource,
 		pessimisticDeleteAnotherTestResource,
+	})
+	Expect(err).To(Succeed())
+	return matcher
+}
+
+func testCELIfMatcher() rules.MapMatcher {
+	celCreateNamespace := func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "namespaces",
+				Verbs:        []string{"create"},
+			}},
+			If: []string{
+				"user.name == 'admin' || 'system:masters' in user.groups",
+			},
+			Update: proxyrule.Update{
+				CreateRelationships: []proxyrule.StringOrTemplate{{
+					Template: "namespace:{{name}}#creator@user:{{user.name}}",
+				}, {
+					Template: "namespace:{{name}}#cluster@cluster:cluster",
+				}},
+			},
+		}}
+	}
+
+	celGetNamespace := proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "namespaces",
+				Verbs:        []string{"get"},
+			}},
+			If: []string{
+				"user.name == 'admin' || 'system:masters' in user.groups",
+			},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "namespace:{{name}}#view@user:{{user.name}}",
+			}},
+		},
+	}
+
+	celCreatePod := func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "pods",
+				Verbs:        []string{"create"},
+			}},
+			If: []string{
+				"user.name == 'admin' || resourceNamespace == 'default'",
+			},
+			Update: proxyrule.Update{
+				CreateRelationships: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{namespacedName}}#creator@user:{{user.name}}",
+				}, {
+					Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
+				}},
+			},
+		}}
+	}
+
+	celGetPod := proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "pods",
+				Verbs:        []string{"get"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "pod:{{namespacedName}}#view@user:{{user.name}}",
+			}},
+		},
+	}
+
+	celDeletePod := func() proxyrule.Config {
+		return proxyrule.Config{Spec: proxyrule.Spec{
+			Locking: proxyrule.OptimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "v1",
+				Resource:     "pods",
+				Verbs:        []string{"delete"},
+			}},
+			If: []string{
+				"user.name == 'admin' || resourceNamespace == 'default'",
+			},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "pod:{{namespacedName}}#edit@user:{{user.name}}",
+			}},
+			Update: proxyrule.Update{
+				DeleteRelationships: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{namespacedName}}#creator@user:{{user.name}}",
+				}, {
+					Template: "pod:{{name}}#namespace@namespace:{{namespace}}",
+				}},
+			},
+		}}
+	}
+
+	matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+		celCreateNamespace(),
+		celGetNamespace,
+		celCreatePod(),
+		celGetPod,
+		celDeletePod(),
 	})
 	Expect(err).To(Succeed())
 	return matcher

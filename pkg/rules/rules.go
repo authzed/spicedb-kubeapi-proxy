@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/cel-go/cel"
 	"github.com/warpstreamlabs/bento/public/bloblang"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -25,6 +26,20 @@ import (
 var (
 	codecs = serializer.NewCodecFactory(scheme.Scheme)
 )
+
+// createCELEnvironment creates a CEL environment with request data types.
+func createCELEnvironment() (*cel.Env, error) {
+	return cel.NewEnv(
+		cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("user", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("object", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("name", cel.StringType),
+		cel.Variable("resourceNamespace", cel.StringType), // namespace is reserved in CEL
+		cel.Variable("namespacedName", cel.StringType),
+		cel.Variable("headers", cel.MapType(cel.StringType, cel.ListType(cel.StringType))),
+		cel.Variable("body", cel.BytesType),
+	)
+}
 
 // RequestMeta uniquely identifies the type of request, and is used to find
 // matching rules.
@@ -282,6 +297,103 @@ func ResolveRel(expr *RelExpr, input *ResolveInput) (*ResolvedRel, error) {
 	return rel, nil
 }
 
+// EvaluateCELConditions evaluates all CEL conditions and returns true if all pass.
+func EvaluateCELConditions(programs []cel.Program, input *ResolveInput) (bool, error) {
+	if len(programs) == 0 {
+		return true, nil
+	}
+
+	// Convert ResolveInput to CEL-compatible format
+	celInput, err := convertToCELInput(input)
+	if err != nil {
+		return false, fmt.Errorf("error converting input to CEL format: %w", err)
+	}
+
+	// Evaluate all conditions - all must be true
+	for i, program := range programs {
+		result, _, err := program.Eval(celInput)
+		if err != nil {
+			return false, fmt.Errorf("error evaluating CEL condition %d: %w", i, err)
+		}
+
+		value, ok := result.Value().(bool)
+		if !ok {
+			return false, fmt.Errorf("CEL condition %d returned non-boolean value: %v", i, result.Value())
+		}
+
+		if !value {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// FilterRulesWithCELConditions filters rules based on their CEL conditions.
+func FilterRulesWithCELConditions(rules []*RunnableRule, input *ResolveInput) ([]*RunnableRule, error) {
+	var filteredRules []*RunnableRule
+	
+	for _, rule := range rules {
+		matches, err := EvaluateCELConditions(rule.IfConditions, input)
+		if err != nil {
+			return nil, fmt.Errorf("error evaluating CEL conditions for rule: %w", err)
+		}
+		
+		if matches {
+			filteredRules = append(filteredRules, rule)
+		}
+	}
+	
+	return filteredRules, nil
+}
+
+// convertToCELInput converts ResolveInput to a format suitable for CEL evaluation.
+func convertToCELInput(input *ResolveInput) (map[string]any, error) {
+	data := map[string]any{
+		"name":              input.Name,
+		"resourceNamespace": input.Namespace,
+		"namespacedName":    input.NamespacedName,
+		"headers":           input.Headers,
+	}
+
+	if input.Body != nil {
+		data["body"] = input.Body
+	}
+
+	// Convert request info to map
+	if input.Request != nil {
+		data["request"] = map[string]any{
+			"verb":       input.Request.Verb,
+			"apiGroup":   input.Request.APIGroup,
+			"apiVersion": input.Request.APIVersion,
+			"resource":   input.Request.Resource,
+			"name":       input.Request.Name,
+			"namespace":  input.Request.Namespace,
+		}
+	}
+
+	// Convert user info to map
+	if input.User != nil {
+		data["user"] = map[string]any{
+			"name":   input.User.Name,
+			"uid":    input.User.UID,
+			"groups": input.User.Groups,
+			"extra":  input.User.Extra,
+		}
+	}
+
+	// Convert object info to map
+	if input.Object != nil {
+		obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(input.Object)
+		if err != nil {
+			return nil, fmt.Errorf("error converting object metadata to unstructured: %w", err)
+		}
+		data["object"] = obj
+	}
+
+	return data, nil
+}
+
 // convertToBloblangInput converts ResolveInput to a format suitable for Bloblang
 func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 	// Convert to a map structure that Bloblang can navigate
@@ -347,10 +459,11 @@ func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 // RunnableRule is a set of checks, writes, and filters with fully compiled
 // expressions for building and matching relationships.
 type RunnableRule struct {
-	LockMode  proxyrule.LockMode
-	Checks    []*RelExpr
-	Update    *UpdateSet
-	PreFilter []*PreFilter
+	LockMode      proxyrule.LockMode
+	IfConditions  []cel.Program
+	Checks        []*RelExpr
+	Update        *UpdateSet
+	PreFilter     []*PreFilter
 }
 
 type UpdateSet struct {
@@ -394,6 +507,34 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 		LockMode: config.Locking,
 	}
 	var err error
+
+	// Compile CEL expressions
+	if len(config.If) > 0 {
+		env, err := createCELEnvironment()
+		if err != nil {
+			return nil, fmt.Errorf("error creating CEL environment: %w", err)
+		}
+
+		runnable.IfConditions = make([]cel.Program, 0, len(config.If))
+		for i, expr := range config.If {
+			ast, issues := env.Compile(expr)
+			if issues != nil && issues.Err() != nil {
+				return nil, fmt.Errorf("error compiling CEL expression %d (%q): %w", i, expr, issues.Err())
+			}
+
+			// Check that the expression returns a boolean
+			if !ast.OutputType().IsExactType(cel.BoolType) {
+				return nil, fmt.Errorf("CEL expression %d (%q) must return a boolean, got %s", i, expr, ast.OutputType())
+			}
+
+			program, err := env.Program(ast)
+			if err != nil {
+				return nil, fmt.Errorf("error creating CEL program for expression %d (%q): %w", i, expr, err)
+			}
+
+			runnable.IfConditions = append(runnable.IfConditions, program)
+		}
+	}
 	runnable.Checks, err = compileStringOrObjTemplates(config.Checks)
 	if err != nil {
 		return nil, fmt.Errorf("error compiling checks: %w", err)
