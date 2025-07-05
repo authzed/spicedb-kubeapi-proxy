@@ -40,14 +40,80 @@ const (
 // requests to an optional set of checks, an optional set of updares, and an
 // optional filter.
 type Spec struct {
-	Locking    LockMode           `json:"lock,omitempty"`
-	Matches    []Match            `json:"match"`
-	Checks     []StringOrTemplate `json:"check,omitempty"`
-	Must       []StringOrTemplate `json:"must,omitempty"`
-	MustNot    []StringOrTemplate `json:"mustNot,omitempty"`
-	Updates    []StringOrTemplate `json:"update,omitempty"`
-	PreFilters []PreFilter        `json:"prefilter,omitempty"`
-	// TODO: PostFilter
+	// Locking is the locking mode for this rule. The default is specified on
+	// the command line as a flag.
+	//
+	// If set to "Optimistic", the proxy will use optimistic locking by attempting
+	// to perform the update and rolling back if the update fails.
+	//
+	// If set to "Pessimistic", the proxy will use pessimistic locking by
+	// acquiring a lock on the object before performing the update.
+	Locking LockMode `json:"lock,omitempty"`
+
+	// Matches defines the requests that this rule applies to. Cannot be empty.
+	Matches []Match `json:"match"`
+
+	// Checks are the authorization checks to perform, in SpiceDB, if the request matches.
+	// If empty, the request will be allowed without any checks.
+	Checks []StringOrTemplate `json:"check,omitempty"`
+
+	// PreFilters are LookupResources requests to filter the results before any
+	// authorization checks are performed. Used for List and Watch requests.
+	PreFilters []PreFilter `json:"prefilter,omitempty"`
+
+	// Update contains the updates to perform if the request matches, the checks succeed,
+	// and this is a write operation of some kind (Create, Update, or Delete).
+	Update Update `json:"update,omitempty"`
+}
+
+// Update is an update to perform against the SpiceDB relationships.
+type Update struct {
+	// PreconditionExists defines the relationships that must exist for the update
+	// operation to be succeed. Equivalent of Preconditions in SpiceDB.
+	// To specify dynamic portions of the relationship, use the following dollar
+	// sign values:
+	// - `$resourceType` for the resource type
+	// - `$resourceID` for the resource ID
+	// - `$resourceRelation` for the relation
+	// - `$subjectType` for the subject type
+	// - `$subjectID` for the subject ID
+	// - `$subjectRelation` for the subject relation
+	PreconditionExists []StringOrTemplate `json:"preconditionExists,omitempty"`
+
+	// PreconditionDoesNotExist defines the relationships that must not exist for the update
+	// operation to succeed. Equivalent of Preconditions in SpiceDB.
+	// To specify dynamic portions of the relationship, use the following dollar
+	// sign values:
+	// - `$resourceType` for the resource type
+	// - `$resourceID` for the resource ID
+	// - `$resourceRelation` for the relation
+	// - `$subjectType` for the subject type
+	// - `$subjectID` for the subject ID
+	// - `$subjectRelation` for the subject relation
+	PreconditionDoesNotExist []StringOrTemplate `json:"preconditionDoesNotExist,omitempty"`
+
+	// CreateRelationships defines the specific relationships to create in SpiceDB.
+	CreateRelationships []StringOrTemplate `json:"creates,omitempty"`
+
+	// TouchRelationships defines the specific relationships to touch in SpiceDB.
+	TouchRelationships []StringOrTemplate `json:"touches,omitempty"`
+
+	// DeleteRelationships defines the specific relationships to delete in SpiceDB.
+	DeleteRelationships []StringOrTemplate `json:"deletes,omitempty"`
+
+	// DeleteByFilter defines a filter to delete relationships in SpiceDB.
+	// This is a more flexible way to delete relationships than specifying
+	// DeleteRelationships, as it allows for dynamic portions of the relationship
+	// to be specified.
+	// To specify dynamic portions of the relationship, use the following dollar
+	// sign values:
+	// - `$resourceType` for the resource type
+	// - `$resourceID` for the resource ID
+	// - `$resourceRelation` for the relation
+	// - `$subjectType` for the subject type
+	// - `$subjectID` for the subject ID
+	// - `$subjectRelation` for the subject relation
+	DeleteByFilter []StringOrTemplate `json:"deleteByFilter,omitempty"`
 }
 
 // Match determines which requests the rule applies to

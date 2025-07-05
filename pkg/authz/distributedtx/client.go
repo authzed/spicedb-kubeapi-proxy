@@ -60,6 +60,9 @@ func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServic
 	if err := w.RegisterActivity(txHandler.WriteToSpiceDB); err != nil {
 		return nil, nil, err
 	}
+	if err := w.RegisterActivity(txHandler.ReadRelationships); err != nil {
+		return nil, nil, err
+	}
 
 	return client.New(monoBackend), &Worker{worker: w}, nil
 }

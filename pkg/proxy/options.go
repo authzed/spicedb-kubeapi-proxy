@@ -110,7 +110,7 @@ func NewOptions() *Options {
 		SpiceDBOptions: NewSpiceDBOptions(),
 		Logs:           logsv1.NewLoggingConfiguration(),
 	}
-	o.Logs.Verbosity = logsv1.VerbosityLevel(2)
+	o.Logs.Verbosity = logsv1.VerbosityLevel(3)
 	o.SecureServing.BindPort = 443
 	o.SecureServing.ServerCert.PairName = tlsCertificatePairName
 	return o

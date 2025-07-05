@@ -133,7 +133,7 @@ func TestRuleConfig(t *testing.T) {
 	require.Len(t, rules, 1)
 	require.Len(t, rules[0].PreFilter, 1)
 	require.Len(t, rules[0].Checks, 0)
-	require.Len(t, rules[0].Updates, 0)
+	require.Nil(t, rules[0].Update)
 
 	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 	errConfigBytes := []byte(`
