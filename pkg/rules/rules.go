@@ -332,18 +332,18 @@ func EvaluateCELConditions(programs []cel.Program, input *ResolveInput) (bool, e
 // FilterRulesWithCELConditions filters rules based on their CEL conditions.
 func FilterRulesWithCELConditions(rules []*RunnableRule, input *ResolveInput) ([]*RunnableRule, error) {
 	var filteredRules []*RunnableRule
-	
+
 	for _, rule := range rules {
 		matches, err := EvaluateCELConditions(rule.IfConditions, input)
 		if err != nil {
 			return nil, fmt.Errorf("error evaluating CEL conditions for rule: %w", err)
 		}
-		
+
 		if matches {
 			filteredRules = append(filteredRules, rule)
 		}
 	}
-	
+
 	return filteredRules, nil
 }
 
@@ -391,7 +391,7 @@ func convertToCELInput(input *ResolveInput) (map[string]any, error) {
 		data["object"] = obj
 	}
 
-	return data, nil
+	return normalizeToBloblangTypes(data).(map[string]any), nil
 }
 
 // convertToBloblangInput converts ResolveInput to a format suitable for Bloblang
@@ -402,7 +402,7 @@ func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 		"namespace":      input.Namespace,
 		"namespacedName": input.NamespacedName,
 		"resourceId":     input.NamespacedName, // Add resourceId field for compatibility
-		"headers":        input.Headers,
+		"headers":        normalizeToBloblangTypes(input.Headers),
 	}
 
 	// Convert request info to map
@@ -422,8 +422,8 @@ func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 		data["user"] = map[string]any{
 			"name":   input.User.Name,
 			"uid":    input.User.UID,
-			"groups": input.User.Groups,
-			"extra":  input.User.Extra,
+			"groups": normalizeToBloblangTypes(input.User.Groups),
+			"extra":  normalizeToBloblangTypes(input.User.Extra),
 		}
 	}
 
@@ -442,7 +442,7 @@ func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 		}
 
 		objectData := map[string]any{
-			"metadata": obj["metadata"],
+			"metadata": normalizeToBloblangTypes(obj["metadata"]),
 		}
 
 		data["object"] = objectData
@@ -453,17 +453,56 @@ func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 		data["body"] = input.Body
 	}
 
-	return data, nil
+	return normalizeToBloblangTypes(data).(map[string]any), nil
+}
+
+// normalizeToBloblangTypes recursively converts all maps to map[string]any and all slices to []any,
+// which is necessary for Bloblang to process the data correctly.
+func normalizeToBloblangTypes(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		normalized := make(map[string]any, len(val))
+		for k, v := range val {
+			normalized[k] = normalizeToBloblangTypes(v)
+		}
+		return normalized
+	case map[string][]string:
+		normalized := make(map[string]any, len(val))
+		for k, v := range val {
+			normalized[k] = normalizeToBloblangTypes(v)
+		}
+		return normalized
+	case http.Header:
+		normalized := make(map[string]any, len(val))
+		for k, v := range val {
+			normalized[k] = normalizeToBloblangTypes(v)
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, len(val))
+		for i, v := range val {
+			normalized[i] = normalizeToBloblangTypes(v)
+		}
+		return normalized
+	case []string:
+		normalized := make([]any, len(val))
+		for i, v := range val {
+			normalized[i] = v
+		}
+		return normalized
+	default:
+		return val
+	}
 }
 
 // RunnableRule is a set of checks, writes, and filters with fully compiled
 // expressions for building and matching relationships.
 type RunnableRule struct {
-	LockMode      proxyrule.LockMode
-	IfConditions  []cel.Program
-	Checks        []*RelExpr
-	Update        *UpdateSet
-	PreFilter     []*PreFilter
+	LockMode     proxyrule.LockMode
+	IfConditions []cel.Program
+	Checks       []*RelExpr
+	Update       *UpdateSet
+	PreFilter    []*PreFilter
 }
 
 type UpdateSet struct {
