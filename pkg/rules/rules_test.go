@@ -190,14 +190,14 @@ func TestCompile(t *testing.T) {
 	require.NoError(t, json.Unmarshal(testDataBytes, &testData))
 
 	type result struct {
-		checks         []ResolvedRel
-		creates        []ResolvedRel
-		touches        []ResolvedRel
-		deletes        []ResolvedRel
+		checks          []ResolvedRel
+		creates         []ResolvedRel
+		touches         []ResolvedRel
+		deletes         []ResolvedRel
 		deletesByFilter []ResolvedRel
-		mustExist      []ResolvedRel
-		mustNotExist   []ResolvedRel
-		filters        []ResolvedPreFilter
+		mustExist       []ResolvedRel
+		mustNotExist    []ResolvedRel
+		filters         []ResolvedPreFilter
 	}
 
 	mustQuery := func(executor *bloblang.Executor) any {
@@ -353,7 +353,7 @@ func TestCompile(t *testing.T) {
 			}},
 			want: result{
 				checks: []ResolvedRel{{
-					ResourceType:     "org", 
+					ResourceType:     "org",
 					ResourceID:       "testOrg",
 					ResourceRelation: "manage-wardles",
 					SubjectType:      "user",
@@ -361,7 +361,7 @@ func TestCompile(t *testing.T) {
 				}},
 				touches: []ResolvedRel{{
 					ResourceType:     "wardles",
-					ResourceID:       "testName", 
+					ResourceID:       "testName",
 					ResourceRelation: "last-modified",
 					SubjectType:      "user",
 					SubjectID:        "testUser",
@@ -369,7 +369,7 @@ func TestCompile(t *testing.T) {
 				deletes: []ResolvedRel{{
 					ResourceType:     "wardles",
 					ResourceID:       "testName",
-					ResourceRelation: "temp-access", 
+					ResourceRelation: "temp-access",
 					SubjectType:      "user",
 					SubjectID:        "*",
 				}},
@@ -403,7 +403,7 @@ func TestCompile(t *testing.T) {
 			want: result{
 				checks: []ResolvedRel{{
 					ResourceType:     "org",
-					ResourceID:       "testOrg", 
+					ResourceID:       "testOrg",
 					ResourceRelation: "manage-wardles",
 					SubjectType:      "user",
 					SubjectID:        "testUser",
@@ -412,7 +412,7 @@ func TestCompile(t *testing.T) {
 					ResourceType:     "wardles",
 					ResourceID:       "testName",
 					ResourceRelation: "creator",
-					SubjectType:      "user", 
+					SubjectType:      "user",
 					SubjectID:        "testUser",
 				}},
 				mustNotExist: []ResolvedRel{{
@@ -425,7 +425,7 @@ func TestCompile(t *testing.T) {
 				deletes: []ResolvedRel{{
 					ResourceType:     "wardles",
 					ResourceID:       "testName",
-					ResourceRelation: "creator", 
+					ResourceRelation: "creator",
 					SubjectType:      "user",
 					SubjectID:        "testUser",
 				}},
@@ -463,7 +463,7 @@ func TestCompile(t *testing.T) {
 				checks: []ResolvedRel{{
 					ResourceType:     "org",
 					ResourceID:       "testOrg",
-					ResourceRelation: "manage-wardles", 
+					ResourceRelation: "manage-wardles",
 					SubjectType:      "user",
 					SubjectID:        "testUser",
 				}},
@@ -476,7 +476,7 @@ func TestCompile(t *testing.T) {
 				}},
 				creates: []ResolvedRel{{
 					ResourceType:     "wardles",
-					ResourceID:       "testName", 
+					ResourceID:       "testName",
 					ResourceRelation: "patched-by",
 					SubjectType:      "user",
 					SubjectID:        "testUser",
@@ -486,7 +486,7 @@ func TestCompile(t *testing.T) {
 					ResourceID:       "testName",
 					ResourceRelation: "last-modified",
 					SubjectType:      "user",
-					SubjectID:        "testUser", 
+					SubjectID:        "testUser",
 				}},
 				deletes: []ResolvedRel{{
 					ResourceType:     "wardles",
@@ -1135,6 +1135,150 @@ func TestMapMatcherMatch(t *testing.T) {
 	}
 }
 
+func TestNormalizeToBloblangTypes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  any
+	}{
+		{
+			name:  "string - no change",
+			input: "hello",
+			want:  "hello",
+		},
+		{
+			name:  "int - no change",
+			input: 42,
+			want:  42,
+		},
+		{
+			name:  "bool - no change",
+			input: true,
+			want:  true,
+		},
+		{
+			name:  "nil - no change",
+			input: nil,
+			want:  nil,
+		},
+		{
+			name:  "simple map[string]any - no change",
+			input: map[string]any{"key": "value"},
+			want:  map[string]any{"key": "value"},
+		},
+		{
+			name:  "simple []any - no change",
+			input: []any{"item1", "item2"},
+			want:  []any{"item1", "item2"},
+		},
+		{
+			name:  "[]string to []any",
+			input: []string{"str1", "str2", "str3"},
+			want:  []any{"str1", "str2", "str3"},
+		},
+		{
+			name: "nested map[string]any",
+			input: map[string]any{
+				"level1": map[string]any{
+					"level2": "value",
+					"array":  []string{"a", "b", "c"},
+				},
+			},
+			want: map[string]any{
+				"level1": map[string]any{
+					"level2": "value",
+					"array":  []any{"a", "b", "c"},
+				},
+			},
+		},
+		{
+			name: "nested []any with maps",
+			input: []any{
+				map[string]any{"key": "value1"},
+				[]string{"nested", "array"},
+				"plain string",
+			},
+			want: []any{
+				map[string]any{"key": "value1"},
+				[]any{"nested", "array"},
+				"plain string",
+			},
+		},
+		{
+			name: "complex nested structure",
+			input: map[string]any{
+				"users": []string{"alice", "bob", "charlie"},
+				"metadata": map[string]any{
+					"labels": map[string]any{
+						"env":   "production",
+						"teams": []string{"backend", "frontend"},
+					},
+					"annotations": []any{
+						map[string]any{"key": "value"},
+						"simple annotation",
+					},
+				},
+				"count":   123,
+				"enabled": true,
+			},
+			want: map[string]any{
+				"users": []any{"alice", "bob", "charlie"},
+				"metadata": map[string]any{
+					"labels": map[string]any{
+						"env":   "production",
+						"teams": []any{"backend", "frontend"},
+					},
+					"annotations": []any{
+						map[string]any{"key": "value"},
+						"simple annotation",
+					},
+				},
+				"count":   123,
+				"enabled": true,
+			},
+		},
+		{
+			name:  "empty map",
+			input: map[string]any{},
+			want:  map[string]any{},
+		},
+		{
+			name:  "empty []any",
+			input: []any{},
+			want:  []any{},
+		},
+		{
+			name:  "empty []string",
+			input: []string{},
+			want:  []any{},
+		},
+		{
+			name: "deeply nested []string conversion",
+			input: map[string]any{
+				"level1": []any{
+					map[string]any{
+						"level2": []string{"deep", "nested", "strings"},
+					},
+				},
+			},
+			want: map[string]any{
+				"level1": []any{
+					map[string]any{
+						"level2": []any{"deep", "nested", "strings"},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeToBloblangTypes(tt.input)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestResolveRel(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1214,6 +1358,419 @@ func TestResolveRel(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestConvertToBloblangInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   *ResolveInput
+		want    map[string]any
+		wantErr bool
+	}{
+		{
+			name: "basic input with user extra fields",
+			input: &ResolveInput{
+				Name:           "test-pod",
+				Namespace:      "default",
+				NamespacedName: "default/test-pod",
+				Request: &request.RequestInfo{
+					Verb:       "create",
+					APIGroup:   "v1",
+					APIVersion: "v1",
+					Resource:   "pods",
+					Name:       "test-pod",
+					Namespace:  "default",
+				},
+				User: &user.DefaultInfo{
+					Name:   "test-user",
+					UID:    "uid123",
+					Groups: []string{"group1", "group2"},
+					Extra: map[string][]string{
+						"department": {"engineering", "security"},
+						"role":       {"admin"},
+						"project":    {"alpha", "beta", "gamma"},
+					},
+				},
+				Headers: map[string][]string{
+					"Authorization": {"Bearer token123"},
+					"Content-Type":  {"application/json"},
+					"X-Custom":      {"value1", "value2"},
+				},
+			},
+			want: map[string]any{
+				"name":           "test-pod",
+				"namespace":      "default",
+				"namespacedName": "default/test-pod",
+				"resourceId":     "default/test-pod",
+				"request": map[string]any{
+					"verb":       "create",
+					"apiGroup":   "v1",
+					"apiVersion": "v1",
+					"resource":   "pods",
+					"name":       "test-pod",
+					"namespace":  "default",
+				},
+				"user": map[string]any{
+					"name":   "test-user",
+					"uid":    "uid123",
+					"groups": []any{"group1", "group2"},
+					"extra": map[string]any{
+						"department": []any{"engineering", "security"},
+						"role":       []any{"admin"},
+						"project":    []any{"alpha", "beta", "gamma"},
+					},
+				},
+				"headers": map[string]any{
+					"Authorization": []any{"Bearer token123"},
+					"Content-Type":  []any{"application/json"},
+					"X-Custom":      []any{"value1", "value2"},
+				},
+			},
+		},
+		{
+			name: "user extra with nested access patterns",
+			input: &ResolveInput{
+				Name:           "test-resource",
+				Namespace:      "system",
+				NamespacedName: "system/test-resource",
+				User: &user.DefaultInfo{
+					Name:   "admin-user",
+					UID:    "admin123",
+					Groups: []string{"system:masters", "system:authenticated"},
+					Extra: map[string][]string{
+						"scopes":      {"read", "write", "admin"},
+						"permissions": {"create", "update", "delete"},
+						"metadata":    {"env=prod", "team=platform"},
+					},
+				},
+				Headers: map[string][]string{
+					"X-Forwarded-For": {"192.168.1.1", "10.0.0.1"},
+					"User-Agent":      {"kubectl/v1.28.0"},
+				},
+			},
+			want: map[string]any{
+				"name":           "test-resource",
+				"namespace":      "system",
+				"namespacedName": "system/test-resource",
+				"resourceId":     "system/test-resource",
+				"user": map[string]any{
+					"name":   "admin-user",
+					"uid":    "admin123",
+					"groups": []any{"system:masters", "system:authenticated"},
+					"extra": map[string]any{
+						"scopes":      []any{"read", "write", "admin"},
+						"permissions": []any{"create", "update", "delete"},
+						"metadata":    []any{"env=prod", "team=platform"},
+					},
+				},
+				"headers": map[string]any{
+					"X-Forwarded-For": []any{"192.168.1.1", "10.0.0.1"},
+					"User-Agent":      []any{"kubectl/v1.28.0"},
+				},
+			},
+		},
+		{
+			name: "object metadata with nested structure",
+			input: &ResolveInput{
+				Name:           "my-deployment",
+				Namespace:      "production",
+				NamespacedName: "production/my-deployment",
+				Object: &metav1.PartialObjectMetadata{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "my-deployment",
+						Namespace: "production",
+						Labels: map[string]string{
+							"app":         "frontend",
+							"version":     "v1.2.3",
+							"environment": "prod",
+						},
+						Annotations: map[string]string{
+							"deploy.kubernetes.io/revision":                    "1",
+							"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apps/v1","kind":"Deployment"}`,
+						},
+					},
+				},
+				User: &user.DefaultInfo{
+					Name: "deploy-user",
+					Extra: map[string][]string{
+						"buildinfo": {"commit=abc123", "branch=main"},
+					},
+				},
+				Headers: map[string][]string{
+					"X-Build-Id": {"12345"},
+				},
+			},
+			want: map[string]any{
+				"name":           "my-deployment",
+				"namespace":      "production",
+				"namespacedName": "production/my-deployment",
+				"resourceId":     "production/my-deployment",
+				"user": map[string]any{
+					"name":   "deploy-user",
+					"uid":    "",
+					"groups": []any{},
+					"extra": map[string]any{
+						"buildinfo": []any{"commit=abc123", "branch=main"},
+					},
+				},
+				"object": map[string]any{
+					"metadata": map[string]any{
+						"name":      "my-deployment",
+						"namespace": "production",
+						"labels": map[string]any{
+							"app":         "frontend",
+							"version":     "v1.2.3",
+							"environment": "prod",
+						},
+						"annotations": map[string]any{
+							"deploy.kubernetes.io/revision":                    "1",
+							"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apps/v1","kind":"Deployment"}`,
+						},
+						"creationTimestamp": nil,
+					},
+				},
+				"metadata": map[string]any{
+					"name":      "my-deployment",
+					"namespace": "production",
+					"labels": map[string]any{
+						"app":         "frontend",
+						"version":     "v1.2.3",
+						"environment": "prod",
+					},
+					"annotations": map[string]any{
+						"deploy.kubernetes.io/revision":                    "1",
+						"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apps/v1","kind":"Deployment"}`,
+					},
+					"creationTimestamp": nil,
+				},
+				"headers": map[string]any{
+					"X-Build-Id": []any{"12345"},
+				},
+			},
+		},
+		{
+			name: "empty user extra and headers",
+			input: &ResolveInput{
+				Name:           "simple-pod",
+				Namespace:      "default",
+				NamespacedName: "default/simple-pod",
+				User: &user.DefaultInfo{
+					Name:   "simple-user",
+					UID:    "simple123",
+					Groups: []string{},
+					Extra:  map[string][]string{},
+				},
+				Headers: map[string][]string{},
+			},
+			want: map[string]any{
+				"name":           "simple-pod",
+				"namespace":      "default",
+				"namespacedName": "default/simple-pod",
+				"resourceId":     "default/simple-pod",
+				"user": map[string]any{
+					"name":   "simple-user",
+					"uid":    "simple123",
+					"groups": []any{},
+					"extra":  map[string]any{},
+				},
+				"headers": map[string]any{},
+			},
+		},
+		{
+			name: "nil user and headers",
+			input: &ResolveInput{
+				Name:           "basic-resource",
+				Namespace:      "test",
+				NamespacedName: "test/basic-resource",
+				User:           nil,
+				Headers:        nil,
+			},
+			want: map[string]any{
+				"name":           "basic-resource",
+				"namespace":      "test",
+				"namespacedName": "test/basic-resource",
+				"resourceId":     "test/basic-resource",
+				"headers":        map[string]any{},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := convertToBloblangInput(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestConvertToBloblangInputWithBloblangExpressions(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          *ResolveInput
+		expression     string
+		expectedResult any
+		wantErr        bool
+	}{
+		{
+			name: "access user extra field by index",
+			input: &ResolveInput{
+				User: &user.DefaultInfo{
+					Name: "test-user",
+					Extra: map[string][]string{
+						"department": {"engineering", "security"},
+						"role":       {"admin"},
+						"project":    {"alpha", "beta", "gamma"},
+					},
+				},
+			},
+			expression:     "user.extra.department.index(0)",
+			expectedResult: "engineering",
+		},
+		{
+			name: "access user extra field by index - second element",
+			input: &ResolveInput{
+				User: &user.DefaultInfo{
+					Name: "test-user",
+					Extra: map[string][]string{
+						"scopes": {"read", "write", "admin"},
+					},
+				},
+			},
+			expression:     "user.extra.scopes.index(2)",
+			expectedResult: "admin",
+		},
+		{
+			name: "access header by key and index",
+			input: &ResolveInput{
+				Headers: map[string][]string{
+					"X-Custom":      {"value1", "value2", "value3"},
+					"Authorization": {"Bearer token123"},
+				},
+			},
+			expression:     "headers.\"X-Custom\".index(1)",
+			expectedResult: "value2",
+		},
+		{
+			name: "access single header value",
+			input: &ResolveInput{
+				Headers: map[string][]string{
+					"Content-Type": {"application/json"},
+				},
+			},
+			expression:     "headers.\"Content-Type\".index(0)",
+			expectedResult: "application/json",
+		},
+		{
+			name: "access user groups by index",
+			input: &ResolveInput{
+				User: &user.DefaultInfo{
+					Name:   "test-user",
+					Groups: []string{"group1", "group2", "system:masters"},
+				},
+			},
+			expression:     "user.groups.index(2)",
+			expectedResult: "system:masters",
+		},
+		{
+			name: "access nested object metadata",
+			input: &ResolveInput{
+				Object: &metav1.PartialObjectMetadata{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-pod",
+						Labels: map[string]string{
+							"app": "frontend",
+							"env": "prod",
+						},
+					},
+				},
+			},
+			expression:     "object.metadata.labels.app",
+			expectedResult: "frontend",
+		},
+		{
+			name: "access request info",
+			input: &ResolveInput{
+				Request: &request.RequestInfo{
+					Verb:     "create",
+					Resource: "pods",
+					APIGroup: "v1",
+				},
+			},
+			expression:     "request.verb",
+			expectedResult: "create",
+		},
+		{
+			name: "complex expression with multiple field access",
+			input: &ResolveInput{
+				User: &user.DefaultInfo{
+					Name: "admin",
+					Extra: map[string][]string{
+						"permissions": {"read", "write", "admin"},
+					},
+				},
+				Request: &request.RequestInfo{
+					Verb: "create",
+				},
+			},
+			expression:     "user.extra.permissions.index(2) + \"-\" + request.verb",
+			expectedResult: "admin-create",
+		},
+		{
+			name: "access non-existent field",
+			input: &ResolveInput{
+				User: &user.DefaultInfo{
+					Name: "test-user",
+					Extra: map[string][]string{
+						"department": {"engineering"},
+					},
+				},
+			},
+			expression:     "user.extra.nonexistent.index(0)",
+			expectedResult: nil,
+			wantErr:        true,
+		},
+		{
+			name: "access out of bounds index",
+			input: &ResolveInput{
+				User: &user.DefaultInfo{
+					Name: "test-user",
+					Extra: map[string][]string{
+						"department": {"engineering"},
+					},
+				},
+			},
+			expression:     "user.extra.department.index(5)",
+			expectedResult: nil,
+			wantErr:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Convert the input to bloblang format
+			bloblangInput, err := convertToBloblangInput(tt.input)
+			require.NoError(t, err)
+
+			// Compile the bloblang expression
+			executor, err := customBloblangEnv.Parse(tt.expression)
+			require.NoError(t, err)
+
+			// Execute the expression
+			result, err := executor.Query(bloblangInput)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+
+			require.Equal(t, tt.expectedResult, result)
 		})
 	}
 }
