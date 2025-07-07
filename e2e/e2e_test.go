@@ -77,7 +77,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	// this runs only once, no matter how many processes are running tests
 	testEnv = &envtest.Environment{
 		ControlPlaneStopTimeout: 3 * time.Minute,
-		CRDDirectoryPaths:       []string{"testresource-crd.yaml"},
+		CRDDirectoryPaths:       []string{"testresource-crd.yaml", "anothertestresource-crd.yaml"},
 	}
 
 	ConfigureApiserver()

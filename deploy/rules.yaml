@@ -5,11 +5,12 @@ match:
 - apiVersion: v1
   resource: namespaces
   verbs: ["create"]
-mustNot:
-- tpl: "namespace:{{name}}#cluster@cluster:cluster"
 update:
-- tpl: "namespace:{{name}}#creator@user:{{user.name}}"
-- tpl: "namespace:{{name}}#cluster@cluster:cluster"
+  preconditionDoesNotExist:
+  - tpl: "namespace:{{name}}#cluster@cluster:cluster"
+  creates:
+  - tpl: "namespace:{{name}}#creator@user:{{user.name}}"
+  - tpl: "namespace:{{name}}#cluster@cluster:cluster"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -19,8 +20,9 @@ match:
   resource: namespaces
   verbs: ["delete"]
 update:
-- tpl: "namespace:{{name}}#creator@user:{{user.name}}"
-- tpl: "namespace:{{name}}#cluster@cluster:cluster"
+  deletes:
+  - tpl: "namespace:{{name}}#creator@user:{{user.name}}"
+  - tpl: "namespace:{{name}}#cluster@cluster:cluster"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -49,11 +51,12 @@ match:
 - apiVersion: v1
   resource: pods
   verbs: ["create"]
-mustNot:
-- tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 update:
-- tpl: "pod:{{namespacedName}}#creator@user:{{user.name}}"
-- tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
+  preconditionDoesNotExist:
+  - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
+  creates:
+  - tpl: "pod:{{namespacedName}}#creator@user:{{user.name}}"
+  - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -63,8 +66,9 @@ match:
   resource: pods
   verbs: ["delete"]
 update:
-- tpl: "pod:{{namespacedName}}#creator@user:{{user.name}}"
-- tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
+  deletes:
+  - tpl: "pod:{{namespacedName}}#creator@user:{{user.name}}"
+  - tpl: "pod:{{name}}#namespace@namespace:{{namespace}}"
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
