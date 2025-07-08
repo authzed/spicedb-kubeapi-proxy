@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 
+	"github.com/go-playground/validator/v10"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 )
@@ -48,10 +49,10 @@ type Spec struct {
 	//
 	// If set to "Pessimistic", the proxy will use pessimistic locking by
 	// acquiring a lock on the object before performing the update.
-	Locking LockMode `json:"lock,omitempty"`
+	Locking LockMode `json:"lock,omitempty" validate:"omitempty,oneof=Optimistic Pessimistic"`
 
 	// Matches defines the requests that this rule applies to. Cannot be empty.
-	Matches []Match `json:"match"`
+	Matches []Match `json:"match" validate:"required,min=1,dive"`
 
 	// If defines CEL expressions that must evaluate to true for this rule to apply.
 	// All expressions must evaluate to true for the rule to match.
@@ -72,19 +73,19 @@ type Spec struct {
 	// - "'system:masters' in user.groups"
 	// - "resourceNamespace == 'default'"
 	// - "request.resource == 'pods' && request.verb in ['get', 'list']"
-	If []string `json:"if,omitempty"`
+	If []string `json:"if,omitempty" validate:"omitempty,dive"`
 
 	// Checks are the authorization checks to perform, in SpiceDB, if the request matches.
 	// If empty, the request will be allowed without any checks.
-	Checks []StringOrTemplate `json:"check,omitempty"`
+	Checks []StringOrTemplate `json:"check,omitempty" validate:"omitempty,dive"`
 
 	// PreFilters are LookupResources requests to filter the results before any
 	// authorization checks are performed. Used for List and Watch requests.
-	PreFilters []PreFilter `json:"prefilter,omitempty"`
+	PreFilters []PreFilter `json:"prefilter,omitempty" validate:"omitempty,dive"`
 
 	// Update contains the updates to perform if the request matches, the checks succeed,
 	// and this is a write operation of some kind (Create, Update, or Delete).
-	Update Update `json:"update,omitempty"`
+	Update Update `json:"update,omitempty" validate:"omitempty"`
 }
 
 // Update is an update to perform against the SpiceDB relationships.
@@ -99,7 +100,7 @@ type Update struct {
 	// - `$subjectType` for the subject type
 	// - `$subjectID` for the subject ID
 	// - `$subjectRelation` for the subject relation
-	PreconditionExists []StringOrTemplate `json:"preconditionExists,omitempty"`
+	PreconditionExists []StringOrTemplate `json:"preconditionExists,omitempty" validate:"omitempty,dive"`
 
 	// PreconditionDoesNotExist defines the relationships that must not exist for the update
 	// operation to succeed. Equivalent of Preconditions in SpiceDB.
@@ -111,16 +112,16 @@ type Update struct {
 	// - `$subjectType` for the subject type
 	// - `$subjectID` for the subject ID
 	// - `$subjectRelation` for the subject relation
-	PreconditionDoesNotExist []StringOrTemplate `json:"preconditionDoesNotExist,omitempty"`
+	PreconditionDoesNotExist []StringOrTemplate `json:"preconditionDoesNotExist,omitempty" validate:"omitempty,dive"`
 
 	// CreateRelationships defines the specific relationships to create in SpiceDB.
-	CreateRelationships []StringOrTemplate `json:"creates,omitempty"`
+	CreateRelationships []StringOrTemplate `json:"creates,omitempty" validate:"omitempty,dive,required_without=touches deletes deleteByFilter"`
 
 	// TouchRelationships defines the specific relationships to touch in SpiceDB.
-	TouchRelationships []StringOrTemplate `json:"touches,omitempty"`
+	TouchRelationships []StringOrTemplate `json:"touches,omitempty" validate:"omitempty,dive,required_without=creates deletes deleteByFilter"`
 
 	// DeleteRelationships defines the specific relationships to delete in SpiceDB.
-	DeleteRelationships []StringOrTemplate `json:"deletes,omitempty"`
+	DeleteRelationships []StringOrTemplate `json:"deletes,omitempty" validate:"omitempty,dive,required_without=creates touches deleteByFilter"`
 
 	// DeleteByFilter defines a filter to delete relationships in SpiceDB.
 	// This is a more flexible way to delete relationships than specifying
@@ -134,21 +135,24 @@ type Update struct {
 	// - `$subjectType` for the subject type
 	// - `$subjectID` for the subject ID
 	// - `$subjectRelation` for the subject relation
-	DeleteByFilter []StringOrTemplate `json:"deleteByFilter,omitempty"`
+	DeleteByFilter []StringOrTemplate `json:"deleteByFilter,omitempty" validate:"omitempty,dive,required_without=creates touches deletes"`
 }
 
 // Match determines which requests the rule applies to
 type Match struct {
-	GroupVersion string   `json:"apiVersion"`
-	Resource     string   `json:"resource"`
-	Verbs        []string `json:"verbs"`
+	GroupVersion string `json:"apiVersion" validate:"required"`
+	Resource     string `json:"resource" validate:"required"`
+
+	// The Kubernetes verb to match.
+	// See: `verbs` in https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.24/ for reference.
+	Verbs []string `json:"verbs" validate:"required,min=1,dive,oneof=get list watch create update patch delete"`
 }
 
 // StringOrTemplate either contains a string representing a relationship
 // template, or a full RelationshipTemplate definition.
 type StringOrTemplate struct {
-	Template              string `json:"tpl,inline"`
-	*RelationshipTemplate `json:",inline"`
+	Template              string `json:"tpl,inline" validate:"omitempty,min=1,required_without=RelationshipTemplate"`
+	*RelationshipTemplate `json:",inline" validate:"omitempty,required_without=tpl"`
 }
 
 // PreFilter defines a LookupResources request to filter the results.
@@ -157,15 +161,15 @@ type StringOrTemplate struct {
 type PreFilter struct {
 	// FromObjectIDNameExpr is a Bloblang expression defining how to construct an allowed Name from an
 	// LR response.
-	FromObjectIDNameExpr string `json:"fromObjectIDNameExpr,omitempty"`
+	FromObjectIDNameExpr string `json:"fromObjectIDNameExpr,omitempty" validate:"omitempty,min=1"`
 
 	// FromObjectIDNamespaceExpr is a Bloblang expression defining how to construct an allowed Namespace
 	// from an LR  response.
-	FromObjectIDNamespaceExpr string `json:"fromObjectIDNamespaceExpr,omitempty"`
+	FromObjectIDNamespaceExpr string `json:"fromObjectIDNamespaceExpr,omitempty" validate:"omitempty,min=1"`
 
 	// LookupMatchingResources is a template defining a LookupResources request to filter on.
 	// The resourceID must be set to `$`.
-	LookupMatchingResources *StringOrTemplate `json:"lookupMatchingResources,optional"`
+	LookupMatchingResources *StringOrTemplate `json:"lookupMatchingResources,optional" validate:"omitempty"`
 }
 
 // RelationshipTemplate represents a relationship where some fields may be
@@ -185,6 +189,8 @@ type ObjectTemplate struct {
 
 func Parse(reader io.Reader) ([]Config, error) {
 	decoder := utilyaml.NewYAMLOrJSONDecoder(reader, lookahead)
+	validate := validator.New()
+
 	var (
 		rules []Config
 		rule  Config
@@ -193,6 +199,11 @@ func Parse(reader io.Reader) ([]Config, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		if err := validate.Struct(rule); err != nil {
+			return nil, err
+		}
+
 		rules = append(rules, rule)
 		rule = Config{}
 	}

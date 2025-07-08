@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/stretchr/testify/require"
 )
 
@@ -347,4 +348,608 @@ update:
 			require.Equal(t, tt.expectRules, rules)
 		})
 	}
+}
+
+func TestValidation(t *testing.T) {
+	validate := validator.New()
+
+	t.Run("Config validation", func(t *testing.T) {
+		// Valid config
+		validConfig := Config{
+			TypeMeta: v1alpha1ProxyRule,
+			Spec: Spec{
+				Matches: []Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+			},
+		}
+		err := validate.Struct(validConfig)
+		require.NoError(t, err)
+	})
+
+	t.Run("Spec validation", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			spec      Spec
+			expectErr bool
+		}{
+			{
+				name: "valid spec",
+				spec: Spec{
+					Matches: []Match{{
+						GroupVersion: "v1",
+						Resource:     "pods",
+						Verbs:        []string{"get"},
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "invalid lock mode",
+				spec: Spec{
+					Locking: "Invalid",
+					Matches: []Match{{
+						GroupVersion: "v1",
+						Resource:     "pods",
+						Verbs:        []string{"get"},
+					}},
+				},
+				expectErr: true,
+			},
+			{
+				name: "valid lock mode - Optimistic",
+				spec: Spec{
+					Locking: OptimisticLockMode,
+					Matches: []Match{{
+						GroupVersion: "v1",
+						Resource:     "pods",
+						Verbs:        []string{"get"},
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "valid lock mode - Pessimistic",
+				spec: Spec{
+					Locking: PessimisticLockMode,
+					Matches: []Match{{
+						GroupVersion: "v1",
+						Resource:     "pods",
+						Verbs:        []string{"get"},
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "missing matches",
+				spec: Spec{
+					Matches: []Match{},
+				},
+				expectErr: true,
+			},
+			{
+				name: "nil matches",
+				spec: Spec{
+					Matches: nil,
+				},
+				expectErr: true,
+			},
+			{
+				name: "valid CEL expressions",
+				spec: Spec{
+					Matches: []Match{{
+						GroupVersion: "v1",
+						Resource:     "pods",
+						Verbs:        []string{"get"},
+					}},
+					If: []string{"request.verb == 'get'", "user.name == 'admin'"},
+				},
+				expectErr: false,
+			},
+			{
+				name: "empty CEL expression",
+				spec: Spec{
+					Matches: []Match{{
+						GroupVersion: "v1",
+						Resource:     "pods",
+						Verbs:        []string{"get"},
+					}},
+					If: []string{""},
+				},
+				expectErr: false, // Empty strings are allowed due to omitempty
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				err := validate.Struct(tt.spec)
+				if tt.expectErr {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	})
+
+	t.Run("Match validation", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			match     Match
+			expectErr bool
+		}{
+			{
+				name: "valid match",
+				match: Match{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get", "list"},
+				},
+				expectErr: false,
+			},
+			{
+				name: "missing GroupVersion",
+				match: Match{
+					Resource: "pods",
+					Verbs:    []string{"get"},
+				},
+				expectErr: true,
+			},
+			{
+				name: "missing Resource",
+				match: Match{
+					GroupVersion: "v1",
+					Verbs:        []string{"get"},
+				},
+				expectErr: true,
+			},
+			{
+				name: "missing Verbs",
+				match: Match{
+					GroupVersion: "v1",
+					Resource:     "pods",
+				},
+				expectErr: true,
+			},
+			{
+				name: "empty Verbs",
+				match: Match{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{},
+				},
+				expectErr: true,
+			},
+			{
+				name: "invalid verb",
+				match: Match{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"invalid"},
+				},
+				expectErr: true,
+			},
+			{
+				name: "valid verbs",
+				match: Match{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				},
+				expectErr: false,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				err := validate.Struct(tt.match)
+				if tt.expectErr {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	})
+
+	t.Run("Update validation", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			update    Update
+			expectErr bool
+		}{
+			{
+				name: "valid update with creates",
+				update: Update{
+					CreateRelationships: []StringOrTemplate{{
+						Template: "pod:test#view@user:admin",
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "valid update with touches",
+				update: Update{
+					TouchRelationships: []StringOrTemplate{{
+						Template: "pod:test#view@user:admin",
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "valid update with deletes",
+				update: Update{
+					DeleteRelationships: []StringOrTemplate{{
+						Template: "pod:test#view@user:admin",
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "valid update with deleteByFilter",
+				update: Update{
+					DeleteByFilter: []StringOrTemplate{{
+						Template: "pod:test#view@*",
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "valid update with preconditions",
+				update: Update{
+					PreconditionExists: []StringOrTemplate{{
+						Template: "pod:test#exist@user:admin",
+					}},
+					PreconditionDoesNotExist: []StringOrTemplate{{
+						Template: "pod:test#not-exist@user:admin",
+					}},
+					CreateRelationships: []StringOrTemplate{{
+						Template: "pod:test#view@user:admin",
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "mixed operations",
+				update: Update{
+					CreateRelationships: []StringOrTemplate{{
+						Template: "pod:test#view@user:admin",
+					}},
+					TouchRelationships: []StringOrTemplate{{
+						Template: "pod:test#edit@user:admin",
+					}},
+					DeleteRelationships: []StringOrTemplate{{
+						Template: "pod:test#old@user:admin",
+					}},
+					DeleteByFilter: []StringOrTemplate{{
+						Template: "pod:test#temp@*",
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "empty update - should pass due to omitempty",
+				update: Update{},
+				expectErr: false, // Empty updates are valid due to omitempty
+			},
+			{
+				name: "empty update arrays - should pass due to omitempty",
+				update: Update{
+					CreateRelationships: []StringOrTemplate{},
+					TouchRelationships:  []StringOrTemplate{},
+					DeleteRelationships: []StringOrTemplate{},
+					DeleteByFilter:      []StringOrTemplate{},
+				},
+				expectErr: false, // Empty arrays are valid due to omitempty
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				err := validate.Struct(tt.update)
+				if tt.expectErr {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	})
+
+	t.Run("StringOrTemplate validation", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			sot       StringOrTemplate
+			expectErr bool
+		}{
+			{
+				name: "valid template string",
+				sot: StringOrTemplate{
+					Template: "pod:test#view@user:admin",
+				},
+				expectErr: false,
+			},
+			{
+				name: "valid relationship template",
+				sot: StringOrTemplate{
+					RelationshipTemplate: &RelationshipTemplate{
+						Resource: ObjectTemplate{
+							Type: "pod",
+							ID:   "test",
+						},
+						Subject: ObjectTemplate{
+							Type: "user",
+							ID:   "admin",
+						},
+					},
+				},
+				expectErr: false,
+			},
+			{
+				name: "empty template string",
+				sot: StringOrTemplate{
+					Template: "",
+				},
+				expectErr: false, // Empty strings are allowed due to omitempty
+			},
+			{
+				name: "both template and relationship template",
+				sot: StringOrTemplate{
+					Template: "pod:test#view@user:admin",
+					RelationshipTemplate: &RelationshipTemplate{
+						Resource: ObjectTemplate{
+							Type: "pod",
+							ID:   "test",
+						},
+						Subject: ObjectTemplate{
+							Type: "user",
+							ID:   "admin",
+						},
+					},
+				},
+				expectErr: false,
+			},
+			{
+				name: "neither template nor relationship template",
+				sot:  StringOrTemplate{},
+				expectErr: false, // Empty structs are allowed due to omitempty
+			},
+			{
+				name: "relationship template with empty resource type",
+				sot: StringOrTemplate{
+					RelationshipTemplate: &RelationshipTemplate{
+						Resource: ObjectTemplate{
+							Type: "",
+							ID:   "test",
+						},
+						Subject: ObjectTemplate{
+							Type: "user",
+							ID:   "admin",
+						},
+					},
+				},
+				expectErr: false, // ObjectTemplate has no validation tags
+			},
+			{
+				name: "relationship template with empty subject type",
+				sot: StringOrTemplate{
+					RelationshipTemplate: &RelationshipTemplate{
+						Resource: ObjectTemplate{
+							Type: "pod",
+							ID:   "test",
+						},
+						Subject: ObjectTemplate{
+							Type: "",
+							ID:   "admin",
+						},
+					},
+				},
+				expectErr: false, // ObjectTemplate has no validation tags
+			},
+			{
+				name: "test required_without validation - only template",
+				sot: StringOrTemplate{
+					Template: "pod:test#view@user:admin",
+				},
+				expectErr: false, // Template is present, so RelationshipTemplate not required
+			},
+			{
+				name: "test required_without validation - only relationship template",
+				sot: StringOrTemplate{
+					RelationshipTemplate: &RelationshipTemplate{
+						Resource: ObjectTemplate{
+							Type: "pod",
+							ID:   "test",
+						},
+						Subject: ObjectTemplate{
+							Type: "user",
+							ID:   "admin",
+						},
+					},
+				},
+				expectErr: false, // RelationshipTemplate is present, so template not required
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				err := validate.Struct(tt.sot)
+				if tt.expectErr {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	})
+
+	t.Run("PreFilter validation", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			preFilter PreFilter
+			expectErr bool
+		}{
+			{
+				name: "valid prefilter",
+				preFilter: PreFilter{
+					FromObjectIDNameExpr:      "{{response.ResourceObjectID}}",
+					FromObjectIDNamespaceExpr: "{{request.Namespace}}",
+					LookupMatchingResources: &StringOrTemplate{
+						Template: "pod:$#view@user:admin",
+					},
+				},
+				expectErr: false,
+			},
+			{
+				name: "empty name expression",
+				preFilter: PreFilter{
+					FromObjectIDNameExpr:      "",
+					FromObjectIDNamespaceExpr: "{{request.Namespace}}",
+					LookupMatchingResources: &StringOrTemplate{
+						Template: "pod:$#view@user:admin",
+					},
+				},
+				expectErr: false, // Empty strings are allowed due to omitempty
+			},
+			{
+				name: "empty namespace expression",
+				preFilter: PreFilter{
+					FromObjectIDNameExpr:      "{{response.ResourceObjectID}}",
+					FromObjectIDNamespaceExpr: "",
+					LookupMatchingResources: &StringOrTemplate{
+						Template: "pod:$#view@user:admin",
+					},
+				},
+				expectErr: false, // Empty strings are allowed due to omitempty
+			},
+			{
+				name: "minimal valid prefilter",
+				preFilter: PreFilter{
+					FromObjectIDNameExpr: "{{response.ResourceObjectID}}",
+				},
+				expectErr: false,
+			},
+			{
+				name: "minimal valid prefilter with namespace",
+				preFilter: PreFilter{
+					FromObjectIDNamespaceExpr: "{{request.Namespace}}",
+				},
+				expectErr: false,
+			},
+			{
+				name: "empty prefilter",
+				preFilter: PreFilter{},
+				expectErr: false,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				err := validate.Struct(tt.preFilter)
+				if tt.expectErr {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	})
+
+	t.Run("Integration validation tests", func(t *testing.T) {
+		// Test validation through the Parse function (integration test)
+		tests := []struct {
+			name      string
+			config    string
+			expectErr bool
+		}{
+			{
+				name: "valid config with all fields",
+				config: `
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Optimistic
+match:
+- apiVersion: v1
+  resource: pods
+  verbs: ["get", "list"]
+if:
+- "request.verb == 'get'"
+- "user.name == 'admin'"
+check:
+- tpl: "namespace:{{resourceNamespace}}#view@user:{{user.name}}"
+prefilter:
+- fromObjectIDNameExpr: "{{response.ResourceObjectID}}"
+  fromObjectIDNamespaceExpr: "{{request.Namespace}}"
+  lookupMatchingResources:
+    tpl: "pod:$#view@user:{{user.name}}"
+update:
+  preconditionExists:
+  - tpl: "namespace:{{resourceNamespace}}#exist@user:{{user.name}}"
+  creates:
+  - tpl: "pod:{{name}}#creator@user:{{user.name}}"
+`,
+				expectErr: false,
+			},
+			{
+				name: "invalid - missing required matches",
+				config: `
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Optimistic
+check:
+- tpl: "namespace:{{resourceNamespace}}#view@user:{{user.name}}"
+`,
+				expectErr: true,
+			},
+			{
+				name: "invalid - invalid lock mode",
+				config: `
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+lock: Invalid
+match:
+- apiVersion: v1
+  resource: pods
+  verbs: ["get"]
+`,
+				expectErr: true,
+			},
+			{
+				name: "invalid - invalid verb",
+				config: `
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+match:
+- apiVersion: v1
+  resource: pods
+  verbs: ["invalid"]
+`,
+				expectErr: true,
+			},
+			{
+				name: "invalid - missing required fields in match",
+				config: `
+apiVersion: authzed.com/v1alpha1
+kind: ProxyRule
+match:
+- resource: pods
+  verbs: ["get"]
+`,
+				expectErr: true,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := Parse(strings.NewReader(tt.config))
+				if tt.expectErr {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	})
 }
