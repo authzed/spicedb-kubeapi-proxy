@@ -44,6 +44,9 @@ func TestWorkflow(t *testing.T) {
 
 			kubeClient := &fake.RESTClient{
 				Client: fake.CreateHTTPClient(func(request *http.Request) (*http.Response, error) {
+					queryParams := request.URL.Query()
+					require.Equal(t, "foobar", queryParams.Get("something"))
+
 					header := http.Header{}
 					header.Set("Content-Type", runtime.ContentTypeJSON)
 					resp := &http.Response{
@@ -68,6 +71,7 @@ func TestWorkflow(t *testing.T) {
 				InstanceID: uuid.NewString(),
 			}, workflowFunc, &WriteObjInput{
 				RequestInfo: &request.RequestInfo{Verb: "create"},
+				RequestURI:  "/somepath?something=foobar",
 				UserInfo:    &user.DefaultInfo{Name: "janedoe"},
 				ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
 				CreateRelationships: []*v1.Relationship{{

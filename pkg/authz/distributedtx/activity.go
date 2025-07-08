@@ -95,6 +95,10 @@ func (h *ActivityHandler) WriteToKube(ctx context.Context, req *KubeReqInput) (*
 		return nil, fmt.Errorf("unsupported kube verb: %s", req.RequestInfo.Verb)
 	}
 
+	if req.RequestURI == "" {
+		return nil, fmt.Errorf("request URI must be specified for kube write")
+	}
+
 	kreq := h.KubeClient.Verb(verb).RequestURI(req.RequestURI).Body(req.Body)
 	for h, v := range req.Header {
 		kreq.SetHeader(h, v...)
