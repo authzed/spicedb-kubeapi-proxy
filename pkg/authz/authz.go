@@ -79,6 +79,7 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 			handleError(w, failed, req, err)
 			return
 		}
+		klog.V(3).InfoSDepth(1, "input passed all authorization checks", "input", input)
 
 		// if this request is a write, perform the dual write and return
 		rule, err := getSingleUpdateRule(filteredRules)
@@ -89,11 +90,15 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 		}
 
 		if rule != nil {
-			if err := performUpdate(ctx, w, rule, input, workflowClient); err != nil {
+			klog.V(4).InfoSDepth(1, "single update rule", "rule", rule)
+			if err := performUpdate(ctx, w, rule, input, req.RequestURI, workflowClient); err != nil {
+				klog.V(2).ErrorS(err, "failed to perform update", "input", input)
 				handleError(w, failed, req, err)
 				return
 			}
 			return
+		} else {
+			klog.V(4).InfoSDepth(1, "no update rule found for request")
 		}
 
 		// all other requests are filtered by matching rules
