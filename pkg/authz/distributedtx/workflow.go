@@ -41,6 +41,7 @@ var KubeBackoff = wait.Backoff{
 
 type WriteObjInput struct {
 	RequestInfo *request.RequestInfo
+	RequestURI  string
 	Header      http.Header
 	UserInfo    *user.DefaultInfo
 	ObjectMeta  *metav1.ObjectMeta
@@ -64,6 +65,7 @@ func (input *WriteObjInput) validate() error {
 func (input *WriteObjInput) toKubeReqInput() *KubeReqInput {
 	return &KubeReqInput{
 		RequestInfo: input.RequestInfo,
+		RequestURI:  input.RequestURI,
 		Header:      input.Header,
 		ObjectMeta:  input.ObjectMeta,
 		Body:        input.Body,
@@ -224,7 +226,7 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 			continue
 		}
 
-		if isSuccessfulCreate(input, out) || isSuccessfulDelete(input, out) {
+		if isSuccessfulCreateOrUpdate(input, out) || isSuccessfulDelete(input, out) {
 			rollback.Cleanup(ctx)
 			return out, nil
 		}
@@ -244,8 +246,8 @@ func isSuccessfulDelete(input *WriteObjInput, out *KubeResp) bool {
 	return input.RequestInfo.Verb == "delete" && (out.StatusCode == http.StatusNotFound || out.StatusCode == http.StatusOK)
 }
 
-func isSuccessfulCreate(input *WriteObjInput, out *KubeResp) bool {
-	return input.RequestInfo.Verb == "create" && (out.StatusCode == http.StatusConflict || out.StatusCode == http.StatusCreated || out.StatusCode == http.StatusOK)
+func isSuccessfulCreateOrUpdate(input *WriteObjInput, out *KubeResp) bool {
+	return (input.RequestInfo.Verb == "create" || input.RequestInfo.Verb == "update" || input.RequestInfo.Verb == "patch") && (out.StatusCode == http.StatusConflict || out.StatusCode == http.StatusCreated || out.StatusCode == http.StatusOK)
 }
 
 // OptimisticWriteToSpiceDBAndKube ensures that a write exists in both SpiceDB and kube,
