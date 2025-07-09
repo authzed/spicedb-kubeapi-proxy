@@ -3,6 +3,7 @@ package distributedtx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -16,6 +17,7 @@ import (
 )
 
 type KubeReqInput struct {
+	RequestURI  string
 	RequestInfo *request.RequestInfo
 	Header      http.Header
 	ObjectMeta  *metav1.ObjectMeta
@@ -70,11 +72,34 @@ func (h *ActivityHandler) WriteToKube(ctx context.Context, req *KubeReqInput) (*
 	failpoints.FailPoint("panicKubeWrite")
 
 	verb := http.MethodPost
-	if req.RequestInfo.Verb == "delete" {
-		verb = http.MethodDelete
-	}
-	kreq := h.KubeClient.Verb(verb).AbsPath(req.RequestInfo.Path).Body(req.Body)
+	switch req.RequestInfo.Verb {
+	case "put":
+		verb = http.MethodPut
 
+	case "patch":
+		verb = http.MethodPatch
+
+	case "post":
+		verb = http.MethodPost
+
+	case "update":
+		verb = http.MethodPut
+
+	case "delete":
+		verb = http.MethodDelete
+
+	case "create":
+		verb = http.MethodPost
+
+	default:
+		return nil, fmt.Errorf("unsupported kube verb: %s", req.RequestInfo.Verb)
+	}
+
+	if req.RequestURI == "" {
+		return nil, fmt.Errorf("request URI must be specified for kube write")
+	}
+
+	kreq := h.KubeClient.Verb(verb).RequestURI(req.RequestURI).Body(req.Body)
 	for h, v := range req.Header {
 		kreq.SetHeader(h, v...)
 	}

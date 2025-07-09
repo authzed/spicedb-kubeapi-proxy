@@ -52,7 +52,8 @@ func TestWriteToKube(t *testing.T) {
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
 	resp, err := ah.WriteToKube(context.Background(), &KubeReqInput{
-		RequestInfo: &request.RequestInfo{Path: "my_way", Namespace: "ns"},
+		RequestInfo: &request.RequestInfo{Path: "my_way", Namespace: "ns", Verb: "post"},
+		RequestURI:  "/my_way",
 		ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
 		Body:        []byte(`{"hi":"bye"}`),
 	})
@@ -67,7 +68,8 @@ func TestWriteToKubeError(t *testing.T) {
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
 	resp, err := ah.WriteToKube(context.Background(), &KubeReqInput{
-		RequestInfo: &request.RequestInfo{Path: "my_way", Namespace: "ns"},
+		RequestInfo: &request.RequestInfo{Path: "my_way", Namespace: "ns", Verb: "post"},
+		RequestURI:  "/my_way",
 		ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
 		Body:        []byte(`{"hi":"bye"}`),
 	})
@@ -83,7 +85,8 @@ func TestCheckKubeResource(t *testing.T) {
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
 	exists, err := ah.CheckKubeResource(context.Background(), &KubeReqInput{
-		RequestInfo: &request.RequestInfo{Path: "a_path", Namespace: "ns1"},
+		RequestInfo: &request.RequestInfo{Path: "a_path", Namespace: "ns1", Verb: "get"},
+		RequestURI:  "/a_path",
 		ObjectMeta:  &metav1.ObjectMeta{Name: "object_name"},
 	})
 
@@ -96,7 +99,8 @@ func TestCheckKubeResourceError(t *testing.T) {
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
 	_, err := ah.CheckKubeResource(context.Background(), &KubeReqInput{
-		RequestInfo: &request.RequestInfo{Path: "a_path", Namespace: "ns1"},
+		RequestInfo: &request.RequestInfo{Path: "a_path", Namespace: "ns1", Verb: "get"},
+		RequestURI:  "/a_path",
 		ObjectMeta:  &metav1.ObjectMeta{Name: "object_name"},
 	})
 

@@ -10,12 +10,13 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
 	"github.com/warpstreamlabs/bento/public/bloblang"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/apimachinery/pkg/types"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -25,20 +26,27 @@ import (
 
 var (
 	codecs = serializer.NewCodecFactory(scheme.Scheme)
+
+	// celEnvFields defines the CEL environment field types
+	celEnvFields = map[string]*types.Type{
+		"request":           types.NewMapType(types.StringType, types.DynType),
+		"user":              types.NewMapType(types.StringType, types.DynType),
+		"object":            types.NewMapType(types.StringType, types.DynType),
+		"name":              types.StringType,
+		"resourceNamespace": types.StringType, // namespace is reserved in CEL
+		"namespacedName":    types.StringType,
+		"headers":           types.NewMapType(types.StringType, types.NewListType(types.StringType)),
+		"body":              types.BytesType,
+	}
 )
 
 // createCELEnvironment creates a CEL environment with request data types.
 func createCELEnvironment() (*cel.Env, error) {
-	return cel.NewEnv(
-		cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable("user", cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable("object", cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable("name", cel.StringType),
-		cel.Variable("resourceNamespace", cel.StringType), // namespace is reserved in CEL
-		cel.Variable("namespacedName", cel.StringType),
-		cel.Variable("headers", cel.MapType(cel.StringType, cel.ListType(cel.StringType))),
-		cel.Variable("body", cel.BytesType),
-	)
+	vars := make([]cel.EnvOption, 0, len(celEnvFields))
+	for name, typ := range celEnvFields {
+		vars = append(vars, cel.Variable(name, typ))
+	}
+	return cel.NewEnv(vars...)
 }
 
 // RequestMeta uniquely identifies the type of request, and is used to find
@@ -217,7 +225,7 @@ func NewResolveInput(req *request.RequestInfo, user *user.DefaultInfo, object *m
 	}
 
 	if len(namespace) > 0 {
-		namespacedName = types.NamespacedName{Name: name, Namespace: namespace}.String()
+		namespacedName = k8stypes.NamespacedName{Name: name, Namespace: namespace}.String()
 	} else {
 		namespacedName = name
 	}
@@ -389,6 +397,13 @@ func convertToCELInput(input *ResolveInput) (map[string]any, error) {
 			return nil, fmt.Errorf("error converting object metadata to unstructured: %w", err)
 		}
 		data["object"] = obj
+	}
+
+	// Validate that all keys in data exist in the CEL environment field map
+	for key := range data {
+		if _, exists := celEnvFields[key]; !exists {
+			return nil, fmt.Errorf("key %q not found in CEL environment field definitions", key)
+		}
 	}
 
 	return normalizeToBloblangTypes(data).(map[string]any), nil

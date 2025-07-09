@@ -45,7 +45,7 @@ func relsFromExprs(exprs []*rules.RelExpr, input *rules.ResolveInput) ([]*v1.Rel
 }
 
 // performUpdate performs a dual update according to the passed rule
-func performUpdate(ctx context.Context, w http.ResponseWriter, r *rules.RunnableRule, input *rules.ResolveInput, workflowClient *client.Client) error {
+func performUpdate(ctx context.Context, w http.ResponseWriter, r *rules.RunnableRule, input *rules.ResolveInput, requestURI string, workflowClient *client.Client) error {
 	preconditions := make([]*v1.Precondition, 0, len(r.Update.MustExist)+len(r.Update.MustNotExist))
 
 	createRels, err := relsFromExprs(r.Update.Creates, input)
@@ -108,7 +108,7 @@ func performUpdate(ctx context.Context, w http.ResponseWriter, r *rules.Runnable
 		deleteByFilter = append(deleteByFilter, filter)
 	}
 
-	resp, err := dualWrite(ctx, workflowClient, input, createRels, touchRels, deleteRels, preconditions, deleteByFilter, r.LockMode)
+	resp, err := dualWrite(ctx, workflowClient, input, requestURI, createRels, touchRels, deleteRels, preconditions, deleteByFilter, r.LockMode)
 	if err != nil {
 		return fmt.Errorf("dual write failed: %w", err)
 	}
@@ -154,6 +154,7 @@ func dualWrite(
 	ctx context.Context,
 	workflowClient *client.Client,
 	input *rules.ResolveInput,
+	requestURI string,
 	createRels []*v1.Relationship,
 	touchRels []*v1.Relationship,
 	deleteRels []*v1.Relationship,
@@ -163,6 +164,7 @@ func dualWrite(
 ) (*distributedtx.KubeResp, error) {
 	writeInput := &distributedtx.WriteObjInput{
 		RequestInfo:         input.Request,
+		RequestURI:          requestURI,
 		UserInfo:            input.User,
 		Body:                input.Body,
 		Header:              input.Headers,

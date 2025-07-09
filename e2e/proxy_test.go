@@ -1079,6 +1079,11 @@ var (
 			Checks: []proxyrule.StringOrTemplate{{
 				Template: "testresource:{{namespacedName}}#edit@user:{{user.name}}",
 			}},
+			Update: proxyrule.Update{
+				TouchRelationships: []proxyrule.StringOrTemplate{{
+					Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
+				}},
+			},
 		},
 	}
 
