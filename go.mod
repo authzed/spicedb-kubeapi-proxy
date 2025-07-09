@@ -20,10 +20,10 @@ require (
 	github.com/warpstreamlabs/bento v1.8.2
 	golang.org/x/sync v0.15.0
 	google.golang.org/grpc v1.71.1
-	k8s.io/apimachinery v0.33.1
-	k8s.io/apiserver v0.33.1
-	k8s.io/client-go v0.33.1
-	k8s.io/component-base v0.33.1
+	k8s.io/apimachinery v0.33.2
+	k8s.io/apiserver v0.33.2
+	k8s.io/client-go v0.33.2
+	k8s.io/component-base v0.33.2
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/kubernetes v1.33.1
 )
@@ -245,11 +245,11 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/api v0.33.1 // indirect
+	k8s.io/api v0.33.2 // indirect
 	k8s.io/cluster-bootstrap v0.0.0 // indirect
 	k8s.io/component-helpers v0.33.1 // indirect
 	k8s.io/csi-translation-lib v0.0.0 // indirect
-	k8s.io/kms v0.33.1 // indirect
+	k8s.io/kms v0.33.2 // indirect
 	k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff // indirect
 	k8s.io/kubelet v0.33.1 // indirect
 	k8s.io/mount-utils v0.0.0 // indirect
