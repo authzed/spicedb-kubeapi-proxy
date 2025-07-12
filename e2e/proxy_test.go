@@ -962,6 +962,79 @@ var _ = Describe("Proxy", func() {
 			})
 		})
 
+		When("PostChecks are used in rules", func() {
+			It("allows get operations when postchecks pass", func(ctx context.Context) {
+				getNamespaceWithPostCheck := proxyrule.Config{
+					Spec: proxyrule.Spec{
+						Matches: []proxyrule.Match{{
+							GroupVersion: "v1",
+							Resource:     "namespaces",
+							Verbs:        []string{"get"},
+						}},
+						Checks: []proxyrule.StringOrTemplate{{
+							Template: "namespace:{{name}}#view@user:{{user.name}}",
+						}},
+						PostChecks: []proxyrule.StringOrTemplate{{
+							Template: "namespace:{{name}}#edit@user:{{user.name}}",
+						}},
+					},
+				}
+
+				// Set up matcher with postcheck rule
+				matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+					createNamespace(),
+					getNamespaceWithPostCheck,
+				})
+				Expect(err).To(Succeed())
+				*proxySrv.Matcher = matcher
+
+				// Create namespace and required relationships
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+
+				// Add viewer relation for Paul (so postcheck will pass)
+				WriteTuples(ctx, []*v1.Relationship{{
+					Resource: &v1.ObjectReference{ObjectType: "namespace", ObjectId: paulNamespace},
+					Relation: "viewer",
+					Subject:  &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: "user", ObjectId: "paul"}},
+				}})
+
+				// Paul should be able to get the namespace (postchecks pass)
+				Expect(GetNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+			})
+
+			It("blocks get operations when postchecks fail", func(ctx context.Context) {
+				getNamespaceWithPostCheck := proxyrule.Config{
+					Spec: proxyrule.Spec{
+						Matches: []proxyrule.Match{{
+							GroupVersion: "v1",
+							Resource:     "namespaces",
+							Verbs:        []string{"get"},
+						}},
+						Checks: []proxyrule.StringOrTemplate{{
+							Template: "namespace:{{name}}#view@user:{{user.name}}",
+						}},
+						PostChecks: []proxyrule.StringOrTemplate{{
+							Template: "namespace:{{name}}#no_one_at_all@user:{{user.name}}",
+						}},
+					},
+				}
+
+				// Set up matcher with postcheck rule
+				matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+					createNamespace(),
+					getNamespaceWithPostCheck,
+				})
+				Expect(err).To(Succeed())
+				*proxySrv.Matcher = matcher
+
+				// Create namespace - this gives Paul view permission but not no_one_at_all permission
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+
+				// Paul should NOT be able to get the namespace (postchecks fail because he doesn't have no_one_at_all permission)
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, paulNamespace))).To(BeTrue())
+			})
+		})
+
 		When("rules with CEL 'if' conditions are used", func() {
 			BeforeEach(func() {
 				*proxySrv.Matcher = testCELIfMatcher()

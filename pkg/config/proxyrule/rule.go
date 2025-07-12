@@ -79,6 +79,12 @@ type Spec struct {
 	// If empty, the request will be allowed without any checks.
 	Checks []StringOrTemplate `json:"check,omitempty" validate:"omitempty,dive"`
 
+	// PostChecks are authorization checks to perform after the Kubernetes API call
+	// completes successfully, but before returning the response. These only apply
+	// to read-only operations (non-write and non-list/watch operations).
+	// If any PostCheck returns NO_PERMISSION, the operation will fail.
+	PostChecks []StringOrTemplate `json:"postcheck,omitempty" validate:"omitempty,dive"`
+
 	// PreFilters are LookupResources requests to filter the results before any
 	// authorization checks are performed. Used for List and Watch requests.
 	PreFilters []PreFilter `json:"prefilter,omitempty" validate:"omitempty,dive"`

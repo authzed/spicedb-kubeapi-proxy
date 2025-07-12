@@ -516,6 +516,7 @@ type RunnableRule struct {
 	LockMode     proxyrule.LockMode
 	IfConditions []cel.Program
 	Checks       []*RelExpr
+	PostChecks   []*RelExpr
 	Update       *UpdateSet
 	PreFilter    []*PreFilter
 }
@@ -592,6 +593,18 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 	runnable.Checks, err = compileStringOrObjTemplates(config.Checks)
 	if err != nil {
 		return nil, fmt.Errorf("error compiling checks: %w", err)
+	}
+
+	runnable.PostChecks, err = compileStringOrObjTemplates(config.PostChecks)
+	if err != nil {
+		return nil, fmt.Errorf("error compiling postchecks: %w", err)
+	}
+
+	// Validate that PostChecks are only used with compatible verbs
+	if len(config.PostChecks) > 0 {
+		if err := validatePostCheckVerbs(config.Matches); err != nil {
+			return nil, err
+		}
 	}
 
 	var updateSet *UpdateSet
@@ -823,4 +836,22 @@ func ParseRelSring(tpl string) (*UncompiledRelExpr, error) {
 		parsed.SubjectRelation = groups[subjectRelIndex]
 	}
 	return &parsed, nil
+}
+
+// validatePostCheckVerbs ensures PostChecks are only used with compatible verbs.
+// PostChecks only apply to non-write and non-list/watch operations (specifically "get" operations).
+func validatePostCheckVerbs(matches []proxyrule.Match) error {
+	incompatibleVerbs := []string{"create", "update", "patch", "delete", "list", "watch"}
+	
+	for _, match := range matches {
+		for _, verb := range match.Verbs {
+			for _, incompatible := range incompatibleVerbs {
+				if verb == incompatible {
+					return fmt.Errorf("PostCheck operations cannot be used with verb %q. PostChecks only apply to read-only operations like 'get'", verb)
+				}
+			}
+		}
+	}
+	
+	return nil
 }
