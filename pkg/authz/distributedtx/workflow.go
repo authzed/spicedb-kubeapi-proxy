@@ -84,7 +84,7 @@ func (r *RollbackRelationships) WithRels(relationships ...*v1.RelationshipUpdate
 	return r
 }
 
-func (r *RollbackRelationships) Cleanup(ctx workflow.Context) {
+func (r *RollbackRelationships) Cleanup(ctx workflow.Context, reason string) {
 	invert := func(op v1.RelationshipUpdate_Operation) v1.RelationshipUpdate_Operation {
 		switch op {
 		case v1.RelationshipUpdate_OPERATION_CREATE:
@@ -115,14 +115,16 @@ func (r *RollbackRelationships) Cleanup(ctx workflow.Context) {
 		if _, err := f.Get(ctx); err != nil {
 			if s, ok := status.FromError(err); ok {
 				if s.Code() == codes.InvalidArgument {
-					klog.ErrorS(err, "unrecoverable error when rolling back tuples")
+					klog.ErrorS(err, "unrecoverable error when rolling back tuples", "reason", reason)
 					break
 				}
 			}
-			klog.ErrorS(err, "error rolling back tuples")
+			klog.ErrorS(err, "error rolling back tuples", "reason", reason)
 			continue
 		}
+
 		// no error, delete succeeded, exit loop
+		klog.V(4).InfoS("rolled back relationships", "count", len(updates), "reason", reason)
 		break
 	}
 }
@@ -191,7 +193,7 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 			klog.V(3).InfoS("update details", "update", u.String(), "relationship", u)
 		}
 
-		rollback.WithRels(updates...).Cleanup(ctx)
+		rollback.WithRels(updates...).Cleanup(ctx, "rollback due to failed SpiceDB write")
 
 		// if the spicedb write fails, report it as a kube conflict error
 		// we return this for any error, not just lock conflicts, so that the
@@ -226,28 +228,51 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 			continue
 		}
 
-		if isSuccessfulCreateOrUpdate(input, out) || isSuccessfulDelete(input, out) {
-			rollback.Cleanup(ctx)
+		// Ensure we have a valid response status code for the Kubernetes request.
+		isSuccessful, err := isSuccessfulKuberentesOperation(input, out)
+		if err != nil {
+			klog.V(1).ErrorS(err, "error checking kube response", "response", out, "verb", input.RequestInfo.Verb)
+			rollback.WithRels(updates...).Cleanup(ctx, "rollback due to failed kube operation after max attempts")
+			return nil, fmt.Errorf("failed to communicate with kubernetes after %d attempts: %w", MaxKubeAttempts, err)
+		}
+
+		if isSuccessful {
+			rollback.Cleanup(ctx, fmt.Sprintf("cleanup after successful kube operation: %s", input.RequestInfo.Verb))
 			return out, nil
 		}
 
-		// some other status code is some other type of error, remove
-		// the original tuple and the lock tuple
-		klog.V(3).ErrorS(err, "unsuccessful Kube API operation on PessimisticWriteToSpiceDBAndKube", "response", out)
-		rollback.WithRels(updates...).Cleanup(ctx)
+		klog.V(3).ErrorS(err, "unsuccessful Kube API operation on PessimisticWriteToSpiceDBAndKube", "response", out, "verb", input.RequestInfo.Verb)
+		rollback.WithRels(updates...).Cleanup(ctx, "rollback due to unsuccessful kube operation")
 		return out, nil
 	}
 
-	rollback.WithRels(updates...).Cleanup(ctx)
+	rollback.WithRels(updates...).Cleanup(ctx, "rollback due to failed kube operation after max attempts")
 	return nil, fmt.Errorf("failed to communicate with kubernetes after %d attempts", MaxKubeAttempts)
 }
 
-func isSuccessfulDelete(input *WriteObjInput, out *KubeResp) bool {
-	return input.RequestInfo.Verb == "delete" && (out.StatusCode == http.StatusNotFound || out.StatusCode == http.StatusOK)
+func isSuccessfulKuberentesOperation(input *WriteObjInput, out *KubeResp) (bool, error) {
+	if out == nil {
+		return false, fmt.Errorf("received nil response from kube write")
+	}
+
+	switch input.RequestInfo.Verb {
+	case "delete":
+		return isSuccessfulDelete(out), nil
+
+	case "create", "update", "patch":
+		return isSuccessfulCreateOrUpdate(out), nil
+
+	default:
+		return false, fmt.Errorf("unsupported kube verb: %s", input.RequestInfo.Verb)
+	}
 }
 
-func isSuccessfulCreateOrUpdate(input *WriteObjInput, out *KubeResp) bool {
-	return (input.RequestInfo.Verb == "create" || input.RequestInfo.Verb == "update" || input.RequestInfo.Verb == "patch") && (out.StatusCode == http.StatusConflict || out.StatusCode == http.StatusCreated || out.StatusCode == http.StatusOK)
+func isSuccessfulDelete(out *KubeResp) bool {
+	return out.StatusCode == http.StatusNotFound || out.StatusCode == http.StatusOK
+}
+
+func isSuccessfulCreateOrUpdate(out *KubeResp) bool {
+	return out.StatusCode == http.StatusConflict || out.StatusCode == http.StatusCreated || out.StatusCode == http.StatusOK
 }
 
 // OptimisticWriteToSpiceDBAndKube ensures that a write exists in both SpiceDB and kube,
@@ -294,7 +319,7 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 			Updates: updates,
 		}).Get(ctx)
 	if err != nil {
-		rollback.Cleanup(ctx)
+		rollback.Cleanup(ctx, "rollback due to failed SpiceDB write")
 		klog.ErrorS(err, "SpiceDB write failed")
 		// report spicedb write errors as conflicts
 		return KubeConflict(err, input), nil
@@ -318,7 +343,7 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 
 		// if the object doesn't exist, clean up the spicedb write
 		if !exists {
-			rollback.Cleanup(ctx)
+			rollback.Cleanup(ctx, "rollback due to failed Kube write")
 			return nil, err
 		}
 	}
