@@ -119,11 +119,15 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 
 		req = req.WithContext(WithAuthzData(req.Context(), authzData))
 
-		// Check if this request needs PostChecks (non-write and non-list/watch operations)
+		// Check if this request needs PostChecks (non-write and non-list operations)
 		if shouldRunPostChecks(input.Request.Verb) {
 			// Create a wrapper that runs PostChecks after the handler completes
 			postCheckHandler := createPostCheckHandler(handler, failed, ctx, filteredRules, input, permissionsClient)
 			postCheckHandler.ServeHTTP(w, req)
+		} else if shouldRunPostFilters(input.Request.Verb, filteredRules) {
+			// Create a wrapper that runs PostFilters for list operations
+			postFilterHandler := createPostFilterHandler(handler, failed, ctx, filteredRules, input, permissionsClient)
+			postFilterHandler.ServeHTTP(w, req)
 		} else {
 			handler.ServeHTTP(w, req)
 		}
@@ -140,12 +144,29 @@ func alwaysAllow(info *request.RequestInfo) bool {
 }
 
 // shouldRunPostChecks determines if PostChecks should run for this verb.
-// PostChecks only apply to non-write and non-list/watch operations.
+// PostChecks only apply to non-write and non-list operations.
 func shouldRunPostChecks(verb string) bool {
 	switch verb {
 	case "get":
 		return true
 	case "create", "update", "patch", "delete", "list", "watch":
+		return false
+	default:
+		return false
+	}
+}
+
+// shouldRunPostFilters determines if PostFilters should run for this verb and rules.
+// PostFilters only apply to list operations when PostFilters are defined.
+func shouldRunPostFilters(verb string, rules []*rules.RunnableRule) bool {
+	switch verb {
+	case "list":
+		// Check if any rule has PostFilters
+		for _, r := range rules {
+			if len(r.PostFilter) > 0 {
+				return true
+			}
+		}
 		return false
 	default:
 		return false
@@ -181,6 +202,35 @@ func createPostCheckHandler(handler, failed http.Handler, ctx context.Context, f
 	})
 }
 
+// createPostFilterHandler creates a handler that runs PostFilters for list operations after the upstream handler completes
+func createPostFilterHandler(handler, failed http.Handler, ctx context.Context, filteredRules []*rules.RunnableRule, input *rules.ResolveInput, permissionsClient v1.PermissionsServiceClient) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// Create a response recorder to capture the response
+		recorder := &responseRecorder{}
+
+		// Call the upstream handler and capture the response.
+		handler.ServeHTTP(recorder, req)
+
+		// Only run PostFilters if the upstream request succeeded (2xx status)
+		if recorder.statusCode >= 200 && recorder.statusCode < 300 {
+			if input.Request.Verb == "list" {
+				// Handle list operations
+				if err := filterListResponse(ctx, recorder, filteredRules, input, permissionsClient); err != nil {
+					klog.V(2).ErrorS(err, "failed to filter list response", "input", input)
+					failed.ServeHTTP(w, req)
+					return
+				}
+			}
+
+			// Write the filtered response
+			recorder.emitResponseToWriter(w)
+		} else {
+			// Write the error response from upstream
+			recorder.emitResponseToWriter(w)
+		}
+	})
+}
+
 // responseRecorder captures the response status code and body without writing to the underlying ResponseWriter
 type responseRecorder struct {
 	statusCode int
@@ -208,6 +258,13 @@ func (r *responseRecorder) Write(data []byte) (int, error) {
 // WriteHeader implements http.ResponseWriter.
 func (r *responseRecorder) WriteHeader(statusCode int) {
 	r.statusCode = statusCode
+}
+
+func (r *responseRecorder) SetBody(body []byte) {
+	r.body = body
+
+	r.headers = make(http.Header)
+	r.headers.Set("Content-Type", "application/json")
 }
 
 // emitResponseToWriter writes the captured response to the provided ResponseWriter

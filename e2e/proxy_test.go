@@ -375,6 +375,15 @@ var _ = Describe("Proxy", func() {
 			return err
 		}
 
+		ListAnotherTestResources := func(ctx context.Context, client dynamic.Interface, namespace string) []string {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "anothertestresources"}
+			list, err := client.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			return lo.Map(list.Items, func(item unstructured.Unstructured, index int) string {
+				return item.GetName()
+			})
+		}
+
 		DeleteAnotherTestResource := func(ctx context.Context, client dynamic.Interface, namespace, name string) error {
 			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "anothertestresources"}
 			return client.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
@@ -490,7 +499,7 @@ var _ = Describe("Proxy", func() {
 				Expect(DeleteTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
 			})
 
-			It("supports deletions by filters", func(ctx context.Context) {
+			It("supports postchecks and deletions by filters", func(ctx context.Context) {
 				// create
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 				Expect(CreateAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
@@ -498,6 +507,9 @@ var _ = Describe("Proxy", func() {
 				// get
 				Expect(GetAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
 				Expect(GetAnotherTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
+
+				// list
+				Expect(ListAnotherTestResources(ctx, paulDynamicClient, paulNamespace)).To(Equal([]string{paulCustomResource}))
 
 				// delete
 				Expect(DeleteAnotherTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
@@ -1227,6 +1239,19 @@ var (
 		},
 	}
 
+	listWatchAnotherTestResource = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "anothertestresources",
+				Verbs:        []string{"list", "watch"},
+			}},
+			PostFilters: []proxyrule.PostFilter{{
+				CheckPermissionTemplate: &proxyrule.StringOrTemplate{Template: "testresource:{{namespacedName}}#view@user:{{user.name}}"},
+			}},
+		},
+	}
+
 	createNamespace = func() proxyrule.Config {
 		return proxyrule.Config{Spec: proxyrule.Spec{
 			Locking: proxyrule.OptimisticLockMode,
@@ -1388,6 +1413,7 @@ func testOptimisticMatcher() rules.MapMatcher {
 		updateTestResource,
 		listWatchTestResource,
 		getAnotherTestResource,
+		listWatchAnotherTestResource,
 		createAnotherTestResource(),
 		deleteAnotherTestResource(),
 	})
@@ -1446,6 +1472,7 @@ func testPessimisticMatcher() rules.MapMatcher {
 		updateTestResource,
 		listWatchTestResource,
 		getAnotherTestResource,
+		listWatchAnotherTestResource,
 		pessimisticCreateAnotherTestResource,
 		pessimisticDeleteAnotherTestResource,
 	})
