@@ -19,6 +19,33 @@ import (
 // filterResponse filters responses by fetching a list of allowed objects in
 // parallel with the request
 func filterResponse(ctx context.Context, matchingRules []*rules.RunnableRule, input *rules.ResolveInput, authzData *AuthzData, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient) error {
+	// Check if any rule has PostFilters
+	hasPostFilter := false
+	for _, r := range matchingRules {
+		if len(r.PostFilter) > 0 {
+			hasPostFilter = true
+			break
+		}
+	}
+
+	// If PostFilter is set but no PreFilter, skip LookupResources call
+	if hasPostFilter {
+		hasPreFilter := false
+		for _, r := range matchingRules {
+			if len(r.PreFilter) > 0 {
+				hasPreFilter = true
+				break
+			}
+		}
+		if !hasPreFilter {
+			// Skip LookupResources call when PostFilter is set but PreFilter is missing
+			authzData.Lock()
+			authzData.skipPreFilter = true
+			authzData.Unlock()
+			return nil
+		}
+	}
+
 	for _, r := range matchingRules {
 		for _, f := range r.PreFilter {
 			f := f

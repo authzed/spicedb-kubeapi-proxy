@@ -375,6 +375,15 @@ var _ = Describe("Proxy", func() {
 			return err
 		}
 
+		ListAnotherTestResources := func(ctx context.Context, client dynamic.Interface, namespace string) []string {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "anothertestresources"}
+			list, err := client.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			return lo.Map(list.Items, func(item unstructured.Unstructured, index int) string {
+				return item.GetName()
+			})
+		}
+
 		DeleteAnotherTestResource := func(ctx context.Context, client dynamic.Interface, namespace, name string) error {
 			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "anothertestresources"}
 			return client.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
@@ -490,7 +499,7 @@ var _ = Describe("Proxy", func() {
 				Expect(DeleteTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
 			})
 
-			It("supports deletions by filters", func(ctx context.Context) {
+			It("supports postchecks and deletions by filters", func(ctx context.Context) {
 				// create
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 				Expect(CreateAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
@@ -498,6 +507,9 @@ var _ = Describe("Proxy", func() {
 				// get
 				Expect(GetAnotherTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
 				Expect(GetAnotherTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
+
+				// list
+				Expect(ListAnotherTestResources(ctx, paulDynamicClient, paulNamespace)).To(Equal([]string{paulCustomResource}))
 
 				// delete
 				Expect(DeleteAnotherTestResource(ctx, chaniDynamicClient, paulNamespace, paulCustomResource)).To(Not(Succeed()))
@@ -962,6 +974,79 @@ var _ = Describe("Proxy", func() {
 			})
 		})
 
+		When("PostChecks are used in rules", func() {
+			It("allows get operations when postchecks pass", func(ctx context.Context) {
+				getNamespaceWithPostCheck := proxyrule.Config{
+					Spec: proxyrule.Spec{
+						Matches: []proxyrule.Match{{
+							GroupVersion: "v1",
+							Resource:     "namespaces",
+							Verbs:        []string{"get"},
+						}},
+						Checks: []proxyrule.StringOrTemplate{{
+							Template: "namespace:{{name}}#view@user:{{user.name}}",
+						}},
+						PostChecks: []proxyrule.StringOrTemplate{{
+							Template: "namespace:{{name}}#edit@user:{{user.name}}",
+						}},
+					},
+				}
+
+				// Set up matcher with postcheck rule
+				matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+					createNamespace(),
+					getNamespaceWithPostCheck,
+				})
+				Expect(err).To(Succeed())
+				*proxySrv.Matcher = matcher
+
+				// Create namespace and required relationships
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+
+				// Add viewer relation for Paul (so postcheck will pass)
+				WriteTuples(ctx, []*v1.Relationship{{
+					Resource: &v1.ObjectReference{ObjectType: "namespace", ObjectId: paulNamespace},
+					Relation: "viewer",
+					Subject:  &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: "user", ObjectId: "paul"}},
+				}})
+
+				// Paul should be able to get the namespace (postchecks pass)
+				Expect(GetNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+			})
+
+			It("blocks get operations when postchecks fail", func(ctx context.Context) {
+				getNamespaceWithPostCheck := proxyrule.Config{
+					Spec: proxyrule.Spec{
+						Matches: []proxyrule.Match{{
+							GroupVersion: "v1",
+							Resource:     "namespaces",
+							Verbs:        []string{"get"},
+						}},
+						Checks: []proxyrule.StringOrTemplate{{
+							Template: "namespace:{{name}}#view@user:{{user.name}}",
+						}},
+						PostChecks: []proxyrule.StringOrTemplate{{
+							Template: "namespace:{{name}}#no_one_at_all@user:{{user.name}}",
+						}},
+					},
+				}
+
+				// Set up matcher with postcheck rule
+				matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+					createNamespace(),
+					getNamespaceWithPostCheck,
+				})
+				Expect(err).To(Succeed())
+				*proxySrv.Matcher = matcher
+
+				// Create namespace - this gives Paul view permission but not no_one_at_all permission
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+
+				// Paul should NOT be able to get the namespace (postchecks fail because he doesn't have no_one_at_all permission)
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, paulNamespace))).To(BeTrue())
+			})
+		})
+
 		When("rules with CEL 'if' conditions are used", func() {
 			BeforeEach(func() {
 				*proxySrv.Matcher = testCELIfMatcher()
@@ -1154,6 +1239,19 @@ var (
 		},
 	}
 
+	listWatchAnotherTestResource = proxyrule.Config{
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1",
+				Resource:     "anothertestresources",
+				Verbs:        []string{"list", "watch"},
+			}},
+			PostFilters: []proxyrule.PostFilter{{
+				CheckPermissionTemplate: &proxyrule.StringOrTemplate{Template: "testresource:{{namespacedName}}#view@user:{{user.name}}"},
+			}},
+		},
+	}
+
 	createNamespace = func() proxyrule.Config {
 		return proxyrule.Config{Spec: proxyrule.Spec{
 			Locking: proxyrule.OptimisticLockMode,
@@ -1315,6 +1413,7 @@ func testOptimisticMatcher() rules.MapMatcher {
 		updateTestResource,
 		listWatchTestResource,
 		getAnotherTestResource,
+		listWatchAnotherTestResource,
 		createAnotherTestResource(),
 		deleteAnotherTestResource(),
 	})
@@ -1373,6 +1472,7 @@ func testPessimisticMatcher() rules.MapMatcher {
 		updateTestResource,
 		listWatchTestResource,
 		getAnotherTestResource,
+		listWatchAnotherTestResource,
 		pessimisticCreateAnotherTestResource,
 		pessimisticDeleteAnotherTestResource,
 	})

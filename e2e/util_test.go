@@ -34,3 +34,19 @@ func RelRespToStrings(relResps []*v1.ReadRelationshipsResponse) []string {
 		return tuple.MustV1RelString(item.Relationship)
 	})
 }
+
+// WriteTuples writes the given relationships to SpiceDB
+func WriteTuples(ctx context.Context, rels []*v1.Relationship) {
+	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
+	for _, rel := range rels {
+		updates = append(updates, &v1.RelationshipUpdate{
+			Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
+			Relationship: rel,
+		})
+	}
+	
+	_, err := proxySrv.PermissionClient().WriteRelationships(ctx, &v1.WriteRelationshipsRequest{
+		Updates: updates,
+	})
+	Expect(err).To(Succeed())
+}

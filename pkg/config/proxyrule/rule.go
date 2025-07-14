@@ -79,9 +79,21 @@ type Spec struct {
 	// If empty, the request will be allowed without any checks.
 	Checks []StringOrTemplate `json:"check,omitempty" validate:"omitempty,dive"`
 
+	// PostChecks are authorization checks to perform after the Kubernetes API call
+	// completes successfully, but before returning the response. These only apply
+	// to read-only operations (non-write and non-list operations).
+	// If any PostCheck returns NO_PERMISSION, the operation will fail.
+	PostChecks []StringOrTemplate `json:"postcheck,omitempty" validate:"omitempty,dive"`
+
 	// PreFilters are LookupResources requests to filter the results before any
-	// authorization checks are performed. Used for List and Watch requests.
+	// authorization checks are performed. Used for List requests.
 	PreFilters []PreFilter `json:"prefilter,omitempty" validate:"omitempty,dive"`
+
+	// PostFilters are authorization checks to filter the results after the
+	// Kubernetes API call completes but before returning the response.
+	// Used for List requests. If a PostFilter is set and a PreFilter
+	// is missing, the LookupResources call is skipped.
+	PostFilters []PostFilter `json:"postfilter,omitempty" validate:"omitempty,dive"`
 
 	// Update contains the updates to perform if the request matches, the checks succeed,
 	// and this is a write operation of some kind (Create, Update, or Delete).
@@ -170,6 +182,16 @@ type PreFilter struct {
 	// LookupMatchingResources is a template defining a LookupResources request to filter on.
 	// The resourceID must be set to `$`.
 	LookupMatchingResources *StringOrTemplate `json:"lookupMatchingResources,optional" validate:"omitempty"`
+}
+
+// PostFilter defines authorization checks to filter the results after the
+// Kubernetes API call completes. PostFilters work by checking permissions
+// for each returned object and filtering out objects without permission.
+type PostFilter struct {
+	// CheckPermissionTemplate is a template defining a CheckPermission request to filter on.
+	// This template will be applied to each object in the response to determine if it should be included.
+	// Use object fields like {{metadata.name}} and {{metadata.namespace}} in the template.
+	CheckPermissionTemplate *StringOrTemplate `json:"checkPermissionTemplate" validate:"required"`
 }
 
 // RelationshipTemplate represents a relationship where some fields may be

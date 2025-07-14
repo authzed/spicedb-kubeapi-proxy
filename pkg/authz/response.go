@@ -53,10 +53,11 @@ func AuthzDataFrom(ctx context.Context) (*AuthzData, bool) {
 
 type AuthzData struct {
 	sync.RWMutex
-	restMapper meta.RESTMapper
-	allowedNNC chan types.NamespacedName
-	removedNNC chan types.NamespacedName
-	allowedNN  map[types.NamespacedName]struct{}
+	restMapper    meta.RESTMapper
+	allowedNNC    chan types.NamespacedName
+	removedNNC    chan types.NamespacedName
+	allowedNN     map[types.NamespacedName]struct{}
+	skipPreFilter bool
 }
 
 func (d *AuthzData) FilterResp(resp *http.Response) error {
@@ -495,6 +496,14 @@ func (d *AuthzData) FilterList(originalObj runtime.Object) error {
 		if err != nil {
 			return fmt.Errorf("failed to get object metadata: %v", err)
 		}
+
+		if d.skipPreFilter {
+			// If skipPreFilter is set, we allow all items
+			allowedItems = append(allowedItems, item)
+			klog.V(3).InfoS("skipping pre-filter, allowing all items", "resource", types.NamespacedName{Name: objMeta.GetName(), Namespace: objMeta.GetNamespace()}.String())
+			return nil
+		}
+
 		nn := types.NamespacedName{Name: objMeta.GetName(), Namespace: objMeta.GetNamespace()}
 		if _, ok := d.allowedNN[nn]; ok {
 			// Item is allowed, include it in the filtered list

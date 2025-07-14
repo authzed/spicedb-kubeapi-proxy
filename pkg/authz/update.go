@@ -2,12 +2,14 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/client"
+	"github.com/cschleiden/go-workflows/workflow"
 	"github.com/google/uuid"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz/distributedtx"
@@ -178,18 +180,24 @@ func dualWrite(
 		writeInput.ObjectMeta = &input.Object.ObjectMeta
 	}
 
-	workflow, err := distributedtx.WorkflowForLockMode(string(lockMode))
+	wf, err := distributedtx.WorkflowForLockMode(string(lockMode))
 	if err != nil {
 		return nil, fmt.Errorf("couldn't create workflow for dual write: %w", err)
 	}
 	id, err := workflowClient.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{
 		InstanceID: uuid.NewString(),
-	}, workflow, writeInput)
+	}, wf, writeInput)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't create new workflow instance for dual write: %w", err)
 	}
 	resp, err := client.GetWorkflowResult[distributedtx.KubeResp](ctx, workflowClient, id, distributedtx.DefaultWorkflowTimeout)
 	if err != nil {
+		var panicError *workflow.PanicError
+		if errors.As(err, &panicError) {
+			// If the workflow panicked, we return the panic error, with the stack trace.
+			return nil, fmt.Errorf("workflow had a panic: %w\nstack: %s", panicError, panicError.Stack())
+		}
+
 		return nil, fmt.Errorf("failed to get dual write result: %w", err)
 	}
 	return &resp, nil

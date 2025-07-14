@@ -5,7 +5,11 @@ schema: |-
     relation cluster: cluster
     relation creator: user
     relation viewer: user
+
+    permission admin = creator
+    permission edit = creator
     permission view = viewer + creator
+    permission no_one_at_all = nil
   }
   definition pod {
     relation namespace: namespace

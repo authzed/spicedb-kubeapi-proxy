@@ -516,8 +516,10 @@ type RunnableRule struct {
 	LockMode     proxyrule.LockMode
 	IfConditions []cel.Program
 	Checks       []*RelExpr
+	PostChecks   []*RelExpr
 	Update       *UpdateSet
 	PreFilter    []*PreFilter
+	PostFilter   []*PostFilter
 }
 
 type UpdateSet struct {
@@ -551,6 +553,18 @@ type ResolvedPreFilter struct {
 	LookupType
 	NameFromObjectID, NamespaceFromObjectID *bloblang.Executor
 	Rel                                     *ResolvedRel
+}
+
+// PostFilter defines a filter that checks permissions for each object
+// in the response and filters out objects without permission.
+type PostFilter struct {
+	Rel *RelExpr
+}
+
+// ResolvedPostFilter contains a resolved Rel that determines how to make the
+// CheckPermission request for each object in the response.
+type ResolvedPostFilter struct {
+	Rel *ResolvedRel
 }
 
 // Compile creates a RunnableRule from a passed in config object. String
@@ -592,6 +606,18 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 	runnable.Checks, err = compileStringOrObjTemplates(config.Checks)
 	if err != nil {
 		return nil, fmt.Errorf("error compiling checks: %w", err)
+	}
+
+	runnable.PostChecks, err = compileStringOrObjTemplates(config.PostChecks)
+	if err != nil {
+		return nil, fmt.Errorf("error compiling postchecks: %w", err)
+	}
+
+	// Validate that PostChecks are only used with compatible verbs
+	if len(config.PostChecks) > 0 {
+		if err := validatePostCheckVerbs(config.Matches); err != nil {
+			return nil, err
+		}
 	}
 
 	var updateSet *UpdateSet
@@ -709,6 +735,26 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 		runnable.PreFilter = append(runnable.PreFilter, filter)
 	}
 
+	for _, f := range config.PostFilters {
+		if f.CheckPermissionTemplate == nil {
+			return nil, fmt.Errorf("post-filter must have CheckPermissionTemplate defined")
+		}
+
+		byPermission, err := compileStringOrObjTemplates([]proxyrule.StringOrTemplate{*f.CheckPermissionTemplate})
+		if err != nil {
+			return nil, fmt.Errorf("error compiling CheckPermissionTemplate: %w", err)
+		}
+		if len(byPermission) != 1 {
+			return nil, fmt.Errorf("post-filter must have exactly one CheckPermissionTemplate")
+		}
+
+		filter := &PostFilter{
+			Rel: byPermission[0],
+		}
+
+		runnable.PostFilter = append(runnable.PostFilter, filter)
+	}
+
 	return runnable, nil
 }
 
@@ -823,4 +869,22 @@ func ParseRelSring(tpl string) (*UncompiledRelExpr, error) {
 		parsed.SubjectRelation = groups[subjectRelIndex]
 	}
 	return &parsed, nil
+}
+
+// validatePostCheckVerbs ensures PostChecks are only used with compatible verbs.
+// PostChecks only apply to non-write and non-list operations (specifically "get" operations).
+func validatePostCheckVerbs(matches []proxyrule.Match) error {
+	incompatibleVerbs := []string{"create", "update", "patch", "delete", "list", "watch"}
+
+	for _, match := range matches {
+		for _, verb := range match.Verbs {
+			for _, incompatible := range incompatibleVerbs {
+				if verb == incompatible {
+					return fmt.Errorf("PostCheck operations cannot be used with verb %q. PostChecks only apply to read-only operations like 'get'", verb)
+				}
+			}
+		}
+	}
+
+	return nil
 }

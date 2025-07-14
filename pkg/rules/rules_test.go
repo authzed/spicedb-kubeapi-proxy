@@ -172,8 +172,10 @@ func TestCompile(t *testing.T) {
 	testDataBytes := []byte(`{
 		"metadata": {
 			"name": "testName",
+			"namespace": "",
 			"labels": {"org": "testOrg"}
 		},
+		"namespace": "",
 		"user": {
           "name": "testUser",
           "groups": ["testGroup"]
@@ -191,6 +193,7 @@ func TestCompile(t *testing.T) {
 
 	type result struct {
 		checks          []ResolvedRel
+		postchecks      []ResolvedRel
 		creates         []ResolvedRel
 		touches         []ResolvedRel
 		deletes         []ResolvedRel
@@ -645,6 +648,48 @@ func TestCompile(t *testing.T) {
 			},
 		},
 		{
+			name: "get rule with postchecks",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				Checks: []proxyrule.StringOrTemplate{{
+					Template: "org:{{metadata.labels.org}}#view-pods@user:{{user.name}}",
+				}},
+				PostChecks: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{metadata.name}}#read-after@user:{{user.name}}",
+				}, {
+					Template: "namespace:{{namespace}}#audit-access@user:{{user.name}}",
+				}},
+			}},
+			want: result{
+				checks: []ResolvedRel{{
+					ResourceType:     "org",
+					ResourceID:       "testOrg",
+					ResourceRelation: "view-pods",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				postchecks: []ResolvedRel{{
+					ResourceType:     "pod",
+					ResourceID:       "testName",
+					ResourceRelation: "read-after",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}, {
+					ResourceType:     "namespace",
+					ResourceID:       "",
+					ResourceRelation: "audit-access",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
 			name: "prefilter with non-$ resource ID",
 			config: proxyrule.Config{Spec: proxyrule.Spec{
 				Locking: proxyrule.PessimisticLockMode,
@@ -671,6 +716,135 @@ func TestCompile(t *testing.T) {
 				}},
 			}},
 			wantErr: fmt.Errorf("LookupMatchingResources resourceID must be set to $ to match all resources, got \"invalid-id\""),
+		},
+		{
+			name: "postcheck with get verb should succeed",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get"},
+				}},
+				PostChecks: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{metadata.name}}#audit@user:{{user.name}}",
+				}},
+			}},
+			want: result{
+				postchecks: []ResolvedRel{{
+					ResourceType:     "pod",
+					ResourceID:       "testName",
+					ResourceRelation: "audit",
+					SubjectType:      "user",
+					SubjectID:        "testUser",
+				}},
+				filters: []ResolvedPreFilter{},
+			},
+		},
+		{
+			name: "postcheck with create verb should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"create"},
+				}},
+				PostChecks: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{metadata.name}}#audit@user:{{user.name}}",
+				}},
+			}},
+			wantErr: fmt.Errorf("PostCheck operations cannot be used with verb \"create\". PostChecks only apply to read-only operations like 'get'"),
+		},
+		{
+			name: "postcheck with list verb should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"list"},
+				}},
+				PostChecks: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{metadata.name}}#audit@user:{{user.name}}",
+				}},
+			}},
+			wantErr: fmt.Errorf("PostCheck operations cannot be used with verb \"list\". PostChecks only apply to read-only operations like 'get'"),
+		},
+		{
+			name: "postcheck with watch verb should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"watch"},
+				}},
+				PostChecks: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{metadata.name}}#audit@user:{{user.name}}",
+				}},
+			}},
+			wantErr: fmt.Errorf("PostCheck operations cannot be used with verb \"watch\". PostChecks only apply to read-only operations like 'get'"),
+		},
+		{
+			name: "postcheck with update verb should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"update"},
+				}},
+				PostChecks: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{metadata.name}}#audit@user:{{user.name}}",
+				}},
+			}},
+			wantErr: fmt.Errorf("PostCheck operations cannot be used with verb \"update\". PostChecks only apply to read-only operations like 'get'"),
+		},
+		{
+			name: "postcheck with patch verb should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"patch"},
+				}},
+				PostChecks: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{metadata.name}}#audit@user:{{user.name}}",
+				}},
+			}},
+			wantErr: fmt.Errorf("PostCheck operations cannot be used with verb \"patch\". PostChecks only apply to read-only operations like 'get'"),
+		},
+		{
+			name: "postcheck with delete verb should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"delete"},
+				}},
+				PostChecks: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{metadata.name}}#audit@user:{{user.name}}",
+				}},
+			}},
+			wantErr: fmt.Errorf("PostCheck operations cannot be used with verb \"delete\". PostChecks only apply to read-only operations like 'get'"),
+		},
+		{
+			name: "postcheck with mixed verbs should fail",
+			config: proxyrule.Config{Spec: proxyrule.Spec{
+				Locking: proxyrule.PessimisticLockMode,
+				Matches: []proxyrule.Match{{
+					GroupVersion: "v1",
+					Resource:     "pods",
+					Verbs:        []string{"get", "create"},
+				}},
+				PostChecks: []proxyrule.StringOrTemplate{{
+					Template: "pod:{{metadata.name}}#audit@user:{{user.name}}",
+				}},
+			}},
+			wantErr: fmt.Errorf("PostCheck operations cannot be used with verb \"create\". PostChecks only apply to read-only operations like 'get'"),
 		},
 		{
 			name: "prefilter with template expression evaluating to literal value",
@@ -712,6 +886,7 @@ func TestCompile(t *testing.T) {
 			require.NoError(t, err)
 
 			requireEqualUnderTestData(got.Checks, tt.want.checks)
+			requireEqualUnderTestData(got.PostChecks, tt.want.postchecks)
 			if got.Update != nil {
 				if got.Update.Creates != nil {
 					requireEqualUnderTestData(got.Update.Creates, tt.want.creates)
