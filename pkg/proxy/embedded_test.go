@@ -203,10 +203,8 @@ func TestEmbeddedModeDefaults(t *testing.T) {
 	t.Cleanup(cancel)
 
 	// Create embedded proxy with no explicit header configuration to test defaults
-	opts := NewOptions()
-	opts.EmbeddedMode = true
+	opts := NewOptions(WithEmbeddedProxy, WithEmbeddedSpiceDBEndpoint)
 	opts.Authentication.Embedded.Enabled = true
-	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 
 	// Configure mock upstream server
 	opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
@@ -403,12 +401,8 @@ func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 func createEmbeddedTestOptions(t *testing.T) *Options {
 	t.Helper()
 
-	opts := NewOptions()
-	opts.EmbeddedMode = true
+	opts := NewOptions(WithEmbeddedProxy, WithEmbeddedSpiceDBEndpoint)
 	opts.Authentication.Embedded.Enabled = true
-
-	// Use embedded SpiceDB for testing
-	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 
 	// Configure mock upstream server
 	opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
