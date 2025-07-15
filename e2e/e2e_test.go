@@ -19,13 +19,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	goruntime "runtime"
+
 	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/spf13/afero"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery/cached/disk"
 	"k8s.io/client-go/informers"
@@ -40,11 +39,6 @@ import (
 	"k8s.io/kubernetes/pkg/controller/garbagecollector"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/tools/setup-envtest/env"
-	"sigs.k8s.io/controller-runtime/tools/setup-envtest/remote"
-	"sigs.k8s.io/controller-runtime/tools/setup-envtest/store"
-	"sigs.k8s.io/controller-runtime/tools/setup-envtest/versions"
-	"sigs.k8s.io/controller-runtime/tools/setup-envtest/workflows"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz/distributedtx"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/proxy"
@@ -153,39 +147,9 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 func ConfigureApiserver() {
 	log := zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true))
 
-	e := &env.Env{
-		Log: log,
-		Client: &remote.HTTPClient{
-			Log:      log,
-			IndexURL: remote.DefaultIndexURL,
-		},
-		Version: versions.Spec{
-			Selector:    versions.TildeSelector{},
-			CheckLatest: false,
-		},
-		VerifySum:     true,
-		ForceDownload: false,
-		Platform: versions.PlatformItem{
-			Platform: versions.Platform{
-				OS:   goruntime.GOOS,
-				Arch: goruntime.GOARCH,
-			},
-		},
-		FS:    afero.Afero{Fs: afero.NewOsFs()},
-		Store: store.NewAt("../testbin"),
-		Out:   os.Stdout,
-	}
-	var err error
-	e.Version, err = versions.FromExpr("~1.33.0")
-	Expect(err).To(Succeed())
+	assetsPath := setupEnvtest(log)
 
-	workflows.Use{
-		UseEnv:      true,
-		PrintFormat: env.PrintOverview,
-		AssetsPath:  "../testbin",
-	}.Do(e)
-
-	Expect(os.Setenv("KUBEBUILDER_ASSETS", fmt.Sprintf("../testbin/k8s/%s-%s-%s", e.Version.AsConcrete(), e.Platform.OS, e.Platform.Arch))).To(Succeed())
+	Expect(os.Setenv("KUBEBUILDER_ASSETS", assetsPath)).To(Succeed())
 	DeferCleanup(os.Unsetenv, "KUBEBUILDER_ASSETS")
 }
 

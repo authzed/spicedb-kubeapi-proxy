@@ -96,7 +96,8 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 		ErrorLog:      nil, // TODO
 		FlushInterval: -1,
 		Director: func(req *http.Request) {
-			req.URL.Host = strings.TrimPrefix(clusterHost, "https://")
+			host := strings.TrimPrefix(clusterHost, "https://")
+			req.URL.Host = strings.TrimSuffix(host, "/")
 			req.URL.Scheme = "https"
 		},
 		ModifyResponse: func(response *http.Response) error {

@@ -69,10 +69,8 @@ func main() {
 }
 
 func createKubernetesClient(embeddedClient *http.Client) *kubernetes.Clientset {
-    restConfig := &rest.Config{
-        Host:      "http://embedded", // Special URL for embedded mode
-        Transport: embeddedClient.Transport,
-    }
+    restConfig := rest.CopyConfig(proxy.EmbeddedRestConfig)
+    restConfig.Transport = embeddedClient.Transport
 
     k8sClient, err := kubernetes.NewForConfig(restConfig)
     if err != nil {

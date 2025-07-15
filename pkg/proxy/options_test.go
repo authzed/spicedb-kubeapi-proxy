@@ -197,6 +197,60 @@ func TestWithEmbeddedSpiceDBEndpointOnly(t *testing.T) {
 	require.Equal(t, EmbeddedSpiceDBEndpoint, opts.SpiceDBOptions.SpiceDBEndpoint)
 }
 
+func TestWithEmbeddedSpiceDBBootstrap(t *testing.T) {
+	bootstrapContent := map[string][]byte{
+		"bootstrap.yaml": []byte(`schema: |-
+  definition user {}
+  definition namespace {
+    relation creator: user
+    permission view = creator
+  }
+relationships: |
+`),
+	}
+
+	opts := NewOptions(WithEmbeddedSpiceDBBootstrap(bootstrapContent))
+	require.False(t, opts.EmbeddedMode)
+	require.Equal(t, EmbeddedSpiceDBEndpoint, opts.SpiceDBOptions.SpiceDBEndpoint)
+	require.Equal(t, bootstrapContent, opts.SpiceDBOptions.BootstrapContent)
+}
+
+func TestWithEmbeddedSpiceDBBootstrapIntegration(t *testing.T) {
+	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// Create custom bootstrap content
+	bootstrapContent := map[string][]byte{
+		"bootstrap.yaml": []byte(`schema: |-
+  definition user {}
+  definition namespace {
+    relation creator: user
+    permission view = creator
+  }
+  definition lock {
+    relation workflow: workflow
+  }
+  definition workflow {}
+relationships: |
+`),
+	}
+
+	opts := optionsForTesting(t, WithEmbeddedSpiceDBBootstrap(bootstrapContent))
+	require.Empty(t, opts.Validate())
+
+	c, err := opts.Complete(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, c)
+
+	// Verify that the embedded SpiceDB is created with custom bootstrap
+	require.NotNil(t, opts.SpiceDBOptions.EmbeddedSpiceDB)
+	require.NotNil(t, opts.PermissionsClient)
+	require.NotNil(t, opts.WatchClient)
+	require.Equal(t, bootstrapContent, opts.SpiceDBOptions.BootstrapContent)
+}
+
 func TestNewOptionsWithoutEmbedded(t *testing.T) {
 	opts := NewOptions()
 	require.False(t, opts.EmbeddedMode)

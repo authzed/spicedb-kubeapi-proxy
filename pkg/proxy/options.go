@@ -83,6 +83,7 @@ type Options struct {
 type SpiceDBOptions struct {
 	SpiceDBEndpoint            string                `debugmap:"visible"`
 	EmbeddedSpiceDB            server.RunnableServer `debugmap:"hidden"`
+	BootstrapContent           map[string][]byte     `debugmap:"hidden"`
 	Insecure                   bool                  `debugmap:"sensitive"`
 	SkipVerifyCA               bool                  `debugmap:"visible"`
 	SecureSpiceDBTokensBySpace string                `debugmap:"sensitive"`
@@ -141,6 +142,35 @@ func WithEmbeddedProxy(o *Options) {
 // Use this for development, testing, or single-node deployments.
 func WithEmbeddedSpiceDBEndpoint(o *Options) {
 	o.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+}
+
+// WithEmbeddedSpiceDBBootstrap configures the proxy to use an embedded SpiceDB instance
+// with custom bootstrap content. This allows you to provide your own schema and initial
+// relationships directly as a byte slice instead of using a file.
+//
+// The bootstrap content should be provided as a map with filename as key and YAML content as value:
+//
+//	bootstrapContent := map[string][]byte{
+//		"bootstrap.yaml": []byte(`schema: |-
+//	  definition user {}
+//	  definition namespace {
+//	    relation creator: user
+//	    permission view = creator
+//	  }
+//	  definition lock {
+//	    relation workflow: workflow
+//	  }
+//	  definition workflow {}
+//	relationships: |
+//	`),
+//	}
+//
+// Use this for testing or when you want to programmatically define your SpiceDB schema.
+func WithEmbeddedSpiceDBBootstrap(bootstrapContent map[string][]byte) func(*Options) {
+	return func(o *Options) {
+		o.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+		o.SpiceDBOptions.BootstrapContent = bootstrapContent
+	}
 }
 
 func (o *Options) FromRESTConfig(restConfig *rest.Config) *Options {
@@ -271,15 +301,16 @@ func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
 
 	o.AdditionalAuthEnabled = o.Authentication.AdditionalAuthEnabled()
 
-	spicedbURl, err := url.Parse(o.SpiceDBOptions.SpiceDBEndpoint)
+	spicedbURL, err := url.Parse(o.SpiceDBOptions.SpiceDBEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse SpiceDB endpoint URL: %w", err)
 	}
 
 	var conn *grpc.ClientConn
-	if spicedbURl.Scheme == "embedded" {
-		klog.FromContext(ctx).WithValues("spicedb-endpoint", spicedbURl).Info("using embedded SpiceDB")
-		o.SpiceDBOptions.EmbeddedSpiceDB, err = spicedb.NewServer(ctx, spicedbURl.Path)
+	if spicedbURL.Scheme == "embedded" {
+		klog.FromContext(ctx).WithValues("spicedb-endpoint", spicedbURL).Info("using embedded SpiceDB")
+
+		o.SpiceDBOptions.EmbeddedSpiceDB, err = spicedb.NewServer(ctx, spicedbURL.Path, o.SpiceDBOptions.BootstrapContent)
 		if err != nil {
 			return nil, fmt.Errorf("unable to stand up embedded SpiceDB: %w", err)
 		}
