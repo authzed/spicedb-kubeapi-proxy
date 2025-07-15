@@ -436,10 +436,8 @@ func createKubernetesClient(t *testing.T, embeddedClient *http.Client, username 
 	t.Helper()
 
 	// Create rest config that uses the embedded transport
-	restConfig := &rest.Config{
-		Host:      "http://embedded",
-		Transport: embeddedClient.Transport,
-	}
+	restConfig := rest.CopyConfig(EmbeddedRestConfig)
+	restConfig.Transport = embeddedClient.Transport
 
 	// Wrap transport to add authentication headers
 	restConfig.Transport = &headerAddingTransport{
