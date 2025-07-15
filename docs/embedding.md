@@ -24,8 +24,7 @@ func main() {
     ctx := context.Background()
 
     // Create options with embedded mode enabled
-    opts := proxy.NewOptions()
-    opts.EmbeddedMode = true
+    opts := proxy.NewOptions(proxy.WithEmbeddedProxy, proxy.WithEmbeddedSpiceDBEndpoint)
 
     // Configure your backend Kubernetes cluster
     opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
@@ -33,8 +32,7 @@ func main() {
         return myClusterConfig, myTransport, nil
     }
 
-    // Configure SpiceDB (can use embedded SpiceDB too)
-    opts.SpiceDBOptions.SpiceDBEndpoint = "embedded://"
+    // SpiceDB is already configured for embedded mode via WithEmbeddedSpiceDBEndpoint
 
     // Set up your authorization rules
     opts.RuleConfigFile = "rules.yaml"
@@ -87,22 +85,43 @@ func createKubernetesClient(embeddedClient *http.Client) *kubernetes.Clientset {
 
 ### Configuration Options
 
-When using embedded mode, you can set these options:
+## Configuration Options
 
+You can configure the proxy with different combinations of embedded options:
+
+### Full Embedded Mode (Proxy + SpiceDB)
 ```go
-opts := proxy.NewOptions()
+// Both proxy and SpiceDB run embedded
+opts := proxy.NewOptions(proxy.WithEmbeddedProxy, proxy.WithEmbeddedSpiceDBEndpoint)
+```
 
-// Enable embedded mode
-opts.EmbeddedMode = true
+### Embedded Proxy with Remote SpiceDB
+```go
+// Proxy runs embedded, but connects to remote SpiceDB
+opts := proxy.NewOptions(proxy.WithEmbeddedProxy)
+opts.SpiceDBOptions.SpiceDBEndpoint = "localhost:50051"
+opts.SpiceDBOptions.SecureSpiceDBTokensBySpace = "your-token"
+```
+
+### Regular Proxy with Embedded SpiceDB
+```go
+// Proxy runs with TLS termination, but uses embedded SpiceDB
+opts := proxy.NewOptions(proxy.WithEmbeddedSpiceDBEndpoint)
+```
+
+### Example Configuration
+```go
+opts := proxy.NewOptions(proxy.WithEmbeddedProxy, proxy.WithEmbeddedSpiceDBEndpoint)
 
 // Backend Kubernetes cluster configuration
 opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
     // Your cluster configuration
 }
 
-// SpiceDB configuration (can use embedded SpiceDB)
-opts.SpiceDBOptions.SpiceDBEndpoint = "embedded://"  // or "localhost:50051"
-opts.SpiceDBOptions.SecureSpiceDBTokensBySpace = "your-token"
+// SpiceDB configuration is already set to embedded via WithEmbeddedSpiceDBEndpoint
+// For remote SpiceDB, you would instead use:
+// opts.SpiceDBOptions.SpiceDBEndpoint = "localhost:50051"
+// opts.SpiceDBOptions.SecureSpiceDBTokensBySpace = "your-token"
 
 // Authorization rules
 opts.RuleConfigFile = "path/to/rules.yaml"
@@ -136,8 +155,7 @@ X-Remote-Extra-Team: platform
 **Example with custom headers (programmatic configuration):**
 
 ```go
-opts := proxy.NewOptions()
-opts.EmbeddedMode = true
+opts := proxy.NewOptions(proxy.WithEmbeddedProxy, proxy.WithEmbeddedSpiceDBEndpoint)
 
 // Configure custom header names
 opts.Authentication.Embedded.UsernameHeaders = []string{"Custom-User"}

@@ -160,9 +160,7 @@ Embedded mode is designed for programmatic use when embedding the proxy in Go ap
 
 ```go
 // Basic embedded mode setup
-opts := proxy.NewOptions()
-opts.EmbeddedMode = true
-opts.SpiceDBOptions.SpiceDBEndpoint = "embedded://"
+opts := proxy.NewOptions(proxy.WithEmbeddedProxy, proxy.WithEmbeddedSpiceDBEndpoint)
 
 // Complete configuration
 completedConfig, _ := opts.Complete(ctx)

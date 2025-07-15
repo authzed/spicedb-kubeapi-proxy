@@ -43,8 +43,6 @@ const (
 	defaultDialerTimeout        = 5 * time.Second
 )
 
-//go:generate go run github.com/ecordell/optgen -output zz_spicedb_options.go . SpiceDBOptions
-
 type Options struct {
 	SecureServing             apiserveroptions.SecureServingOptionsWithLoopback `debugmap:"hidden"`
 	Authentication            Authentication                                    `debugmap:"hidden"`
@@ -81,6 +79,7 @@ type Options struct {
 	PermissionsClient v1.PermissionsServiceClient `debugmap:"hidden"`
 }
 
+//go:generate go run github.com/ecordell/optgen -output zz_spicedb_options.go . SpiceDBOptions
 type SpiceDBOptions struct {
 	SpiceDBEndpoint            string                `debugmap:"visible"`
 	EmbeddedSpiceDB            server.RunnableServer `debugmap:"hidden"`
@@ -110,7 +109,9 @@ func (so *SpiceDBOptions) AddFlags(fs *pflag.FlagSet) {
 
 const tlsCertificatePairName = "tls"
 
-func NewOptions() *Options {
+type setOpt func(*Options)
+
+func NewOptions(opts ...setOpt) *Options {
 	o := &Options{
 		SecureServing:  *apiserveroptions.NewSecureServingOptions().WithLoopback(),
 		Authentication: *NewAuthentication(),
@@ -120,7 +121,26 @@ func NewOptions() *Options {
 	o.Logs.Verbosity = logsv1.VerbosityLevel(3)
 	o.SecureServing.BindPort = 443
 	o.SecureServing.ServerCert.PairName = tlsCertificatePairName
+
+	for _, opt := range opts {
+		opt(o)
+	}
+
 	return o
+}
+
+// WithEmbeddedProxy configures the proxy to run in embedded mode.
+// In embedded mode, the proxy runs as an HTTP server without TLS termination,
+// suitable for use behind a load balancer or ingress controller.
+func WithEmbeddedProxy(o *Options) {
+	o.EmbeddedMode = true
+}
+
+// WithEmbeddedSpiceDBEndpoint configures the proxy to use an embedded SpiceDB instance.
+// This creates an in-memory SpiceDB instance that runs within the proxy process.
+// Use this for development, testing, or single-node deployments.
+func WithEmbeddedSpiceDBEndpoint(o *Options) {
+	o.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 }
 
 func (o *Options) FromRESTConfig(restConfig *rest.Config) *Options {

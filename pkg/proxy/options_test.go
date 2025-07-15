@@ -26,8 +26,7 @@ import (
 func TestKubeConfig(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
-	opts := optionsForTesting(t)
-	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts := optionsForTesting(t, WithEmbeddedSpiceDBEndpoint)
 	require.Empty(t, opts.Validate())
 
 	c, err := opts.Complete(t.Context())
@@ -47,8 +46,7 @@ func TestKubeConfig(t *testing.T) {
 func TestInClusterConfig(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
-	opts := optionsForTesting(t)
-	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts := optionsForTesting(t, WithEmbeddedSpiceDBEndpoint)
 	opts.BackendKubeconfigPath = ""
 	opts.UseInClusterConfig = true
 	require.Empty(t, opts.Validate())
@@ -63,8 +61,7 @@ func TestInClusterConfig(t *testing.T) {
 }
 
 func TestEmbeddedSpiceDB(t *testing.T) {
-	opts := optionsForTesting(t)
-	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts := optionsForTesting(t, WithEmbeddedSpiceDBEndpoint)
 	require.Empty(t, opts.Validate())
 
 	c, err := opts.Complete(t.Context())
@@ -117,8 +114,7 @@ func TestRemoteSpiceDBCerts(t *testing.T) {
 }
 
 func TestRuleConfig(t *testing.T) {
-	opts := optionsForTesting(t)
-	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts := optionsForTesting(t, WithEmbeddedSpiceDBEndpoint)
 	require.Empty(t, opts.Validate())
 
 	c, err := opts.Complete(t.Context())
@@ -140,7 +136,7 @@ func TestRuleConfig(t *testing.T) {
 	errConfigBytes := []byte(`
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
-lock: Pessimistic 
+lock: Pessimistic
 match:
 - apiVersion: authzed.com/v1alpha1
   resource: spicedbclusters
@@ -152,8 +148,7 @@ prefilter:
 `)
 	errConfigFile := path.Join(t.TempDir(), "rulesbad.yaml")
 	require.NoError(t, os.WriteFile(errConfigFile, errConfigBytes, 0o600))
-	opts = optionsForTesting(t)
-	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+	opts = optionsForTesting(t, WithEmbeddedSpiceDBEndpoint)
 	opts.RuleConfigFile = errConfigFile
 	require.Empty(t, opts.Validate())
 
@@ -161,17 +156,51 @@ prefilter:
 	require.ErrorContains(t, err, "expected")
 }
 
-func optionsForTesting(t *testing.T) *Options {
+func optionsForTesting(t *testing.T, opts ...setOpt) *Options {
 	t.Helper()
 
 	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
+	options := NewOptions(opts...)
+	options.SecureServing.BindPort = getFreePort(t, "127.0.0.1")
+	options.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
+	options.BackendKubeconfigPath = kubeConfigForTest(t)
+	options.RuleConfigFile = ruleConfigForTest(t)
+	require.Empty(t, options.Validate())
+	return options
+}
+
+func TestWithEmbeddedProxy(t *testing.T) {
+	opts := NewOptions(WithEmbeddedProxy)
+	require.True(t, opts.EmbeddedMode)
+}
+
+func TestWithEmbeddedSpiceDBEndpoint(t *testing.T) {
+	opts := NewOptions(WithEmbeddedSpiceDBEndpoint)
+	require.Equal(t, EmbeddedSpiceDBEndpoint, opts.SpiceDBOptions.SpiceDBEndpoint)
+}
+
+func TestWithBothEmbeddedOptions(t *testing.T) {
+	opts := NewOptions(WithEmbeddedProxy, WithEmbeddedSpiceDBEndpoint)
+	require.True(t, opts.EmbeddedMode)
+	require.Equal(t, EmbeddedSpiceDBEndpoint, opts.SpiceDBOptions.SpiceDBEndpoint)
+}
+
+func TestWithEmbeddedProxyOnly(t *testing.T) {
+	opts := NewOptions(WithEmbeddedProxy)
+	require.True(t, opts.EmbeddedMode)
+	require.NotEqual(t, EmbeddedSpiceDBEndpoint, opts.SpiceDBOptions.SpiceDBEndpoint)
+}
+
+func TestWithEmbeddedSpiceDBEndpointOnly(t *testing.T) {
+	opts := NewOptions(WithEmbeddedSpiceDBEndpoint)
+	require.False(t, opts.EmbeddedMode)
+	require.Equal(t, EmbeddedSpiceDBEndpoint, opts.SpiceDBOptions.SpiceDBEndpoint)
+}
+
+func TestNewOptionsWithoutEmbedded(t *testing.T) {
 	opts := NewOptions()
-	opts.SecureServing.BindPort = getFreePort(t, "127.0.0.1")
-	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
-	opts.BackendKubeconfigPath = kubeConfigForTest(t)
-	opts.RuleConfigFile = ruleConfigForTest(t)
-	require.Empty(t, opts.Validate())
-	return opts
+	require.False(t, opts.EmbeddedMode)
+	require.NotEqual(t, EmbeddedSpiceDBEndpoint, opts.SpiceDBOptions.SpiceDBEndpoint)
 }
 
 func getFreePort(t *testing.T, listenAddr string) int {
@@ -240,10 +269,10 @@ func ruleConfigForTest(t *testing.T) string {
 	configBytes := []byte(`
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
-lock: Pessimistic 
+lock: Pessimistic
 match:
 - apiVersion: authzed.com/v1alpha1
-  resource: spicedbclusters 
+  resource: spicedbclusters
   verbs: ["list"]
 prefilter:
 - fromObjectIDNameExpr: "{{request.name}}"

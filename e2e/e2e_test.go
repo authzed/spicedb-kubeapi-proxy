@@ -118,7 +118,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	Expect(err).To(Succeed())
 	clientCA = GenerateClientCA(port)
 
-	opts := proxy.NewOptions()
+	opts := proxy.NewOptions(proxy.WithEmbeddedSpiceDBEndpoint)
 	opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
 		conf, err := clientcmd.NewDefaultClientConfig(*backendCfg, nil).ClientConfig()
 		if err != nil {
@@ -130,7 +130,6 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	}
 	opts.RuleConfigFile = "rules.yaml"
 	opts.SecureServing.BindPort = port
-	opts.SpiceDBOptions.SpiceDBEndpoint = proxy.EmbeddedSpiceDBEndpoint
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
 	opts.Authentication.BuiltInOptions.ClientCert.ClientCA = clientCA.Path()
 
