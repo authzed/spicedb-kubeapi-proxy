@@ -71,7 +71,7 @@ func (h *ActivityHandler) ReadRelationships(ctx context.Context, input *v1.ReadR
 func (h *ActivityHandler) WriteToKube(ctx context.Context, req *KubeReqInput) (*KubeResp, error) {
 	failpoints.FailPoint("panicKubeWrite")
 
-	verb := http.MethodPost
+	var verb string
 	switch req.RequestInfo.Verb {
 	case "put":
 		verb = http.MethodPut

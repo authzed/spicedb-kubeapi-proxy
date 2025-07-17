@@ -287,7 +287,9 @@ func (r *responseRecorder) emitResponseToWriter(w http.ResponseWriter) {
 
 	// Write body
 	if len(r.body) > 0 {
-		w.Write(r.body)
+		if _, err := w.Write(r.body); err != nil {
+			klog.ErrorS(err, "failed to write response body", "status_code", statusCode, "body_length", len(r.body))
+		}
 	}
 }
 

@@ -244,7 +244,7 @@ func filterFromRel(rel *rules.ResolvedRel) (*v1.RelationshipFilter, error) {
 	if rel.ResourceRelation != "$resourceRelation" {
 		f.OptionalRelation = rel.ResourceRelation
 	}
-	needsSubjectFilter := false
+	var needsSubjectFilter bool
 
 	if rel.SubjectType != "$subjectType" && rel.SubjectType != "" {
 		needsSubjectFilter = true

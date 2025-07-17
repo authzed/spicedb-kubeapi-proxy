@@ -326,16 +326,16 @@ func convertInputToBloblangData(input *rules.ResolveInput) any {
 	if input.Object != nil {
 		// Convert ObjectMeta to a simpler map structure for Bloblang
 		labels := make(map[string]any)
-		if input.Object.ObjectMeta.Labels != nil {
-			for k, v := range input.Object.ObjectMeta.Labels {
+		if input.Object.Labels != nil {
+			for k, v := range input.Object.Labels {
 				labels[k] = v
 			}
 		}
 
 		objectData := map[string]any{
 			"metadata": map[string]any{
-				"name":      input.Object.ObjectMeta.Name,
-				"namespace": input.Object.ObjectMeta.Namespace,
+				"name":      input.Object.Name,
+				"namespace": input.Object.Namespace,
 				"labels":    labels,
 			},
 		}
