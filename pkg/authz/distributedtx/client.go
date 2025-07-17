@@ -3,7 +3,6 @@ package distributedtx
 import (
 	"context"
 	"log/slog"
-	"os"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/backend"
@@ -15,13 +14,9 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const defaultLogLevel = slog.LevelDebug
-
 func SetupWithMemoryBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface) (*client.Client, *Worker, error) {
 	ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("backend", "sqlite-memory"))
-	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewInMemoryBackend(sqlite.WithBackendOptions(backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: defaultLogLevel,
-	}))))))
+	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewInMemoryBackend(sqlite.WithBackendOptions(backend.WithLogger(slog.New(newKlogToSlogAdapter(klog.FromContext(ctx)))))))
 }
 
 func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, sqlitePath string) (*client.Client, *Worker, error) {
@@ -30,9 +25,7 @@ func SetupWithSQLiteBackend(ctx context.Context, permissionClient v1.Permissions
 	}
 
 	ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("backend", "sqlite-file", "path", sqlitePath))
-	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewSqliteBackend(sqlitePath, sqlite.WithBackendOptions(backend.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: defaultLogLevel,
-	}))))))
+	return SetupWithBackend(ctx, permissionClient, kubeClient, sqlite.NewSqliteBackend(sqlitePath, sqlite.WithBackendOptions(backend.WithLogger(slog.New(newKlogToSlogAdapter(klog.FromContext(ctx)))))))
 }
 
 func SetupWithBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface, backend backend.Backend) (*client.Client, *Worker, error) {
