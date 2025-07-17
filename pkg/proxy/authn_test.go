@@ -221,12 +221,12 @@ func GetFreePort(listenAddr string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer func() {
-		if err := dummyListener.Close(); err != nil {
-			fmt.Printf("Error closing dummy listener: %v\n", err)
-		}
-	}()
+
 	port := dummyListener.Addr().(*net.TCPAddr).Port
+	if err := dummyListener.Close(); err != nil {
+		return 0, fmt.Errorf("error closing dummy listener: %w", err)
+	}
+
 	return port, nil
 }
 
