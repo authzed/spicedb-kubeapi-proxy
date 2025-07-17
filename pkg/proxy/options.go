@@ -291,9 +291,7 @@ func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
 		}
 		opts = append(opts, grpc.WithConnectParams(grpc.ConnectParams{Backoff: backoff.DefaultConfig}))
 
-		timeoutCtx, cancel := context.WithTimeout(ctx, defaultDialerTimeout)
-		defer cancel()
-		conn, err = grpc.DialContext(timeoutCtx, o.SpiceDBOptions.SpiceDBEndpoint, opts...)
+		conn, err = grpc.NewClient(o.SpiceDBOptions.SpiceDBEndpoint, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("unable to open gRPC connection to remote SpiceDB at %s: %w", o.SpiceDBOptions.SpiceDBEndpoint, err)
 		}

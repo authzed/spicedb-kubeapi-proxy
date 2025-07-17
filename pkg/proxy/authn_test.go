@@ -104,18 +104,18 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 			// Handle different API discovery and resource requests
 			switch r.URL.Path {
 			case "/api":
-				fmt.Fprintf(w, `{
+				_, _ = fmt.Fprintf(w, `{
 					"kind": "APIVersions",
 					"versions": ["v1"],
 					"serverAddressByClientCIDRs": [{"clientCIDR": "0.0.0.0/0", "serverAddress": "127.0.0.1:65471"}]
 				}`)
 			case "/apis":
-				fmt.Fprintf(w, `{
+				_, _ = fmt.Fprintf(w, `{
 					"kind": "APIGroupList",
 					"groups": []
 				}`)
 			case "/api/v1":
-				fmt.Fprintf(w, `{
+				_, _ = fmt.Fprintf(w, `{
 					"kind": "APIResourceList",
 					"apiVersion": "v1",
 					"groupVersion": "v1",
@@ -130,7 +130,7 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 					]
 				}`)
 			case "/api/v1/namespaces/ns/configmaps/auth":
-				fmt.Fprintf(w, `{
+				_, _ = fmt.Fprintf(w, `{
 					"apiVersion": "v1",
 					"data": {},
 					"kind": "ConfigMap",
@@ -141,7 +141,7 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 				}`)
 			default:
 				// Default response for any other requests
-				fmt.Fprintf(w, `{}`)
+				_, _ = fmt.Fprintf(w, `{}`)
 			}
 		}))
 		ts.EnableHTTP2 = true
@@ -221,7 +221,11 @@ func GetFreePort(listenAddr string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer dummyListener.Close()
+	defer func() {
+		if err := dummyListener.Close(); err != nil {
+			fmt.Printf("Error closing dummy listener: %v\n", err)
+		}
+	}()
 	port := dummyListener.Addr().(*net.TCPAddr).Port
 	return port, nil
 }

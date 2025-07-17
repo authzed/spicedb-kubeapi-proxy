@@ -445,8 +445,8 @@ func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 	if input.Object != nil {
 		// Convert ObjectMeta to a simpler map structure for Bloblang
 		labels := make(map[string]any)
-		if input.Object.ObjectMeta.Labels != nil {
-			for k, v := range input.Object.ObjectMeta.Labels {
+		if input.Object.Labels != nil {
+			for k, v := range input.Object.Labels {
 				labels[k] = v
 			}
 		}

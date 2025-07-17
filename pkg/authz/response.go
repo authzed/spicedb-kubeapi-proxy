@@ -265,19 +265,29 @@ func (d *AuthzData) FilterWatch(resp *http.Response, recognized bool) error {
 
 		// Create frame capturing reader
 		capturingReader := newFrameCapturingReader(originalRespBody)
-		defer capturingReader.Close()
+		defer func() {
+			if err := capturingReader.Close(); err != nil {
+				klog.V(3).ErrorS(err, "error closing reader")
+			}
+		}()
 
 		// Monitor context cancellation and close resources
 		go func() {
 			<-resp.Request.Context().Done()
 			klog.V(3).InfoS("context canceled, closing resources")
-			capturingReader.Close()
+			if err := capturingReader.Close(); err != nil {
+				klog.V(3).ErrorS(err, "error closing reader")
+			}
 			close(done)
 			klog.V(4).InfoS("done closing")
 		}()
 
 		eventDecoder := streaming.NewDecoder(framer.NewFrameReader(capturingReader), streamingSerializer)
-		defer eventDecoder.Close()
+		defer func() {
+			if err := eventDecoder.Close(); err != nil {
+				klog.V(3).ErrorS(err, "error closing event decoder")
+			}
+		}()
 
 		writeChunk := func(chunk []byte) error {
 			klog.V(4).InfoS("writing chunk to resp body", "size", len(chunk))
