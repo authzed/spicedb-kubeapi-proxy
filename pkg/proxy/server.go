@@ -74,7 +74,7 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 	}
 
 	clusterHost = restConfig.Host
-	klog.FromContext(ctx).WithValues("host", clusterHost).Error(err, "created upstream client")
+	klog.FromContext(ctx).WithValues("host", clusterHost).Info("created upstream client")
 
 	mux := http.NewServeMux()
 

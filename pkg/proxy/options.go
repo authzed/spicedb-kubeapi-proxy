@@ -16,6 +16,7 @@ import (
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/authzed/grpcutil"
 	"github.com/authzed/spicedb/pkg/cmd/server"
+	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -47,6 +48,7 @@ type Options struct {
 	SecureServing  apiserveroptions.SecureServingOptionsWithLoopback `debugmap:"hidden"`
 	Authentication Authentication                                    `debugmap:"hidden"`
 	Logs           *logs.Options                                     `debugmap:"hidden"`
+	CustomLogger   logr.Logger
 
 	// TODO: use genericclioptions.ConfigFlags instead of this?
 	BackendKubeconfigPath string                                          `debugmap:"visible"`
@@ -151,7 +153,9 @@ type CompletedConfig struct {
 }
 
 func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
-	if err := logsv1.ValidateAndApply(o.Logs, utilfeature.DefaultFeatureGate); err != nil {
+	if (o.CustomLogger != logr.Logger{}) {
+		klog.SetLoggerWithOptions(o.CustomLogger, klog.ContextualLogger(true))
+	} else if err := logsv1.ValidateAndApply(o.Logs, utilfeature.DefaultFeatureGate); err != nil {
 		return nil, err
 	}
 

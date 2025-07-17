@@ -36,7 +36,7 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 
 		matchingRules := (*matcher).Match(input.Request)
 		if len(matchingRules) == 0 {
-			klog.V(3).InfoSDepth(1,
+			klog.FromContext(ctx).V(3).Info(
 				"request did not match any authorization rule",
 				"verb", input.Request.Verb,
 				"APIGroup", input.Request.APIGroup,
@@ -49,13 +49,13 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 		// Apply CEL condition filtering
 		filteredRules, err := rules.FilterRulesWithCELConditions(matchingRules, input)
 		if err != nil {
-			klog.V(2).ErrorS(err, "error evaluating CEL conditions", "input", input)
+			klog.FromContext(ctx).V(2).Error(err, "error evaluating CEL conditions", "input", input)
 			handleError(w, failed, req, err)
 			return
 		}
 
 		if len(filteredRules) == 0 {
-			klog.V(3).InfoSDepth(1,
+			klog.FromContext(ctx).V(3).Info(
 				"request matched authorization rule/s but failed CEL conditions",
 				"verb", input.Request.Verb,
 				"APIGroup", input.Request.APIGroup,
@@ -65,40 +65,40 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 			return
 		}
 
-		klog.V(3).InfoSDepth(1,
+		klog.FromContext(ctx).V(3).Info(
 			"request matched authorization rule/s and passed CEL conditions",
 			"verb", input.Request.Verb,
 			"APIGroup", input.Request.APIGroup,
 			"APIVersion", input.Request.APIVersion,
 			"Resource", input.Request.Resource)
-		klog.V(4).InfoSDepth(1, "authorization input details", "input", input)
+		klog.FromContext(ctx).V(4).Info("authorization input details", "input", input)
 
 		// run all checks for this request
 		if err := runAllMatchingChecks(ctx, filteredRules, input, permissionsClient); err != nil {
-			klog.V(2).ErrorS(err, "input failed authorization checks", "input", input)
+			klog.FromContext(ctx).V(2).Error(err, "input failed authorization checks", "input", input)
 			handleError(w, failed, req, err)
 			return
 		}
-		klog.V(3).InfoSDepth(1, "input passed all authorization checks", "input", input)
+		klog.FromContext(ctx).V(3).Info("input passed all authorization checks", "input", input)
 
 		// if this request is a write, perform the dual write and return
 		rule, err := getSingleUpdateRule(filteredRules)
 		if err != nil {
-			klog.V(2).ErrorS(err, "unable to get single update rule", "input", input)
+			klog.FromContext(ctx).V(2).Error(err, "unable to get single update rule", "input", input)
 			handleError(w, failed, req, err)
 			return
 		}
 
 		if rule != nil {
-			klog.V(4).InfoSDepth(1, "single update rule", "rule", rule)
+			klog.FromContext(ctx).V(4).Info("single update rule", "rule", rule)
 			if err := performUpdate(ctx, w, rule, input, req.RequestURI, workflowClient); err != nil {
-				klog.V(2).ErrorS(err, "failed to perform update", "input", input)
+				klog.FromContext(ctx).V(2).Error(err, "failed to perform update", "input", input)
 				handleError(w, failed, req, err)
 				return
 			}
 			return
 		} else {
-			klog.V(4).InfoSDepth(1, "no update rule found for request")
+			klog.FromContext(ctx).V(4).Info("no update rule found for request")
 		}
 
 		// all other requests are filtered by matching rules
@@ -186,12 +186,12 @@ func createPostCheckHandler(handler, failed http.Handler, ctx context.Context, f
 		if recorder.statusCode >= 200 && recorder.statusCode < 300 {
 			// Run PostChecks
 			if err := runAllMatchingPostChecks(ctx, filteredRules, input, permissionsClient); err != nil {
-				klog.V(2).ErrorS(err, "input failed post-authorization checks", "input", input)
+				klog.FromContext(ctx).V(2).Error(err, "input failed post-authorization checks", "input", input)
 				// Return the original error handler instead of the successful response
 				failed.ServeHTTP(w, req)
 				return
 			}
-			klog.V(3).InfoSDepth(1, "input passed all post-authorization checks", "input", input)
+			klog.FromContext(ctx).V(3).Info("input passed all post-authorization checks", "input", input)
 
 			// Only write the successful response if PostChecks passed
 			recorder.emitResponseToWriter(w)
@@ -216,7 +216,7 @@ func createPostFilterHandler(handler, failed http.Handler, ctx context.Context, 
 			if input.Request.Verb == "list" {
 				// Handle list operations
 				if err := filterListResponse(ctx, recorder, filteredRules, input, permissionsClient); err != nil {
-					klog.V(2).ErrorS(err, "failed to filter list response", "input", input)
+					klog.FromContext(ctx).V(2).Error(err, "failed to filter list response", "input", input)
 					failed.ServeHTTP(w, req)
 					return
 				}
@@ -288,7 +288,7 @@ func (r *responseRecorder) emitResponseToWriter(w http.ResponseWriter) {
 	// Write body
 	if len(r.body) > 0 {
 		if _, err := w.Write(r.body); err != nil {
-			klog.ErrorS(err, "failed to write response body", "status_code", statusCode, "body_length", len(r.body))
+			klog.Error(err, "failed to write response body", "status_code", statusCode, "body_length", len(r.body))
 		}
 	}
 }
