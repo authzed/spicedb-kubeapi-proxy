@@ -1,5 +1,7 @@
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: create-namespace
 # dummy; e2e tests set matcher directly
 match:
 - apiVersion: v1

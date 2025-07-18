@@ -1,6 +1,7 @@
 package proxyrule
 
 import (
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"strings"
 	"testing"
 
@@ -20,6 +21,8 @@ func TestRuleParsing(t *testing.T) {
 			config: `
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: example-rule
 lock: Pessimistic
 match:
 - apiVersion: authzed.com/v1alpha1
@@ -52,6 +55,9 @@ update:
 `,
 			expectRules: []Config{{
 				TypeMeta: v1alpha1ProxyRule,
+				ObjectMeta: v1.ObjectMeta{
+					Name: "example-rule",
+				},
 				Spec: Spec{
 					Locking: PessimisticLockMode,
 					Matches: []Match{{
@@ -630,8 +636,8 @@ func TestValidation(t *testing.T) {
 				expectErr: false,
 			},
 			{
-				name: "empty update - should pass due to omitempty",
-				update: Update{},
+				name:      "empty update - should pass due to omitempty",
+				update:    Update{},
 				expectErr: false, // Empty updates are valid due to omitempty
 			},
 			{
@@ -712,8 +718,8 @@ func TestValidation(t *testing.T) {
 				expectErr: false,
 			},
 			{
-				name: "neither template nor relationship template",
-				sot:  StringOrTemplate{},
+				name:      "neither template nor relationship template",
+				sot:       StringOrTemplate{},
 				expectErr: false, // Empty structs are allowed due to omitempty
 			},
 			{
@@ -839,7 +845,7 @@ func TestValidation(t *testing.T) {
 				expectErr: false,
 			},
 			{
-				name: "empty prefilter",
+				name:      "empty prefilter",
 				preFilter: PreFilter{},
 				expectErr: false,
 			},
@@ -869,6 +875,8 @@ func TestValidation(t *testing.T) {
 				config: `
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: example-rule
 lock: Optimistic
 match:
 - apiVersion: v1
@@ -897,6 +905,8 @@ update:
 				config: `
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: example-rule
 lock: Optimistic
 check:
 - tpl: "namespace:{{resourceNamespace}}#view@user:{{user.name}}"
@@ -908,6 +918,8 @@ check:
 				config: `
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+	name: example-rule
 lock: Invalid
 match:
 - apiVersion: v1
@@ -921,6 +933,8 @@ match:
 				config: `
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: example-rule
 match:
 - apiVersion: v1
   resource: pods
@@ -933,6 +947,8 @@ match:
 				config: `
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+	name: example-rule
 match:
 - resource: pods
   verbs: ["get"]
