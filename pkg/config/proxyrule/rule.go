@@ -26,8 +26,9 @@ const MatchingIDFieldValue = "$"
 // is meant for an on-disk representation given to the proxy on start and omits
 // spec/status and other common kube trimmings.
 type Config struct {
-	metav1.TypeMeta `json:",inline"`
-	Spec            `json:",inline"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,inline"`
+	Spec              `json:",inline"`
 }
 
 type LockMode string

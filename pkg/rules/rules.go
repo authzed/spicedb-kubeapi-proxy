@@ -97,7 +97,7 @@ func NewMapMatcher(configRules []proxyrule.Config) (MapMatcher, error) {
 				}
 				rules, err := Compile(r)
 				if err != nil {
-					return nil, fmt.Errorf("couldn't compile rule %s: %w", r.String(), err)
+					return nil, fmt.Errorf("couldn't compile rule %s: %w", r.Name, err)
 				}
 				matchingRules[meta] = append(matchingRules[meta], rules)
 			}
@@ -165,6 +165,42 @@ type ResolveInput struct {
 	Object         *metav1.PartialObjectMetadata `json:"object"`
 	Body           []byte                        `json:"body"`
 	Headers        http.Header                   `json:"headers"`
+}
+
+func (r ResolveInput) ToKeyValues() []any {
+	var expanded = make([]any, 0, 10+len(r.Headers)*2+(2*5)+(2*3))
+	expanded = append(expanded,
+		"name", r.Name,
+		"namespace", r.Namespace,
+		"namespacedName", r.NamespacedName,
+		"object", r.Object,
+		"body", r.Body,
+	)
+
+	// Expand r.Request fields
+	if r.Request != nil {
+		expanded = append(expanded,
+			"request.verb", r.Request.Verb,
+			"request.resource", r.Request.Resource,
+			"request.labelSelector", r.Request.LabelSelector,
+			"request.fieldSelector", r.Request.FieldSelector,
+			"request.path", r.Request.Path,
+		)
+	}
+
+	if r.User != nil {
+		expanded = append(expanded,
+			"user.name", r.User.Name,
+			"user.groups", r.User.Groups,
+			"user.extra", r.User.Extra,
+		)
+	}
+
+	for k, v := range r.Headers {
+		expanded = append(expanded, k, v)
+	}
+
+	return expanded
 }
 
 func NewResolveInputFromHttp(req *http.Request) (*ResolveInput, error) {
@@ -513,6 +549,7 @@ func normalizeToBloblangTypes(v any) any {
 // RunnableRule is a set of checks, writes, and filters with fully compiled
 // expressions for building and matching relationships.
 type RunnableRule struct {
+	Name         string
 	LockMode     proxyrule.LockMode
 	IfConditions []cel.Program
 	Checks       []*RelExpr
@@ -572,6 +609,7 @@ type ResolvedPostFilter struct {
 // Bloblang expressions are pre-compiled and stored.
 func Compile(config proxyrule.Config) (*RunnableRule, error) {
 	runnable := &RunnableRule{
+		Name:     config.Name,
 		LockMode: config.Locking,
 	}
 	var err error
