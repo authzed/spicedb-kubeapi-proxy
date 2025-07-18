@@ -45,10 +45,11 @@ const (
 //go:generate go run github.com/ecordell/optgen -output zz_spicedb_options.go . SpiceDBOptions
 
 type Options struct {
-	SecureServing  apiserveroptions.SecureServingOptionsWithLoopback `debugmap:"hidden"`
-	Authentication Authentication                                    `debugmap:"hidden"`
-	Logs           *logs.Options                                     `debugmap:"hidden"`
-	CustomLogger   logr.Logger
+	SecureServing             apiserveroptions.SecureServingOptionsWithLoopback `debugmap:"hidden"`
+	Authentication            Authentication                                    `debugmap:"hidden"`
+	Logs                      *logs.Options                                     `debugmap:"hidden"`
+	CustomLogger              logr.Logger
+	SkipLoggerSetupForTesting bool `debugmap:"hidden"`
 
 	// TODO: use genericclioptions.ConfigFlags instead of this?
 	BackendKubeconfigPath string                                          `debugmap:"visible"`
@@ -153,10 +154,12 @@ type CompletedConfig struct {
 }
 
 func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
-	if (o.CustomLogger != logr.Logger{}) {
-		klog.SetLoggerWithOptions(o.CustomLogger, klog.ContextualLogger(true))
-	} else if err := logsv1.ValidateAndApply(o.Logs, utilfeature.DefaultFeatureGate); err != nil {
-		return nil, err
+	if !o.SkipLoggerSetupForTesting {
+		if (o.CustomLogger != logr.Logger{}) {
+			klog.SetLoggerWithOptions(o.CustomLogger, klog.ContextualLogger(true))
+		} else if err := logsv1.ValidateAndApply(o.Logs, utilfeature.DefaultFeatureGate); err != nil {
+			return nil, err
+		}
 	}
 
 	var err error
