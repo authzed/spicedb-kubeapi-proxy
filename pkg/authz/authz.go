@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/klog/v2"
 
@@ -46,6 +47,11 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 			return
 		}
 
+		ruleToString := func(item *rules.RunnableRule, index int) string {
+			return item.Name
+		}
+		klog.FromContext(ctx).V(2).Info("matched rules", "rules", lo.Map(matchingRules, ruleToString))
+
 		// Apply CEL condition filtering
 		filteredRules, err := rules.FilterRulesWithCELConditions(matchingRules, input)
 		if err != nil {
@@ -54,6 +60,7 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 			return
 		}
 
+		klog.FromContext(ctx).V(2).Info("filtered rules", "rules", lo.Map(filteredRules, ruleToString))
 		if len(filteredRules) == 0 {
 			klog.FromContext(ctx).V(3).Info(
 				"request matched authorization rule/s but failed CEL conditions",
@@ -71,20 +78,21 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 			"APIGroup", input.Request.APIGroup,
 			"APIVersion", input.Request.APIVersion,
 			"Resource", input.Request.Resource)
-		klog.FromContext(ctx).V(4).Info("authorization input details", "input", input)
+		inputKeyValues := input.ToKeyValues()
+		klog.FromContext(ctx).V(4).Info("authorization input details", inputKeyValues...)
 
 		// run all checks for this request
 		if err := runAllMatchingChecks(ctx, filteredRules, input, permissionsClient); err != nil {
-			klog.FromContext(ctx).V(2).Error(err, "input failed authorization checks", "input", input)
+			klog.FromContext(ctx).V(2).Error(err, "input failed authorization checks", inputKeyValues...)
 			handleError(w, failed, req, err)
 			return
 		}
-		klog.FromContext(ctx).V(3).Info("input passed all authorization checks", "input", input)
+		klog.FromContext(ctx).V(3).Info("input passed all authorization checks", inputKeyValues...)
 
 		// if this request is a write, perform the dual write and return
 		rule, err := getSingleUpdateRule(filteredRules)
 		if err != nil {
-			klog.FromContext(ctx).V(2).Error(err, "unable to get single update rule", "input", input)
+			klog.FromContext(ctx).V(2).Error(err, "unable to get single update rule", inputKeyValues...)
 			handleError(w, failed, req, err)
 			return
 		}
@@ -92,7 +100,7 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 		if rule != nil {
 			klog.FromContext(ctx).V(4).Info("single update rule", "rule", rule)
 			if err := performUpdate(ctx, w, rule, input, req.RequestURI, workflowClient); err != nil {
-				klog.FromContext(ctx).V(2).Error(err, "failed to perform update", "input", input)
+				klog.FromContext(ctx).V(2).Error(err, "failed to perform update", inputKeyValues...)
 				handleError(w, failed, req, err)
 				return
 			}

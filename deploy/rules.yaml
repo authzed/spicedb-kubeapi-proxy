@@ -1,5 +1,7 @@
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: create-namespaces
 lock: Pessimistic
 match:
 - apiVersion: v1
@@ -14,6 +16,8 @@ update:
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: delete-namespaces
 lock: Pessimistic
 match:
 - apiVersion: v1
@@ -26,6 +30,8 @@ update:
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: get-namespaces
 match:
 - apiVersion: v1
   resource: namespaces
@@ -35,6 +41,8 @@ check:
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: list-watch-namespaces
 match:
 - apiVersion: v1
   resource: namespaces
@@ -46,6 +54,8 @@ prefilter:
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: create-pods
 lock: Pessimistic
 match:
 - apiVersion: v1
@@ -60,6 +70,8 @@ update:
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: delete-pods
 lock: Pessimistic
 match:
 - apiVersion: v1
@@ -72,6 +84,8 @@ update:
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: get-pods
 match:
 - apiVersion: v1
   resource: pods
@@ -81,6 +95,8 @@ check:
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
+metadata:
+  name: list-watch-pods
 match:
 - apiVersion: v1
   resource: pods
