@@ -10,16 +10,14 @@ on: # yamllint disable-line rule:truthy
   merge_group:
     types:
       - "checks_requested"
-env:
-  GO_VERSION: "~1.21.1"
 jobs:
   paths-filter:
     runs-on: "ubuntu-latest"
     outputs:
       codechange: "${{ steps.code-filter.outputs.codechange }}"
     steps:
-      - uses: "actions/checkout@v3"
-      - uses: "dorny/paths-filter@v2"
+      - uses: "actions/checkout@v4"
+      - uses: "dorny/paths-filter@v3"
         id: "code-filter"
         with:
           filters: |
@@ -40,11 +38,29 @@ jobs:
     if: |
       needs.paths-filter.outputs.codechange == 'true'
     steps:
-      - uses: "actions/checkout@v3"
+      - uses: "actions/checkout@v4"
       - uses: "authzed/actions/setup-go@main"
         with:
           go-version: "${{ env.GO_VERSION }}"
       - uses: "authzed/actions/go-build@main"
+
+  go-lint:
+    name: "Lint Go"
+    runs-on: "ubuntu-latest"
+    needs: "paths-filter"
+    if: |
+      needs.paths-filter.outputs.codechange == 'true'
+    steps:
+      - uses: "actions/checkout@v4"
+      - uses: "authzed/actions/setup-go@main"
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+      - name: "Lint Go"
+        run: "go run mage.go lint:go"
+      - uses: "chainguard-dev/actions/nodiff@16e2fd6603a1c6a1fbc880fdbb922b2e8e2be3e7" # main
+        with:
+          path: ""
+          fixup-command: "go run mage.go lint:go"
 
   unit:
     name: "Unit"
@@ -53,12 +69,12 @@ jobs:
     if: |
       needs.paths-filter.outputs.codechange == 'true'
     steps:
-      - uses: "actions/checkout@v3"
+      - uses: "actions/checkout@v4"
       - uses: "authzed/actions/setup-go@main"
         with:
           go-version: "${{ env.GO_VERSION }}"
       - name: "Unit tests"
-        uses: "magefile/mage-action@v2"
+        uses: "magefile/mage-action@v3"
         with:
           version: "latest"
           args: "test:unit"
@@ -70,12 +86,12 @@ jobs:
     if: |
       needs.paths-filter.outputs.codechange == 'true'
     steps:
-      - uses: "actions/checkout@v3"
+      - uses: "actions/checkout@v4"
       - uses: "authzed/actions/setup-go@main"
         with:
           go-version: "${{ env.GO_VERSION }}"
       - name: "e2e tests"
-        uses: "magefile/mage-action@v2"
+        uses: "magefile/mage-action@v3"
         with:
           version: "latest"
           args: "test:e2e"

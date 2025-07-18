@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/cschleiden/go-workflows/client"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
-	"github.com/cschleiden/go-workflows/client"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apiserver/pkg/endpoints/request"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )

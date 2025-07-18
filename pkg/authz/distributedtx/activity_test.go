@@ -2,7 +2,6 @@ package distributedtx
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"testing"
@@ -51,7 +50,7 @@ func TestWriteToKube(t *testing.T) {
 	trt := testRoundTripper{T: t, expectedPath: "/my_way", status: http.StatusCreated}
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
-	resp, err := ah.WriteToKube(context.Background(), &KubeReqInput{
+	resp, err := ah.WriteToKube(t.Context(), &KubeReqInput{
 		RequestInfo: &request.RequestInfo{Path: "my_way", Namespace: "ns", Verb: "post"},
 		RequestURI:  "/my_way",
 		ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
@@ -59,7 +58,7 @@ func TestWriteToKube(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, `{"hi":"bye"}`, string(resp.Body))
+	require.JSONEq(t, `{"hi":"bye"}`, string(resp.Body))
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 }
 
@@ -67,7 +66,7 @@ func TestWriteToKubeError(t *testing.T) {
 	trt := testRoundTripper{T: t, expectedPath: "/my_way", status: http.StatusInternalServerError}
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
-	resp, err := ah.WriteToKube(context.Background(), &KubeReqInput{
+	resp, err := ah.WriteToKube(t.Context(), &KubeReqInput{
 		RequestInfo: &request.RequestInfo{Path: "my_way", Namespace: "ns", Verb: "post"},
 		RequestURI:  "/my_way",
 		ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
@@ -84,7 +83,7 @@ func TestCheckKubeResource(t *testing.T) {
 	trt := testRoundTripper{T: t, expectedPath: "/a_path/object_name", status: http.StatusOK}
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
-	exists, err := ah.CheckKubeResource(context.Background(), &KubeReqInput{
+	exists, err := ah.CheckKubeResource(t.Context(), &KubeReqInput{
 		RequestInfo: &request.RequestInfo{Path: "a_path", Namespace: "ns1", Verb: "get"},
 		RequestURI:  "/a_path",
 		ObjectMeta:  &metav1.ObjectMeta{Name: "object_name"},
@@ -98,7 +97,7 @@ func TestCheckKubeResourceError(t *testing.T) {
 	trt := testRoundTripper{T: t, expectedPath: "/a_path/object_name", status: http.StatusInternalServerError}
 	ah := ActivityHandler{KubeClient: trt.toKubeClient()}
 
-	_, err := ah.CheckKubeResource(context.Background(), &KubeReqInput{
+	_, err := ah.CheckKubeResource(t.Context(), &KubeReqInput{
 		RequestInfo: &request.RequestInfo{Path: "a_path", Namespace: "ns1", Verb: "get"},
 		RequestURI:  "/a_path",
 		ObjectMeta:  &metav1.ObjectMeta{Name: "object_name"},

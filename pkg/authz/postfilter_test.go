@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"testing"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
@@ -33,7 +34,7 @@ func (m *mockPermissionsClient) CheckPermission(ctx context.Context, req *v1.Che
 }
 
 func (m *mockPermissionsClient) CheckBulkPermissions(ctx context.Context, req *v1.CheckBulkPermissionsRequest, opts ...grpc.CallOption) (*v1.CheckBulkPermissionsResponse, error) {
-	var pairs []*v1.CheckBulkPermissionsPair
+	pairs := make([]*v1.CheckBulkPermissionsPair, 0, len(req.Items))
 
 	for _, item := range req.Items {
 		// Create a key from the request item to match against responses
@@ -149,18 +150,18 @@ func TestPostFilterCompilationError(t *testing.T) {
 
 func TestFilterListResponse(t *testing.T) {
 	// Create test data
-	listResponse := map[string]interface{}{
+	listResponse := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "PodList",
-		"items": []interface{}{
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+		"items": []any{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "pod1",
 					"namespace": "default",
 				},
 			},
-			map[string]interface{}{
-				"metadata": map[string]interface{}{
+			map[string]any{
+				"metadata": map[string]any{
 					"name":      "pod2",
 					"namespace": "default",
 				},
@@ -222,22 +223,22 @@ func TestFilterListResponse(t *testing.T) {
 	}
 
 	// Filter the response
-	err = filterListResponse(context.Background(), recorder, []*rules.RunnableRule{filteredRules}, input, mockClient)
+	err = filterListResponse(t.Context(), recorder, []*rules.RunnableRule{filteredRules}, input, mockClient)
 	require.NoError(t, err)
 
 	// Parse the filtered response
-	var filteredResponse map[string]interface{}
+	var filteredResponse map[string]any
 	err = json.Unmarshal(recorder.body, &filteredResponse)
 	require.NoError(t, err)
 
 	// Check that only pod1 is included
-	items, ok := filteredResponse["items"].([]interface{})
+	items, ok := filteredResponse["items"].([]any)
 	require.True(t, ok)
 	require.Len(t, items, 1)
 
-	firstItem, ok := items[0].(map[string]interface{})
+	firstItem, ok := items[0].(map[string]any)
 	require.True(t, ok)
-	metadata, ok := firstItem["metadata"].(map[string]interface{})
+	metadata, ok := firstItem["metadata"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "pod1", metadata["name"])
 }
@@ -288,15 +289,15 @@ func TestFilterItemsWithBulkPermissions(t *testing.T) {
 		},
 	}
 
-	items := []interface{}{
-		map[string]interface{}{
-			"metadata": map[string]interface{}{
+	items := []any{
+		map[string]any{
+			"metadata": map[string]any{
 				"name":      "testpod1",
 				"namespace": "default",
 			},
 		},
-		map[string]interface{}{
-			"metadata": map[string]interface{}{
+		map[string]any{
+			"metadata": map[string]any{
 				"name":      "testpod2",
 				"namespace": "default",
 			},
@@ -304,21 +305,21 @@ func TestFilterItemsWithBulkPermissions(t *testing.T) {
 	}
 
 	// Test that only allowed items are returned
-	allowedItems, err := filterItemsWithBulkPermissions(context.Background(), items, []*rules.RunnableRule{filteredRules}, input, mockClient)
+	allowedItems, err := filterItemsWithBulkPermissions(t.Context(), items, []*rules.RunnableRule{filteredRules}, input, mockClient)
 	require.NoError(t, err)
 	require.Len(t, allowedItems, 1)
 
 	// Check that only testpod1 is included
-	firstItem, ok := allowedItems[0].(map[string]interface{})
+	firstItem, ok := allowedItems[0].(map[string]any)
 	require.True(t, ok)
-	metadata, ok := firstItem["metadata"].(map[string]interface{})
+	metadata, ok := firstItem["metadata"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "testpod1", metadata["name"])
 
 	// Test with empty items
-	emptyItems, err := filterItemsWithBulkPermissions(context.Background(), []interface{}{}, []*rules.RunnableRule{filteredRules}, input, mockClient)
+	emptyItems, err := filterItemsWithBulkPermissions(t.Context(), []any{}, []*rules.RunnableRule{filteredRules}, input, mockClient)
 	require.NoError(t, err)
-	require.Len(t, emptyItems, 0)
+	require.Empty(t, emptyItems)
 }
 
 func TestShouldRunPostFilters(t *testing.T) {

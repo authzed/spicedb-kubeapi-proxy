@@ -13,9 +13,6 @@ import (
 	"strings"
 	"time"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
-	"github.com/authzed/grpcutil"
-	"github.com/authzed/spicedb/pkg/cmd/server"
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
@@ -30,6 +27,10 @@ import (
 	"k8s.io/component-base/logs"
 	logsv1 "k8s.io/component-base/logs/api/v1"
 	"k8s.io/klog/v2"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"github.com/authzed/grpcutil"
+	"github.com/authzed/spicedb/pkg/cmd/server"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
@@ -313,7 +314,6 @@ func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
 }
 
 func (o *Options) configFromPath() (*clientcmdapi.Config, error) {
-
 	if !filepath.IsAbs(o.BackendKubeconfigPath) {
 		pwd, err := os.Getwd()
 		if err != nil {

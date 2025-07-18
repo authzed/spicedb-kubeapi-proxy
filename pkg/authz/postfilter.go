@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
@@ -15,13 +16,13 @@ import (
 // filterListResponse filters the list response by checking permissions for each object using bulk permission checking
 func filterListResponse(ctx context.Context, recorder *responseRecorder, filteredRules []*rules.RunnableRule, input *rules.ResolveInput, permissionsClient v1.PermissionsServiceClient) error {
 	// Parse the response body as JSON
-	var listResponse map[string]interface{}
+	var listResponse map[string]any
 	if err := json.Unmarshal(recorder.body, &listResponse); err != nil {
 		return fmt.Errorf("failed to parse list response: %w", err)
 	}
 
 	// Extract items array
-	items, ok := listResponse["items"].([]interface{})
+	items, ok := listResponse["items"].([]any)
 	if !ok {
 		// If there's no items array, return the original response
 		return nil
@@ -54,24 +55,24 @@ func filterListResponse(ctx context.Context, recorder *responseRecorder, filtere
 }
 
 // filterItemsWithBulkPermissions filters items using bulk permission checking for better performance
-func filterItemsWithBulkPermissions(ctx context.Context, items []interface{}, filteredRules []*rules.RunnableRule, input *rules.ResolveInput, permissionsClient v1.PermissionsServiceClient) ([]interface{}, error) {
+func filterItemsWithBulkPermissions(ctx context.Context, items []any, filteredRules []*rules.RunnableRule, input *rules.ResolveInput, permissionsClient v1.PermissionsServiceClient) ([]any, error) {
 	if len(items) == 0 {
 		return items, nil
 	}
 
 	// Build bulk permission check requests
 	var bulkItems []*v1.CheckBulkPermissionsRequestItem
-	var itemToRequestMap = make(map[int][]int) // maps item index to request indices
+	itemToRequestMap := make(map[int][]int) // maps item index to request indices
 
 	for itemIndex, item := range items {
-		itemMap, ok := item.(map[string]interface{})
+		itemMap, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
 
 		// Convert item to PartialObjectMetadata
 		var objectMeta *metav1.PartialObjectMetadata
-		if metadata, ok := itemMap["metadata"].(map[string]interface{}); ok {
+		if metadata, ok := itemMap["metadata"].(map[string]any); ok {
 			objectMeta = &metav1.PartialObjectMetadata{}
 			if name, ok := metadata["name"].(string); ok {
 				objectMeta.Name = name
@@ -138,7 +139,7 @@ func filterItemsWithBulkPermissions(ctx context.Context, items []interface{}, fi
 	klog.V(3).InfoSDepth(1, "PostFilter CheckBulkPermissions", "request_count", len(bulkItems), "response_count", len(bulkResp.Pairs))
 
 	// Process the results and filter items
-	var allowedItems []interface{}
+	var allowedItems []any
 
 	for itemIndex, item := range items {
 		requestIndices, hasChecks := itemToRequestMap[itemIndex]

@@ -630,8 +630,8 @@ func TestValidation(t *testing.T) {
 				expectErr: false,
 			},
 			{
-				name: "empty update - should pass due to omitempty",
-				update: Update{},
+				name:      "empty update - should pass due to omitempty",
+				update:    Update{},
 				expectErr: false, // Empty updates are valid due to omitempty
 			},
 			{
@@ -712,8 +712,8 @@ func TestValidation(t *testing.T) {
 				expectErr: false,
 			},
 			{
-				name: "neither template nor relationship template",
-				sot:  StringOrTemplate{},
+				name:      "neither template nor relationship template",
+				sot:       StringOrTemplate{},
 				expectErr: false, // Empty structs are allowed due to omitempty
 			},
 			{
@@ -839,7 +839,7 @@ func TestValidation(t *testing.T) {
 				expectErr: false,
 			},
 			{
-				name: "empty prefilter",
+				name:      "empty prefilter",
 				preFilter: PreFilter{},
 				expectErr: false,
 			},

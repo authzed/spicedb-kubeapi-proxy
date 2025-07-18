@@ -153,7 +153,7 @@ type Update struct {
 // Match determines which requests the rule applies to
 type Match struct {
 	GroupVersion string `json:"apiVersion" validate:"required"`
-	Resource     string `json:"resource" validate:"required"`
+	Resource     string `json:"resource"   validate:"required"`
 
 	// The Kubernetes verb to match.
 	// See: `verbs` in https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.24/ for reference.
@@ -164,7 +164,7 @@ type Match struct {
 // template, or a full RelationshipTemplate definition.
 type StringOrTemplate struct {
 	Template              string `json:"tpl,inline" validate:"omitempty,min=1,required_without=RelationshipTemplate"`
-	*RelationshipTemplate `json:",inline" validate:"omitempty,required_without=tpl"`
+	*RelationshipTemplate `json:",inline"    validate:"omitempty,required_without=tpl"`
 }
 
 // PreFilter defines a LookupResources request to filter the results.
@@ -181,7 +181,7 @@ type PreFilter struct {
 
 	// LookupMatchingResources is a template defining a LookupResources request to filter on.
 	// The resourceID must be set to `$`.
-	LookupMatchingResources *StringOrTemplate `json:"lookupMatchingResources,optional" validate:"omitempty"`
+	LookupMatchingResources *StringOrTemplate `json:"lookupMatchingResources,omitempty" validate:"omitempty"`
 }
 
 // PostFilter defines authorization checks to filter the results after the
