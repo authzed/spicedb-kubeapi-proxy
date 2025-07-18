@@ -105,7 +105,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 		defer close(authzData.removedNNC)
 
 		if filter.Rel.ResourceID != proxyrule.MatchingIDFieldValue {
-			handleFilterListError(errors.New("filterList called with non-$ resource ID"))
+			handleFilterListError(ctx, errors.New("filterList called with non-$ resource ID"))
 			return
 		}
 
@@ -123,10 +123,10 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				OptionalRelation: filter.Rel.SubjectRelation,
 			},
 		}
-		klog.V(3).InfoSDepth(1, "LookupResources", "request", req)
+		klog.FromContext(ctx).V(3).Info("LookupResources", "request", req)
 		lr, err := client.LookupResources(ctx, req)
 		if err != nil {
-			handleFilterListError(err)
+			handleFilterListError(ctx, err)
 			return
 		}
 		for {
@@ -136,40 +136,40 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 			}
 
 			if err != nil {
-				handleFilterListError(err)
+				handleFilterListError(ctx, err)
 				return
 			}
 
 			if resp.Permissionship != v1.LookupPermissionship_LOOKUP_PERMISSIONSHIP_HAS_PERMISSION {
-				klog.V(3).InfoS("denying conditional resource in list", "resource_type", filter.Rel.ResourceType, "resource_id", resp.ResourceObjectId, "condition", resp.PartialCaveatInfo.String())
+				klog.FromContext(ctx).V(3).Info("denying conditional resource in list", "resource_type", filter.Rel.ResourceType, "resource_id", resp.ResourceObjectId, "condition", resp.PartialCaveatInfo.String())
 				continue
 			}
 
 			byteIn, err := json.Marshal(wrapper{ResourceID: resp.ResourceObjectId})
 			if err != nil {
-				handleFilterListError(err)
+				handleFilterListError(ctx, err)
 				return
 			}
 			var data any
 			if err := json.Unmarshal(byteIn, &data); err != nil {
-				handleFilterListError(err)
+				handleFilterListError(ctx, err)
 				return
 			}
 
-			klog.V(4).InfoS("received list filter event", "event", string(byteIn))
+			klog.FromContext(ctx).V(4).Info("received list filter event", "event", string(byteIn))
 			name, err := filter.NameFromObjectID.Query(data)
 			if err != nil {
-				handleFilterListError(err)
+				handleFilterListError(ctx, err)
 				return
 			}
 			if name == nil || len(name.(string)) == 0 {
-				klog.V(3).InfoS("unable to determine name for resource", "event", string(byteIn))
+				klog.FromContext(ctx).V(3).Info("unable to determine name for resource", "event", string(byteIn))
 				return
 			}
 
 			namespace, err := filter.NamespaceFromObjectID.Query(data)
 			if err != nil {
-				handleFilterListError(err)
+				handleFilterListError(ctx, err)
 				return
 			}
 			if namespace == nil {
@@ -177,7 +177,7 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				inputData := convertInputToBloblangData(input)
 				namespace, err = filter.NamespaceFromObjectID.Query(inputData)
 				if err != nil {
-					handleFilterListError(err)
+					handleFilterListError(ctx, err)
 					return
 				}
 			}
@@ -190,13 +190,13 @@ func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter 
 				Namespace: namespace.(string),
 			}] = struct{}{}
 
-			klog.V(3).InfoS("allowed resource in list/LR response", "resource_type", filter.Rel.ResourceType, "resource_id", resp.ResourceObjectId)
+			klog.FromContext(ctx).V(3).Info("allowed resource in list/LR response", "resource_type", filter.Rel.ResourceType, "resource_id", resp.ResourceObjectId)
 		}
 	}()
 }
 
-func handleFilterListError(err error) {
-	klog.V(3).ErrorS(err, "error on filterList")
+func handleFilterListError(ctx context.Context, err error) {
+	klog.FromContext(ctx).V(3).Error(err, "error on filterList")
 }
 
 func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
@@ -208,7 +208,7 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 			OptionalObjectTypes: []string{filter.Rel.ResourceType},
 		})
 		if err != nil {
-			klog.V(3).ErrorS(err, "error on filterWatch")
+			klog.FromContext(ctx).V(3).Error(err, "error on filterWatch")
 			return
 		}
 
@@ -219,7 +219,7 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 			}
 
 			if err != nil {
-				klog.V(3).ErrorS(err, "error on watchResource.Recv")
+				klog.FromContext(ctx).V(3).Error(err, "error on watchResource.Recv")
 				return
 			}
 
@@ -243,24 +243,24 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 					},
 				})
 				if err != nil {
-					klog.V(3).ErrorS(err, "error on CheckPermission")
+					klog.FromContext(ctx).V(3).Error(err, "error on CheckPermission")
 					return
 				}
 
 				byteIn, err := json.Marshal(wrapper{ResourceID: u.Relationship.Resource.ObjectId, SubjectID: u.Relationship.Subject.Object.ObjectId})
 				if err != nil {
-					klog.V(3).ErrorS(err, "error marshaling wrapper in filterWatch")
+					klog.FromContext(ctx).V(3).Error(err, "error marshaling wrapper in filterWatch")
 					return
 				}
 				var data any
 				if err := json.Unmarshal(byteIn, &data); err != nil {
-					klog.V(3).ErrorS(err, "error unmarshaling data in filterWatch")
+					klog.FromContext(ctx).V(3).Error(err, "error unmarshaling data in filterWatch")
 					return
 				}
 
 				name, err := filter.NameFromObjectID.Query(data)
 				if err != nil {
-					klog.V(3).ErrorS(err, "error on filter.Name.Query")
+					klog.FromContext(ctx).V(3).Error(err, "error on filter.Name.Query")
 					return
 				}
 
@@ -270,7 +270,7 @@ func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchC
 
 				namespace, err := filter.NamespaceFromObjectID.Query(data)
 				if err != nil {
-					klog.V(3).ErrorS(err, "error on filter.Namespace.Query")
+					klog.FromContext(ctx).V(3).Error(err, "error on filter.Namespace.Query")
 					return
 				}
 				if namespace == nil {
