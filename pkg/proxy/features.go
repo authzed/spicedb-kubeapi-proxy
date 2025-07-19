@@ -15,10 +15,10 @@ var defaultGenericControlPlaneFeatureGates = map[featuregate.Feature]featuregate
 	// Keep only the logging features that are required for the logging system to work
 	logsapi.LoggingBetaOptions: {Default: true, PreRelease: featuregate.Beta},
 	logsapi.ContextualLogging:  {Default: true, PreRelease: featuregate.Alpha},
-	
+
 	// Note: The following features have been removed from apiserver in Kubernetes 1.33:
 	// - APIListChunking: Promoted to GA and always enabled
-	// - APIPriorityAndFairness: Promoted to GA and always enabled  
+	// - APIPriorityAndFairness: Promoted to GA and always enabled
 	// - CustomResourceValidationExpressions: Moved to apiextensions-apiserver
 	// - ServerSideApply: Promoted to GA and always enabled
 	// - ValidatingAdmissionPolicy: Moved to a different package or promoted to GA

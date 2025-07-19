@@ -2,8 +2,9 @@ package distributedtx
 
 import (
 	"context"
-	"k8s.io/klog/v2"
 	"log/slog"
+
+	"k8s.io/klog/v2"
 )
 
 type klogToSlogAdapter struct {

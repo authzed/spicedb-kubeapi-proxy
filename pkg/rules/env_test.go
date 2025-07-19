@@ -68,21 +68,21 @@ func TestSplitNameFunctionErrors(t *testing.T) {
 		wantError string
 	}{
 		{
-			name:     "no arguments",
-			bloblang: `{{ split_name() }}`,
-			data:     map[string]any{},
+			name:      "no arguments",
+			bloblang:  `{{ split_name() }}`,
+			data:      map[string]any{},
 			wantError: "splitName function expects exactly 1 argument",
 		},
 		{
-			name:     "too many arguments",
-			bloblang: `{{ split_name("arg1", "arg2") }}`,
-			data:     map[string]any{},
+			name:      "too many arguments",
+			bloblang:  `{{ split_name("arg1", "arg2") }}`,
+			data:      map[string]any{},
 			wantError: "splitName function expects exactly 1 argument",
 		},
 		{
-			name:     "non-string argument",
-			bloblang: `{{ split_name(123) }}`,
-			data:     map[string]any{},
+			name:      "non-string argument",
+			bloblang:  `{{ split_name(123) }}`,
+			data:      map[string]any{},
 			wantError: "splitName function expects string argument",
 		},
 	}
@@ -161,21 +161,21 @@ func TestSplitNamespaceFunctionErrors(t *testing.T) {
 		wantError string
 	}{
 		{
-			name:     "no arguments",
-			bloblang: `{{ split_namespace() }}`,
-			data:     map[string]any{},
+			name:      "no arguments",
+			bloblang:  `{{ split_namespace() }}`,
+			data:      map[string]any{},
 			wantError: "splitNamespace function expects exactly 1 argument",
 		},
 		{
-			name:     "too many arguments",
-			bloblang: `{{ split_namespace("arg1", "arg2") }}`,
-			data:     map[string]any{},
+			name:      "too many arguments",
+			bloblang:  `{{ split_namespace("arg1", "arg2") }}`,
+			data:      map[string]any{},
 			wantError: "splitNamespace function expects exactly 1 argument",
 		},
 		{
-			name:     "non-string argument",
-			bloblang: `{{ split_namespace(123) }}`,
-			data:     map[string]any{},
+			name:      "non-string argument",
+			bloblang:  `{{ split_namespace(123) }}`,
+			data:      map[string]any{},
 			wantError: "splitNamespace function expects string argument",
 		},
 	}

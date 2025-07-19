@@ -7,9 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/authzed/spicedb-kubeapi-proxy/pkg/spicedb"
-
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/client"
 	"github.com/cschleiden/go-workflows/workflow"
 	"github.com/google/uuid"
@@ -20,6 +17,10 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/rest/fake"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+
+	"github.com/authzed/spicedb-kubeapi-proxy/pkg/spicedb"
 )
 
 func TestWorkflow(t *testing.T) {
@@ -34,7 +35,7 @@ func TestWorkflow(t *testing.T) {
 			srv, err := spicedb.NewServer(ctx, "")
 			require.NoError(t, err)
 			go func() {
-				require.NoError(t, srv.Run(ctx))
+				require.NoError(t, srv.Run(ctx)) // nolint:testifylint
 			}()
 
 			dialCtx, err := srv.GRPCDialContext(ctx)
@@ -93,7 +94,7 @@ func TestWorkflow(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, resp)
 			require.Empty(t, resp.Err, "workflow returned error: %s", resp.Err)
-			require.Equal(t, `{"hi":"myfriend"}`, string(resp.Body))
+			require.JSONEq(t, `{"hi":"myfriend"}`, string(resp.Body))
 			require.Equal(t, http.StatusCreated, resp.StatusCode)
 			require.Equal(t, runtime.ContentTypeJSON, resp.ContentType)
 
@@ -117,5 +118,4 @@ func TestWorkflow(t *testing.T) {
 			require.Equal(t, v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION, cpr.Permissionship)
 		})
 	}
-
 }

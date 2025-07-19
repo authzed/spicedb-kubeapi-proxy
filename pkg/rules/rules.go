@@ -168,7 +168,7 @@ type ResolveInput struct {
 }
 
 func (r ResolveInput) ToKeyValues() []any {
-	var expanded = make([]any, 0, 10+len(r.Headers)*2+(2*5)+(2*3))
+	expanded := make([]any, 0, 10+len(r.Headers)*2+(2*5)+(2*3))
 	expanded = append(expanded,
 		"name", r.Name,
 		"namespace", r.Namespace,

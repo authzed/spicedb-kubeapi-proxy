@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +29,8 @@ import (
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/util/homedir"
 	"k8s.io/klog/v2"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz/distributedtx"
@@ -225,7 +226,7 @@ func toRestMapper(config *rest.Config) (meta.RESTMapper, error) {
 	httpCacheDir := filepath.Join(cacheDir, "http")
 	discoveryCacheDir := computeDiscoverCacheDir(filepath.Join(cacheDir, "discovery"), config.Host)
 
-	discoveryClient, err := diskcached.NewCachedDiscoveryClientForConfig(config, discoveryCacheDir, httpCacheDir, time.Duration(6*time.Hour))
+	discoveryClient, err := diskcached.NewCachedDiscoveryClientForConfig(config, discoveryCacheDir, httpCacheDir, 6*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discovery client: %w", err)
 	}

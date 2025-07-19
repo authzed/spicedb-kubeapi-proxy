@@ -11,30 +11,26 @@ import (
 	"strings"
 	"sync"
 
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/util/yaml"
-
 	// "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/runtime/serializer/streaming"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/klog/v2"
-
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kjson "k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/klog/v2"
 )
 
-var (
-	// TODO: do we need to do extra work to load upstream types into the scheme?
-	codecs = serializer.NewCodecFactory(scheme.Scheme)
-)
+// TODO: do we need to do extra work to load upstream types into the scheme?
+var codecs = serializer.NewCodecFactory(scheme.Scheme)
 
 type requestAuthzData int
 
@@ -76,7 +72,7 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 		Resource: info.Resource,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to get GVK for %s: %v", info.Resource, err)
+		return fmt.Errorf("failed to get GVK for %s: %w", info.Resource, err)
 	}
 	recognized := scheme.Scheme.Recognizes(gvk)
 
@@ -100,7 +96,7 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 	contentType := resp.Header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return fmt.Errorf("failed to parse content type %s: %v", contentType, err)
+		return fmt.Errorf("failed to parse content type %s: %w", contentType, err)
 	}
 
 	var filteredBody bytes.Buffer
@@ -122,11 +118,11 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 	})
 	decoder, err := negotiator.Decoder(mediaType, params)
 	if err != nil {
-		return fmt.Errorf("failed to get decoder for %s: %v", mediaType, err)
+		return fmt.Errorf("failed to get decoder for %s: %w", mediaType, err)
 	}
 	encoder, err := negotiator.Encoder(contentType, params)
 	if err != nil {
-		return fmt.Errorf("failed to get encoder for %s: %v", contentType, err)
+		return fmt.Errorf("failed to get encoder for %s: %w", contentType, err)
 	}
 
 	// If the object is proto encoded but not in the scheme, we can't decode it.
@@ -150,7 +146,7 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 			var err error
 			typedList, err = scheme.Scheme.New(gvk)
 			if err != nil {
-				return fmt.Errorf("failed to create new object of type %s: %v", gvk, err)
+				return fmt.Errorf("failed to create new object of type %s: %w", gvk, err)
 			}
 		} else {
 			// custom types
@@ -158,7 +154,7 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 		}
 		_, _, err = decoder.Decode(body, &gvk, typedList)
 		if err != nil {
-			return fmt.Errorf("failed to decode response body: %v", err)
+			return fmt.Errorf("failed to decode response body: %w", err)
 		}
 		filterErr = d.FilterList(typedList)
 		if filterErr != nil {
@@ -182,7 +178,7 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 			var err error
 			typedObj, err = scheme.Scheme.New(gvk)
 			if err != nil {
-				return fmt.Errorf("failed to create new object of type %s: %v", gvk, err)
+				return fmt.Errorf("failed to create new object of type %s: %w", gvk, err)
 			}
 		} else {
 			// custom types
@@ -190,7 +186,7 @@ func (d *AuthzData) FilterResp(resp *http.Response) error {
 		}
 		_, _, err = decoder.Decode(body, &gvk, typedObj)
 		if err != nil {
-			return fmt.Errorf("failed to decode response body: %v", err)
+			return fmt.Errorf("failed to decode response body: %w", err)
 		}
 
 		filterErr = d.FilterObject(typedObj)
@@ -239,14 +235,14 @@ func (d *AuthzData) FilterWatch(resp *http.Response, recognized bool) error {
 	contentType := resp.Header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return fmt.Errorf("failed to parse content type %s: %v", contentType, err)
+		return fmt.Errorf("failed to parse content type %s: %w", contentType, err)
 	}
 
 	// Create a proper client negotiator for stream decoding
 	negotiator := runtime.NewClientNegotiator(codecs, schema.GroupVersion{})
 	_, streamingSerializer, framer, err := negotiator.StreamDecoder(mediaType, params)
 	if err != nil {
-		return fmt.Errorf("failed to get stream decoder for %s: %v", mediaType, err)
+		return fmt.Errorf("failed to get stream decoder for %s: %w", mediaType, err)
 	}
 	if streamingSerializer == nil || framer == nil {
 		return fmt.Errorf("no streaming serializer or framer found for content type %s", contentType)
@@ -504,7 +500,7 @@ func (d *AuthzData) FilterList(originalObj runtime.Object) error {
 	if err := meta.EachListItem(originalObj, func(item runtime.Object) error {
 		objMeta, err := meta.Accessor(item)
 		if err != nil {
-			return fmt.Errorf("failed to get object metadata: %v", err)
+			return fmt.Errorf("failed to get object metadata: %w", err)
 		}
 
 		if d.skipPreFilter {
@@ -540,7 +536,7 @@ func (d *AuthzData) FilterObject(obj runtime.Object) error {
 
 	objMeta, err := meta.Accessor(obj)
 	if err != nil {
-		return fmt.Errorf("failed to get object metadata: %v", err)
+		return fmt.Errorf("failed to get object metadata: %w", err)
 	}
 	if _, ok := d.allowedNN[types.NamespacedName{Name: objMeta.GetName(), Namespace: objMeta.GetNamespace()}]; ok {
 		klog.V(3).InfoS("allowed resource get", "resource", types.NamespacedName{Name: objMeta.GetName(), Namespace: objMeta.GetNamespace()}.String())

@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"testing"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
@@ -33,7 +34,7 @@ func (m *mockPermissionsClient) CheckPermission(ctx context.Context, req *v1.Che
 }
 
 func (m *mockPermissionsClient) CheckBulkPermissions(ctx context.Context, req *v1.CheckBulkPermissionsRequest, opts ...grpc.CallOption) (*v1.CheckBulkPermissionsResponse, error) {
-	var pairs []*v1.CheckBulkPermissionsPair
+	pairs := make([]*v1.CheckBulkPermissionsPair, 0, len(req.Items))
 
 	for _, item := range req.Items {
 		// Create a key from the request item to match against responses
@@ -318,7 +319,7 @@ func TestFilterItemsWithBulkPermissions(t *testing.T) {
 	// Test with empty items
 	emptyItems, err := filterItemsWithBulkPermissions(context.Background(), []interface{}{}, []*rules.RunnableRule{filteredRules}, input, mockClient)
 	require.NoError(t, err)
-	require.Len(t, emptyItems, 0)
+	require.Empty(t, emptyItems)
 }
 
 func TestShouldRunPostFilters(t *testing.T) {

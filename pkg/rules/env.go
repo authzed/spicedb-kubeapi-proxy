@@ -7,15 +7,13 @@ import (
 	"github.com/warpstreamlabs/bento/public/bloblang"
 )
 
-var (
-	// Custom Bloblang environment with splitName and splitNamespace functions
-	customBloblangEnv *bloblang.Environment
-)
+// Custom Bloblang environment with splitName and splitNamespace functions
+var customBloblangEnv *bloblang.Environment
 
 func init() {
 	// Create custom Bloblang environment with splitName and splitNamespace functions
 	customBloblangEnv = bloblang.NewEnvironment()
-	
+
 	// Register split_name function
 	err := customBloblangEnv.RegisterFunction("split_name", func(args ...any) (bloblang.Function, error) {
 		return func() (any, error) {
@@ -36,7 +34,7 @@ func init() {
 	if err != nil {
 		panic(fmt.Sprintf("failed to register split_name function: %v", err))
 	}
-	
+
 	// Register split_namespace function
 	err = customBloblangEnv.RegisterFunction("split_namespace", func(args ...any) (bloblang.Function, error) {
 		return func() (any, error) {

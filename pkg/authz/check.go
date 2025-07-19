@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
+	"golang.org/x/sync/errgroup"
 	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
