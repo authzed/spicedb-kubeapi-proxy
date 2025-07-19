@@ -1,5 +1,7 @@
 # spicedb-kubeapi-proxy
 
+<a href="https://app.codecov.io/gh/authzed/spicedb-kubeapi-proxy"><img alt="coverage" src="https://img.shields.io/codecov/c/github/authzed/spicedb-kubeapi-proxy"></a>
+
 `spicedb-kubeapi-proxy` is a proxy that runs in between clients and the kube
 apiserver that can authorize requests and filter responses using an embedded or
 remote SpiceDB.
