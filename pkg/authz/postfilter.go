@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
@@ -61,7 +62,7 @@ func filterItemsWithBulkPermissions(ctx context.Context, items []interface{}, fi
 
 	// Build bulk permission check requests
 	var bulkItems []*v1.CheckBulkPermissionsRequestItem
-	var itemToRequestMap = make(map[int][]int) // maps item index to request indices
+	itemToRequestMap := make(map[int][]int) // maps item index to request indices
 
 	for itemIndex, item := range items {
 		itemMap, ok := item.(map[string]interface{})

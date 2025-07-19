@@ -7,10 +7,10 @@ import (
 	"io"
 	"slices"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"

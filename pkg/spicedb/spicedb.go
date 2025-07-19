@@ -5,10 +5,11 @@ import (
 	_ "embed"
 	"time"
 
+	"github.com/dustin/go-humanize"
+
 	"github.com/authzed/spicedb/pkg/cmd/datastore"
 	"github.com/authzed/spicedb/pkg/cmd/server"
 	"github.com/authzed/spicedb/pkg/cmd/util"
-	"github.com/dustin/go-humanize"
 )
 
 //go:embed bootstrap.yaml

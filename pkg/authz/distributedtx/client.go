@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/backend"
 	"github.com/cschleiden/go-workflows/backend/monoprocess"
 	"github.com/cschleiden/go-workflows/backend/sqlite"
@@ -12,6 +11,8 @@ import (
 	"github.com/cschleiden/go-workflows/worker"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 )
 
 func SetupWithMemoryBackend(ctx context.Context, permissionClient v1.PermissionsServiceClient, kubeClient rest.Interface) (*client.Client, *Worker, error) {

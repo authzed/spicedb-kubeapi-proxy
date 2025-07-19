@@ -1195,50 +1195,51 @@ func TestFilterRulesWithCELConditions(t *testing.T) {
 }
 
 func TestMapMatcherMatch(t *testing.T) {
-	m, err := NewMapMatcher([]proxyrule.Config{{Spec: proxyrule.Spec{
-		Locking: proxyrule.PessimisticLockMode,
-		Matches: []proxyrule.Match{{
-			GroupVersion: "example.com/v1alpha1",
-			Resource:     "wardles",
-			Verbs:        []string{"create"},
-		}},
-		Checks: []proxyrule.StringOrTemplate{{
-			Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{request.user}}",
-		}},
-		Update: proxyrule.Update{
-			CreateRelationships: []proxyrule.StringOrTemplate{{
-				Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
-			}, {
-				Template: "wardles:{{metadata.name}}#creator@user:{{request.user}}",
+	m, err := NewMapMatcher([]proxyrule.Config{
+		{Spec: proxyrule.Spec{
+			Locking: proxyrule.PessimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1alpha1",
+				Resource:     "wardles",
+				Verbs:        []string{"create"},
 			}},
-		},
-	}}, {Spec: proxyrule.Spec{
-		Locking: proxyrule.PessimisticLockMode,
-		Matches: []proxyrule.Match{{
-			GroupVersion: "example.com/v1alpha1",
-			Resource:     "wardles",
-			Verbs:        []string{"list", "watch"},
-		}},
-		Checks: []proxyrule.StringOrTemplate{{
-			Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{request.group}}#member",
-		}},
-		PreFilters: []proxyrule.PreFilter{{
-			FromObjectIDNameExpr: "response.ResourceObjectID",
-			LookupMatchingResources: &proxyrule.StringOrTemplate{
-				RelationshipTemplate: &proxyrule.RelationshipTemplate{
-					Resource: proxyrule.ObjectTemplate{
-						Type:     "wardles",
-						ID:       "$",
-						Relation: "view",
-					},
-					Subject: proxyrule.ObjectTemplate{
-						Type: "user",
-						ID:   "{{request.user}}",
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "org:{{metadata.labels.org}}#manage-wardles@user:{{request.user}}",
+			}},
+			Update: proxyrule.Update{
+				CreateRelationships: []proxyrule.StringOrTemplate{{
+					Template: "wardles:{{metadata.name}}#org@org:{{metadata.labels.org}}",
+				}, {
+					Template: "wardles:{{metadata.name}}#creator@user:{{request.user}}",
+				}},
+			},
+		}}, {Spec: proxyrule.Spec{
+			Locking: proxyrule.PessimisticLockMode,
+			Matches: []proxyrule.Match{{
+				GroupVersion: "example.com/v1alpha1",
+				Resource:     "wardles",
+				Verbs:        []string{"list", "watch"},
+			}},
+			Checks: []proxyrule.StringOrTemplate{{
+				Template: "org:{{metadata.labels.org}}#audit-wardles@group:{{request.group}}#member",
+			}},
+			PreFilters: []proxyrule.PreFilter{{
+				FromObjectIDNameExpr: "response.ResourceObjectID",
+				LookupMatchingResources: &proxyrule.StringOrTemplate{
+					RelationshipTemplate: &proxyrule.RelationshipTemplate{
+						Resource: proxyrule.ObjectTemplate{
+							Type:     "wardles",
+							ID:       "$",
+							Relation: "view",
+						},
+						Subject: proxyrule.ObjectTemplate{
+							Type: "user",
+							ID:   "{{request.user}}",
+						},
 					},
 				},
-			},
+			}},
 		}},
-	}},
 	})
 	require.NoError(t, err)
 
@@ -1508,7 +1509,8 @@ func TestResolveRel(t *testing.T) {
 							"usertype": "user",
 							"rel":      "testrel",
 							"sr":       "testsubjectrel",
-						}},
+						},
+					},
 				},
 			},
 			want: &ResolvedRel{

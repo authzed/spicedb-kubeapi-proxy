@@ -7,10 +7,11 @@ import (
 	"net/http"
 	"strings"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/cschleiden/go-workflows/client"
 	"github.com/cschleiden/go-workflows/workflow"
 	"github.com/google/uuid"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/authz/distributedtx"
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/config/proxyrule"

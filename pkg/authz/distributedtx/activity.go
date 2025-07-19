@@ -7,11 +7,12 @@ import (
 	"io"
 	"net/http"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/rest"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/failpoints"
 )
@@ -111,7 +112,8 @@ func (h *ActivityHandler) WriteToKube(ctx context.Context, req *KubeReqInput) (*
 	resp := KubeResp{}
 	body, err := res.Raw()
 	var nonKerr error
-	if kerr, ok := err.(*k8serrors.StatusError); ok {
+	kerr := &k8serrors.StatusError{}
+	if errors.As(err, &kerr) {
 		resp.Err = *kerr
 		resp.StatusCode = int(kerr.Status().Code)
 	} else {
