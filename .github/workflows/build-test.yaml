@@ -10,8 +10,6 @@ on: # yamllint disable-line rule:truthy
   merge_group:
     types:
       - "checks_requested"
-env:
-  GO_VERSION: "~1.21.1"
 jobs:
   paths-filter:
     runs-on: "ubuntu-latest"
@@ -42,8 +40,6 @@ jobs:
     steps:
       - uses: "actions/checkout@v3"
       - uses: "authzed/actions/setup-go@main"
-        with:
-          go-version: "${{ env.GO_VERSION }}"
       - uses: "authzed/actions/go-build@main"
 
   unit:
@@ -55,8 +51,6 @@ jobs:
     steps:
       - uses: "actions/checkout@v3"
       - uses: "authzed/actions/setup-go@main"
-        with:
-          go-version: "${{ env.GO_VERSION }}"
       - name: "Unit tests"
         uses: "magefile/mage-action@v2"
         with:
@@ -72,8 +66,6 @@ jobs:
     steps:
       - uses: "actions/checkout@v3"
       - uses: "authzed/actions/setup-go@main"
-        with:
-          go-version: "${{ env.GO_VERSION }}"
       - name: "e2e tests"
         uses: "magefile/mage-action@v2"
         with:
