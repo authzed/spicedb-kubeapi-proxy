@@ -18,7 +18,8 @@ func (t Test) All() error {
 
 // Unit runs the unit tests.
 func (Test) Unit() error {
-	return RunSh("go", WithV())("test", "./...")
+	// TODO add -race
+	return RunSh("go", WithV())("test", "-count=1", "-coverpkg=./...", "-covermode=atomic", "-coverprofile=coverage.txt", "./...")
 }
 
 // E2e runs the end-to-end tests against a real apiserver.
