@@ -8,8 +8,11 @@ on:  # yamllint disable-line rule:truthy
 jobs:
   triage:
     runs-on: "ubuntu-latest"
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: "actions/labeler@v5"
         with:
-          repo-token: "${{ secrets.GITHUB_TOKEN }}"
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
           sync-labels: true

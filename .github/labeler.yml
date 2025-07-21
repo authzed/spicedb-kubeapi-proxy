@@ -1,20 +1,28 @@
 ---
 "area/cli":
-  - "cmd/**/*"
+  - changed-files:
+    - any-glob-to-any-file: "cmd/**/*"
 "area/core":
-  - "pkg/**/*"
+  - changed-files:
+    - any-glob-to-any-file: "pkg/**/*"
 "area/dependencies":
-  - "Dockerfile"
-  - "go.mod"
-  - "go.sum"
+  - changed-files:
+    - any-glob-to-any-file:
+      - "Dockerfile"
+      - "go.mod"
+      - "go.sum"
 "area/docs":
-  - "CODE-OF-CONDUCT.md"
-  - "CONTRIBUTING.md"
-  - "DCO"
-  - "LICENSE"
-  - "README.md"
+  - changed-files:
+    - any-glob-to-any-file:
+      - "CODE-OF-CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "DCO"
+      - "LICENSE"
+      - "README.md"
 "area/tooling":
-  - "**/*_test.go"
-  - ".github/**/*"
-  - ".*"
-  - "Dockerfile*"
+  - changed-files:
+    - any-glob-to-any-file:
+      - "**/*_test.go"
+      - ".github/**/*"
+      - ".*"
+      - "Dockerfile*"
