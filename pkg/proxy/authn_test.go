@@ -171,7 +171,7 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 	opts.Authentication.BuiltInOptions.RequestHeader = headerOpts
 	opts.Matcher = rules.MatcherFunc(func(match *request.RequestInfo) []*rules.RunnableRule {
 		return []*rules.RunnableRule{{
-			Checks: []*rules.RelExpr{},
+			Checks: []rules.RelationshipExpr{},
 		}}
 	})
 

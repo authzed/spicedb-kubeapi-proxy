@@ -18,31 +18,33 @@ import (
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
-func relsFromExprs(exprs []*rules.RelExpr, input *rules.ResolveInput) ([]*v1.Relationship, error) {
-	rels := make([]*v1.Relationship, 0, len(exprs))
+func relsFromExprs(exprs []rules.RelationshipExpr, input *rules.ResolveInput) ([]*v1.Relationship, error) {
+	var rels []*v1.Relationship
 	for _, expr := range exprs {
-		rel, err := rules.ResolveRel(expr, input)
+		resolvedRels, err := expr.GenerateRelationships(input)
 		if err != nil {
-			return nil, fmt.Errorf("unable to resolve write rule (%v): %w", rel, err)
+			return nil, fmt.Errorf("unable to resolve write rule: %w", err)
 		}
-		relationship := &v1.Relationship{
-			Resource: &v1.ObjectReference{
-				ObjectType: rel.ResourceType,
-				ObjectId:   rel.ResourceID,
-			},
-			Relation: rel.ResourceRelation,
-			Subject: &v1.SubjectReference{
-				Object: &v1.ObjectReference{
-					ObjectType: rel.SubjectType,
-					ObjectId:   rel.SubjectID,
+		for _, rel := range resolvedRels {
+			relationship := &v1.Relationship{
+				Resource: &v1.ObjectReference{
+					ObjectType: rel.ResourceType,
+					ObjectId:   rel.ResourceID,
 				},
-				OptionalRelation: rel.SubjectRelation,
-			},
+				Relation: rel.ResourceRelation,
+				Subject: &v1.SubjectReference{
+					Object: &v1.ObjectReference{
+						ObjectType: rel.SubjectType,
+						ObjectId:   rel.SubjectID,
+					},
+					OptionalRelation: rel.SubjectRelation,
+				},
+			}
+			if err := relationship.Validate(); err != nil {
+				return nil, fmt.Errorf("invalid relationship `%s`: %w", relationship, err)
+			}
+			rels = append(rels, relationship)
 		}
-		if err := relationship.Validate(); err != nil {
-			return nil, fmt.Errorf("invalid relationship `%s`: %w", relationship, err)
-		}
-		rels = append(rels, relationship)
 	}
 	return rels, nil
 }
@@ -67,48 +69,56 @@ func performUpdate(ctx context.Context, w http.ResponseWriter, r *rules.Runnable
 	}
 
 	for _, precondition := range r.Update.MustExist {
-		rel, err := rules.ResolveRel(precondition, input)
+		resolvedRels, err := precondition.GenerateRelationships(input)
 		if err != nil {
-			return fmt.Errorf("unable to resolve must rule (%v): %w", rel, err)
+			return fmt.Errorf("unable to resolve must rule: %w", err)
 		}
-		filterFromRel, err := filterFromRel(rel)
-		if err != nil {
-			return fmt.Errorf("unable to create filter from relationship (%v): %w", rel, err)
+		// Create a precondition for each resolved relationship
+		for _, rel := range resolvedRels {
+			filterFromRel, err := filterFromRel(rel)
+			if err != nil {
+				return fmt.Errorf("unable to create filter from relationship (%v): %w", rel, err)
+			}
+			p := &v1.Precondition{
+				Filter: filterFromRel,
+			}
+			p.Operation = v1.Precondition_OPERATION_MUST_MATCH
+			preconditions = append(preconditions, p)
 		}
-		p := &v1.Precondition{
-			Filter: filterFromRel,
-		}
-		p.Operation = v1.Precondition_OPERATION_MUST_MATCH
-		preconditions = append(preconditions, p)
 	}
 	for _, precondition := range r.Update.MustNotExist {
-		rel, err := rules.ResolveRel(precondition, input)
+		resolvedRels, err := precondition.GenerateRelationships(input)
 		if err != nil {
-			return fmt.Errorf("unable to resolve must not rule (%v): %w", rel, err)
+			return fmt.Errorf("unable to resolve must not rule: %w", err)
 		}
-		filterFromRel, err := filterFromRel(rel)
-		if err != nil {
-			return fmt.Errorf("unable to create filter from relationship (%v): %w", rel, err)
+		// Create a precondition for each resolved relationship
+		for _, rel := range resolvedRels {
+			filterFromRel, err := filterFromRel(rel)
+			if err != nil {
+				return fmt.Errorf("unable to create filter from relationship (%v): %w", rel, err)
+			}
+			p := &v1.Precondition{
+				Filter: filterFromRel,
+			}
+			p.Operation = v1.Precondition_OPERATION_MUST_NOT_MATCH
+			preconditions = append(preconditions, p)
 		}
-		p := &v1.Precondition{
-			Filter: filterFromRel,
-		}
-		p.Operation = v1.Precondition_OPERATION_MUST_NOT_MATCH
-		preconditions = append(preconditions, p)
 	}
 
 	deleteByFilter := make([]*v1.RelationshipFilter, 0, len(r.Update.DeletesByFilter))
 	for _, deleteByFilterExpr := range r.Update.DeletesByFilter {
-		rel, err := rules.ResolveRel(deleteByFilterExpr, input)
+		resolvedRels, err := deleteByFilterExpr.GenerateRelationships(input)
 		if err != nil {
-			return fmt.Errorf("unable to resolve delete by filter (%v): %w", deleteByFilterExpr, err)
+			return fmt.Errorf("unable to resolve delete by filter: %w", err)
 		}
-
-		filter, err := filterFromRel(rel)
-		if err != nil {
-			return fmt.Errorf("unable to create filter from relationship (%v): %w", rel, err)
+		// Create a filter for each resolved relationship
+		for _, rel := range resolvedRels {
+			filter, err := filterFromRel(rel)
+			if err != nil {
+				return fmt.Errorf("unable to create filter from relationship (%v): %w", rel, err)
+			}
+			deleteByFilter = append(deleteByFilter, filter)
 		}
-		deleteByFilter = append(deleteByFilter, filter)
 	}
 
 	resp, err := dualWrite(ctx, workflowClient, input, requestURI, createRels, touchRels, deleteRels, preconditions, deleteByFilter, r.LockMode)

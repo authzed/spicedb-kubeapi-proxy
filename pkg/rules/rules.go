@@ -2,6 +2,7 @@ package rules
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -126,6 +127,11 @@ type UncompiledRelExpr struct {
 	SubjectRelation  string
 }
 
+// RelationshipExpr is an interface for expressions that generate relationships
+type RelationshipExpr interface {
+	GenerateRelationships(input *ResolveInput) ([]*ResolvedRel, error)
+}
+
 // RelExpr represents a relationship with optional Bloblang
 // expressions for field values.
 type RelExpr struct {
@@ -135,6 +141,72 @@ type RelExpr struct {
 	SubjectType      *bloblang.Executor
 	SubjectID        *bloblang.Executor
 	SubjectRelation  *bloblang.Executor
+}
+
+// TupleSetExpr represents a Bloblang expression that returns an array
+// of relationship strings to be parsed individually.
+type TupleSetExpr struct {
+	Expression *bloblang.Executor
+}
+
+// GenerateRelationships executes the tuple set expression and parses each
+// returned string as a relationship.
+func (t *TupleSetExpr) GenerateRelationships(input *ResolveInput) ([]*ResolvedRel, error) {
+	// Convert input to interface{} for Bloblang
+	data, err := convertToBloblangInput(input)
+	if err != nil {
+		return nil, fmt.Errorf("error converting input to bloblang input: %w", err)
+	}
+
+	// Execute the expression with data accessible via `this`
+	result, err := t.Expression.Query(data)
+	if err != nil {
+		return nil, fmt.Errorf("error executing tuple set expression: %w", err)
+	}
+
+	// Result should be an array of strings
+	resultSlice, ok := result.([]any)
+	if !ok {
+		return nil, fmt.Errorf("tuple set expression must return an array, got %T", result)
+	}
+
+	// Always return a non-nil slice, even if empty
+	relationships := make([]*ResolvedRel, 0, len(resultSlice))
+	for i, item := range resultSlice {
+		// Each item should be a relationship string
+		relStr, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("tuple set expression item %d must be a string, got %T", i, item)
+		}
+
+		// Parse the relationship string
+		uncompiled, err := ParseRelSring(relStr)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing relationship string %q: %w", relStr, err)
+		}
+
+		// Convert to ResolvedRel (since tuple set expressions return concrete strings)
+		resolved := &ResolvedRel{
+			ResourceType:     uncompiled.ResourceType,
+			ResourceID:       uncompiled.ResourceID,
+			ResourceRelation: uncompiled.ResourceRelation,
+			SubjectType:      uncompiled.SubjectType,
+			SubjectID:        uncompiled.SubjectID,
+			SubjectRelation:  uncompiled.SubjectRelation,
+		}
+		relationships = append(relationships, resolved)
+	}
+
+	return relationships, nil
+}
+
+// GenerateRelationships executes all field expressions and returns a single resolved relationship.
+func (r *RelExpr) GenerateRelationships(input *ResolveInput) ([]*ResolvedRel, error) {
+	resolved, err := ResolveRel(r, input)
+	if err != nil {
+		return nil, err
+	}
+	return []*ResolvedRel{resolved}, nil
 }
 
 // ResolvedRel holds values after all expressions have been evaluated.
@@ -478,15 +550,53 @@ func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 		}
 	}
 
-	if input.Object != nil {
-		// Convert ObjectMeta to a simpler map structure for Bloblang
-		labels := make(map[string]any)
-		if input.Object.Labels != nil {
-			for k, v := range input.Object.Labels {
-				labels[k] = v
+	// Parse JSON body and merge with object metadata
+	if len(input.Body) > 0 {
+		var bodyData map[string]any
+		if err := json.Unmarshal(input.Body, &bodyData); err == nil {
+			// Successfully parsed JSON body
+			if input.Object != nil {
+				// Merge object metadata with body data
+				obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(input.Object)
+				if err != nil {
+					return nil, fmt.Errorf("error converting object metadata to unstructured: %w", err)
+				}
+
+				// Start with body data (contains full object spec)
+				objectData := normalizeToBloblangTypes(bodyData).(map[string]any)
+
+				// Merge in object metadata if it exists and is more complete
+				if metadata, ok := obj["metadata"]; ok {
+					objectData["metadata"] = normalizeToBloblangTypes(metadata)
+				}
+
+				data["object"] = objectData
+				data["metadata"] = objectData["metadata"]
+			} else {
+				// Only body data available
+				objectData := normalizeToBloblangTypes(bodyData).(map[string]any)
+				data["object"] = objectData
+			}
+		} else {
+			// Failed to parse JSON, fall back to object metadata only
+			if input.Object != nil {
+				obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(input.Object)
+				if err != nil {
+					return nil, fmt.Errorf("error converting object metadata to unstructured: %w", err)
+				}
+
+				objectData := map[string]any{
+					"metadata": normalizeToBloblangTypes(obj["metadata"]),
+				}
+
+				data["object"] = objectData
+				data["metadata"] = objectData["metadata"]
 			}
 		}
 
+		data["body"] = input.Body
+	} else if input.Object != nil {
+		// No body, but we have object metadata
 		obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(input.Object)
 		if err != nil {
 			return nil, fmt.Errorf("error converting object metadata to unstructured: %w", err)
@@ -498,10 +608,6 @@ func convertToBloblangInput(input *ResolveInput) (map[string]any, error) {
 
 		data["object"] = objectData
 		data["metadata"] = objectData["metadata"]
-	}
-
-	if len(input.Body) > 0 {
-		data["body"] = input.Body
 	}
 
 	return normalizeToBloblangTypes(data).(map[string]any), nil
@@ -552,20 +658,20 @@ type RunnableRule struct {
 	Name         string
 	LockMode     proxyrule.LockMode
 	IfConditions []cel.Program
-	Checks       []*RelExpr
-	PostChecks   []*RelExpr
+	Checks       []RelationshipExpr
+	PostChecks   []RelationshipExpr
 	Update       *UpdateSet
 	PreFilter    []*PreFilter
 	PostFilter   []*PostFilter
 }
 
 type UpdateSet struct {
-	MustExist       []*RelExpr
-	MustNotExist    []*RelExpr
-	Creates         []*RelExpr
-	Touches         []*RelExpr
-	Deletes         []*RelExpr
-	DeletesByFilter []*RelExpr
+	MustExist       []RelationshipExpr
+	MustNotExist    []RelationshipExpr
+	Creates         []RelationshipExpr
+	Touches         []RelationshipExpr
+	Deletes         []RelationshipExpr
+	DeletesByFilter []RelationshipExpr
 }
 
 // LookupType defines whether an LR or LS request is made for a filter
@@ -747,15 +853,12 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 			NamespaceFromObjectID: namespace,
 		}
 		if f.LookupMatchingResources != nil {
-			byResource, err := compileStringOrObjTemplates([]proxyrule.StringOrTemplate{*f.LookupMatchingResources})
+			relExpr, err := compileSingleRelTemplate(*f.LookupMatchingResources)
 			if err != nil {
 				return nil, fmt.Errorf("error compiling LookupMatchingResources: %w", err)
 			}
-			if len(byResource) != 1 {
-				return nil, fmt.Errorf("pre-filter must have exactly one LookupMatchingResources template")
-			}
 
-			processedResourceID, err := byResource[0].ResourceID.Query(map[string]any{"resourceId": "$"})
+			processedResourceID, err := relExpr.ResourceID.Query(map[string]any{"resourceId": "$"})
 			if err != nil {
 				return nil, fmt.Errorf("error processing resource ID in LookupMatchingResources: %w", err)
 			}
@@ -764,7 +867,7 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 				return nil, fmt.Errorf("LookupMatchingResources resourceID must be set to $ to match all resources, got %q", processedResourceID)
 			}
 
-			filter.Rel = byResource[0]
+			filter.Rel = relExpr
 			filter.LookupType = LookupTypeResource
 		} else {
 			return nil, fmt.Errorf("pre-filter must have LookupMatchingResources defined")
@@ -778,53 +881,89 @@ func Compile(config proxyrule.Config) (*RunnableRule, error) {
 			return nil, fmt.Errorf("post-filter must have CheckPermissionTemplate defined")
 		}
 
-		byPermission, err := compileStringOrObjTemplates([]proxyrule.StringOrTemplate{*f.CheckPermissionTemplate})
+		relExpr, err := compileSingleRelTemplate(*f.CheckPermissionTemplate)
 		if err != nil {
 			return nil, fmt.Errorf("error compiling CheckPermissionTemplate: %w", err)
 		}
-		if len(byPermission) != 1 {
-			return nil, fmt.Errorf("post-filter must have exactly one CheckPermissionTemplate")
+
+		postFilter := &PostFilter{
+			Rel: relExpr,
 		}
 
-		filter := &PostFilter{
-			Rel: byPermission[0],
-		}
-
-		runnable.PostFilter = append(runnable.PostFilter, filter)
+		runnable.PostFilter = append(runnable.PostFilter, postFilter)
 	}
 
 	return runnable, nil
 }
 
 // compileStringOrObjTemplates converts a list of StringOrTemplate into a
-// list of compiled RelExpr.
-func compileStringOrObjTemplates(tmpls []proxyrule.StringOrTemplate) ([]*RelExpr, error) {
-	exprs := make([]*RelExpr, 0, len(tmpls))
+// list of compiled RelationshipExpr.
+func compileStringOrObjTemplates(tmpls []proxyrule.StringOrTemplate) ([]RelationshipExpr, error) {
+	exprs := make([]RelationshipExpr, 0, len(tmpls))
 	for _, c := range tmpls {
-		var tpl *UncompiledRelExpr
-		if len(c.Template) > 0 {
-			var err error
-			tpl, err = ParseRelSring(c.Template)
+		if len(c.TupleSet) > 0 {
+			// Handle tupleSet case
+			executor, err := CompileTupleSetExpression(c.TupleSet)
+			if err != nil {
+				return nil, fmt.Errorf("error compiling tuple set expression: %w", err)
+			}
+			tupleSetExpr := &TupleSetExpr{
+				Expression: executor,
+			}
+			exprs = append(exprs, tupleSetExpr)
+		} else {
+			// Handle regular template case
+			var tpl *UncompiledRelExpr
+			if len(c.Template) > 0 {
+				var err error
+				tpl, err = ParseRelSring(c.Template)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				tpl = &UncompiledRelExpr{
+					ResourceType:     c.Resource.Type,
+					ResourceID:       c.Resource.ID,
+					ResourceRelation: c.Resource.Relation,
+					SubjectType:      c.Subject.Type,
+					SubjectID:        c.Subject.ID,
+					SubjectRelation:  c.Subject.Relation,
+				}
+			}
+			expr, err := compileUnparsedRelExpr(tpl)
 			if err != nil {
 				return nil, err
 			}
-		} else {
-			tpl = &UncompiledRelExpr{
-				ResourceType:     c.Resource.Type,
-				ResourceID:       c.Resource.ID,
-				ResourceRelation: c.Resource.Relation,
-				SubjectType:      c.Subject.Type,
-				SubjectID:        c.Subject.ID,
-				SubjectRelation:  c.Subject.Relation,
-			}
+			exprs = append(exprs, expr)
 		}
-		expr, err := compileUnparsedRelExpr(tpl)
+	}
+	return exprs, nil
+}
+
+// compileSingleRelTemplate compiles a StringOrTemplate that must be a single relationship (not tupleSet)
+func compileSingleRelTemplate(tmpl proxyrule.StringOrTemplate) (*RelExpr, error) {
+	if len(tmpl.TupleSet) > 0 {
+		return nil, fmt.Errorf("tupleSet is not allowed in this context, use tpl or RelationshipTemplate instead")
+	}
+
+	var tpl *UncompiledRelExpr
+	if len(tmpl.Template) > 0 {
+		var err error
+		tpl, err = ParseRelSring(tmpl.Template)
 		if err != nil {
 			return nil, err
 		}
-		exprs = append(exprs, expr)
+	} else {
+		tpl = &UncompiledRelExpr{
+			ResourceType:     tmpl.Resource.Type,
+			ResourceID:       tmpl.Resource.ID,
+			ResourceRelation: tmpl.Resource.Relation,
+			SubjectType:      tmpl.Subject.Type,
+			SubjectID:        tmpl.Subject.ID,
+			SubjectRelation:  tmpl.Subject.Relation,
+		}
 	}
-	return exprs, nil
+	return compileUnparsedRelExpr(tpl)
 }
 
 // compileUnparsedRelExpr pre-compiles all expressions in an UncompiledRelExpr
@@ -881,6 +1020,30 @@ func CompileBloblangExpression(expr string) (*bloblang.Executor, error) {
 		}
 		return customBloblangEnv.Parse(`"` + expr + `"`)
 	}
+
+	// Let Bloblang handle all expression parsing naturally
+	return customBloblangEnv.Parse(strings.TrimSpace(expr))
+}
+
+// CompileTupleSetExpression compiles expressions for tupleSet fields.
+// Since tupleSet values are always Bloblang expressions (never literals),
+// this function strips optional {{}} wrapper and always parses as an expression.
+// This allows cleaner syntax: users can write either {{expr}} or just expr.
+func CompileTupleSetExpression(expr string) (*bloblang.Executor, error) {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return customBloblangEnv.Parse(`""`)
+	}
+
+	// Strip {{}} if present (for backward compatibility)
+	if strings.HasPrefix(expr, "{{") && strings.HasSuffix(expr, "}}") {
+		expr = strings.TrimSpace(expr[2 : len(expr)-2])
+		if expr == "" {
+			return customBloblangEnv.Parse(`""`)
+		}
+	}
+
+	// Always parse as Bloblang expression since tupleSet values are always expressions
 	return customBloblangEnv.Parse(expr)
 }
 

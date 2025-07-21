@@ -113,7 +113,7 @@ update:
 			config: `
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
-lock: Pessimistic 
+lock: Pessimistic
 match:
 - apiVersion: authzed.com/v1alpha1
   resource: spicedbclusters
@@ -152,7 +152,7 @@ update:
 			config: `
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
-lock: Pessimistic 
+lock: Pessimistic
 match:
 - apiVersion: authzed.com/v1alpha1
   resource: spicedbclusters
@@ -166,7 +166,7 @@ update:
 ---
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
-lock: Pessimistic 
+lock: Pessimistic
 match:
 - apiVersion: authzed.com/v1alpha1
   resource: spicedbclusters
@@ -358,6 +358,7 @@ update:
 
 func TestValidation(t *testing.T) {
 	validate := validator.New()
+	validate.RegisterStructValidation(validateStringOrTemplate, StringOrTemplate{})
 
 	t.Run("Config validation", func(t *testing.T) {
 		// Valid config
@@ -650,6 +651,50 @@ func TestValidation(t *testing.T) {
 				},
 				expectErr: false, // Empty arrays are valid due to omitempty
 			},
+			{
+				name: "valid update with tupleSet",
+				update: Update{
+					CreateRelationships: []StringOrTemplate{{
+						TupleSet: `object.spec.containers.map_each("pod:" + namespacedName + "#has-container@container:" + this.name)`,
+					}},
+				},
+				expectErr: false,
+			},
+			{
+				name: "invalid - tupleSet and tpl together",
+				update: Update{
+					CreateRelationships: []StringOrTemplate{{
+						Template: "pod:test#view@user:admin",
+						TupleSet: `object.spec.containers.map_each("pod:" + namespacedName + "#has-container@container:" + this.name)`,
+					}},
+				},
+				expectErr: true,
+			},
+			{
+				name: "invalid - tupleSet and RelationshipTemplate together",
+				update: Update{
+					CreateRelationships: []StringOrTemplate{{
+						TupleSet: `object.spec.containers.map_each("pod:" + namespacedName + "#has-container@container:" + this.name)`,
+						RelationshipTemplate: &RelationshipTemplate{
+							Resource: ObjectTemplate{Type: "pod", ID: "test"},
+							Subject:  ObjectTemplate{Type: "user", ID: "admin"},
+						},
+					}},
+				},
+				expectErr: true,
+			},
+			{
+				name: "valid example configuration - deployment with containers",
+				update: Update{
+					CreateRelationships: []StringOrTemplate{
+						{Template: "deployment:{{namespacedName}}#creator@user:{{user.name}}"},
+						{Template: "deployment:{{namespacedName}}#namespace@namespace:{{namespace}}"},
+						{TupleSet: `["server", "config-reloader", "proxy-sidecar"].map_each("deployment:default/example#has-container@container:" + this)`},
+						{TupleSet: `[].map_each("deployment:default/example#has-init-container@container:" + this)`},
+					},
+				},
+				expectErr: false,
+			},
 		}
 
 		for _, tt := range tests {
@@ -698,7 +743,7 @@ func TestValidation(t *testing.T) {
 				sot: StringOrTemplate{
 					Template: "",
 				},
-				expectErr: false, // Empty strings are allowed due to omitempty
+				expectErr: true, // Empty template requires at least one field
 			},
 			{
 				name: "both template and relationship template",
@@ -715,12 +760,12 @@ func TestValidation(t *testing.T) {
 						},
 					},
 				},
-				expectErr: false,
+				expectErr: true, // Should fail due to mutual exclusion
 			},
 			{
 				name:      "neither template nor relationship template",
 				sot:       StringOrTemplate{},
-				expectErr: false, // Empty structs are allowed due to omitempty
+				expectErr: true, // Empty structs should fail - at least one field required
 			},
 			{
 				name: "relationship template with empty resource type",
@@ -776,6 +821,45 @@ func TestValidation(t *testing.T) {
 					},
 				},
 				expectErr: false, // RelationshipTemplate is present, so template not required
+			},
+			{
+				name: "valid tupleSet only",
+				sot: StringOrTemplate{
+					TupleSet: `["test1", "test2"].map_each("resource:" + this + "#rel@user:admin")`,
+				},
+				expectErr: false,
+			},
+			{
+				name: "empty tupleSet string",
+				sot: StringOrTemplate{
+					TupleSet: "",
+				},
+				expectErr: true, // Empty tupleSet requires at least one field
+			},
+			{
+				name: "both template and tupleSet",
+				sot: StringOrTemplate{
+					Template: "pod:test#view@user:admin",
+					TupleSet: `["test"]`,
+				},
+				expectErr: true, // Should fail due to mutual exclusion
+			},
+			{
+				name: "both tupleSet and relationship template",
+				sot: StringOrTemplate{
+					TupleSet: `["test"]`,
+					RelationshipTemplate: &RelationshipTemplate{
+						Resource: ObjectTemplate{
+							Type: "pod",
+							ID:   "test",
+						},
+						Subject: ObjectTemplate{
+							Type: "user",
+							ID:   "admin",
+						},
+					},
+				},
+				expectErr: true, // Should fail due to mutual exclusion
 			},
 		}
 

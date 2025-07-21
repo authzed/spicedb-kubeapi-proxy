@@ -50,7 +50,10 @@ There are three basic types of rule:
   SpiceDB based on the request that the proxy is authorizing. For example,
   if `alice` creates a new pod `c` in namespace `foo`, a rule can determine
   that a relationship should be written to SpiceDB that grants ownership,
-  i.e. `pod:foo/a#view@user:alice`.
+  i.e. `pod:foo/a#view@user:alice`. Rules support both single relationship
+  templates and **tupleSet** expressions that can generate multiple relationships
+  dynamically based on resource content (e.g., one relationship per container
+  in a Deployment).
 
 Rules often work in tendem; for example, a `Check` rule might authorize a request
 to list pods in a namespace, and a `Filter` rule might further restrict the

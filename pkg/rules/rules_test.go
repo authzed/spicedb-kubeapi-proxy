@@ -183,7 +183,7 @@ func TestCompile(t *testing.T) {
         "request": {
           "user": "testUser",
           "group": "testGroup"
-        }, 
+        },
         "response": {
           "ResourceObjectID": "foo"
         }
@@ -209,8 +209,12 @@ func TestCompile(t *testing.T) {
 		return val
 	}
 
-	requireEqualUnderTestData := func(exprs []*RelExpr, res []ResolvedRel) {
-		for i, c := range exprs {
+	requireEqualUnderTestData := func(exprs []RelationshipExpr, res []ResolvedRel) {
+		for i, expr := range exprs {
+			// For these tests, we only expect RelExpr, not TupleSetExpr
+			c, ok := expr.(*RelExpr)
+			require.True(t, ok, "Expected RelExpr in test, got %T", expr)
+
 			require.Equal(t, res[i].ResourceType, mustQuery(c.ResourceType))
 			require.Equal(t, res[i].ResourceID, mustQuery(c.ResourceID))
 			require.Equal(t, res[i].ResourceRelation, mustQuery(c.ResourceRelation))
@@ -227,7 +231,7 @@ func TestCompile(t *testing.T) {
 			require.Equal(t, f.LookupType, res[i].LookupType)
 			require.Equal(t, mustQuery(res[i].NameFromObjectID), mustQuery(f.NameFromObjectID))
 			require.Equal(t, mustQuery(res[i].NamespaceFromObjectID), mustQuery(f.NamespaceFromObjectID))
-			requireEqualUnderTestData([]*RelExpr{f.Rel}, []ResolvedRel{*res[i].Rel})
+			requireEqualUnderTestData([]RelationshipExpr{f.Rel}, []ResolvedRel{*res[i].Rel})
 		}
 	}
 
@@ -1537,6 +1541,215 @@ func TestResolveRel(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestTupleSetGeneration(t *testing.T) {
+	tests := []struct {
+		name       string
+		tupleSet   string
+		input      *ResolveInput
+		want       []*ResolvedRel
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:     "basic container iteration",
+			tupleSet: `["server", "config-reloader", "proxy-sidecar"].map_each("deployment:default/test-deployment#has-container@container:" + this)`,
+			input: &ResolveInput{
+				Name:           "test-deployment",
+				Namespace:      "default",
+				NamespacedName: "default/test-deployment",
+				Object: &metav1.PartialObjectMetadata{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-deployment",
+						Namespace: "default",
+					},
+				},
+				Body: []byte(`{
+							"spec": {
+								"template": {
+									"spec": {
+										"containers": [
+											{"name": "server"},
+											{"name": "config-reloader"},
+											{"name": "proxy-sidecar"}
+										]
+									}
+								}
+							}
+						}`),
+			},
+			want: []*ResolvedRel{
+				{
+					ResourceType:     "deployment",
+					ResourceID:       "default/test-deployment",
+					ResourceRelation: "has-container",
+					SubjectType:      "container",
+					SubjectID:        "server",
+				},
+				{
+					ResourceType:     "deployment",
+					ResourceID:       "default/test-deployment",
+					ResourceRelation: "has-container",
+					SubjectType:      "container",
+					SubjectID:        "config-reloader",
+				},
+				{
+					ResourceType:     "deployment",
+					ResourceID:       "default/test-deployment",
+					ResourceRelation: "has-container",
+					SubjectType:      "container",
+					SubjectID:        "proxy-sidecar",
+				},
+			},
+		},
+		{
+			name:     "empty container list",
+			tupleSet: `[].map_each("deployment:default/test-deployment#has-container@container:" + this)`,
+			input: &ResolveInput{
+				Name:           "test-deployment",
+				Namespace:      "default",
+				NamespacedName: "default/test-deployment",
+				Object: &metav1.PartialObjectMetadata{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-deployment",
+						Namespace: "default",
+					},
+				},
+				Body: []byte(`{
+							"spec": {
+								"template": {
+									"spec": {
+										"containers": []
+									}
+								}
+							}
+						}`),
+			},
+			want: []*ResolvedRel{},
+		},
+		{
+			name:     "with filter",
+			tupleSet: `["server", "proxy-sidecar"].filter(this != "proxy-sidecar").map_each("deployment:default/test-deployment#has-container@container:" + this)`,
+			input: &ResolveInput{
+				Name:           "test-deployment",
+				Namespace:      "default",
+				NamespacedName: "default/test-deployment",
+				Object: &metav1.PartialObjectMetadata{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-deployment",
+						Namespace: "default",
+					},
+				},
+				Body: []byte(`{
+							"spec": {
+								"template": {
+									"spec": {
+										"containers": [
+											{"name": "server"},
+											{"name": "proxy-sidecar"}
+										]
+									}
+								}
+							}
+						}`),
+			},
+			want: []*ResolvedRel{
+				{
+					ResourceType:     "deployment",
+					ResourceID:       "default/test-deployment",
+					ResourceRelation: "has-container",
+					SubjectType:      "container",
+					SubjectID:        "server",
+				},
+			},
+		},
+		{
+			name:       "non-array result",
+			tupleSet:   `"single-string"`,
+			input:      &ResolveInput{NamespacedName: "test"},
+			wantErr:    true,
+			wantErrMsg: "tuple set expression must return an array",
+		},
+		{
+			name:       "invalid relationship string",
+			tupleSet:   `["invalid-relationship-format"]`,
+			input:      &ResolveInput{NamespacedName: "test"},
+			wantErr:    true,
+			wantErrMsg: "error parsing relationship string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executor, err := CompileTupleSetExpression(tt.tupleSet)
+			require.NoError(t, err)
+
+			tupleSetExpr := &TupleSetExpr{
+				Expression: executor,
+			}
+
+			got, err := tupleSetExpr.GenerateRelationships(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrMsg != "" {
+					require.Contains(t, err.Error(), tt.wantErrMsg)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			if tt.want == nil && got == nil {
+				return // both nil is fine
+			}
+			if len(tt.want) == 0 && len(got) == 0 {
+				return // both empty is fine
+			}
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCompileWithTupleSet(t *testing.T) {
+	config := proxyrule.Config{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ProxyRule",
+			APIVersion: "authzed.com/v1alpha1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "deployment-containers",
+		},
+		Spec: proxyrule.Spec{
+			Matches: []proxyrule.Match{{
+				GroupVersion: "apps/v1",
+				Resource:     "deployments",
+				Verbs:        []string{"create"},
+			}},
+			Update: proxyrule.Update{
+				CreateRelationships: []proxyrule.StringOrTemplate{
+					{
+						Template: "deployment:{{namespacedName}}#creator@user:{{user.name}}",
+					},
+					{
+						TupleSet: `object.spec.template.spec.containers.map_each("deployment:" + namespacedName + "#has-container@container:" + this.name)`,
+					},
+				},
+			},
+		},
+	}
+
+	rule, err := Compile(config)
+	require.NoError(t, err)
+	require.NotNil(t, rule.Update)
+	require.Len(t, rule.Update.Creates, 2)
+
+	// First should be a regular RelExpr
+	_, ok := rule.Update.Creates[0].(*RelExpr)
+	require.True(t, ok, "First create rule should be a RelExpr")
+
+	// Second should be a TupleSetExpr
+	_, ok = rule.Update.Creates[1].(*TupleSetExpr)
+	require.True(t, ok, "Second create rule should be a TupleSetExpr")
 }
 
 func TestConvertToBloblangInput(t *testing.T) {

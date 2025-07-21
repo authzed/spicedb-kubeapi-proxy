@@ -162,10 +162,12 @@ type Match struct {
 }
 
 // StringOrTemplate either contains a string representing a relationship
-// template, or a full RelationshipTemplate definition.
+// template, a full RelationshipTemplate definition, or a tupleSet for
+// generating multiple relationships from a single Bloblang expression.
 type StringOrTemplate struct {
-	Template              string `json:"tpl,inline" validate:"omitempty,min=1,required_without=RelationshipTemplate"`
-	*RelationshipTemplate `json:",inline"    validate:"omitempty,required_without=tpl"`
+	Template              string `json:"tpl,inline"         validate:"omitempty,min=1"`
+	TupleSet              string `json:"tupleSet,omitempty" validate:"omitempty,min=1"`
+	*RelationshipTemplate `json:",inline"            validate:"omitempty"`
 }
 
 // PreFilter defines a LookupResources request to filter the results.
@@ -214,6 +216,9 @@ func Parse(reader io.Reader) ([]Config, error) {
 	decoder := utilyaml.NewYAMLOrJSONDecoder(reader, lookahead)
 	validate := validator.New()
 
+	// Register custom validation for StringOrTemplate mutual exclusion
+	validate.RegisterStructValidation(validateStringOrTemplate, StringOrTemplate{})
+
 	var (
 		rules []Config
 		rule  Config
@@ -231,4 +236,37 @@ func Parse(reader io.Reader) ([]Config, error) {
 		rule = Config{}
 	}
 	return rules, nil
+}
+
+// validateStringOrTemplate ensures mutual exclusion between Template, TupleSet, and RelationshipTemplate
+func validateStringOrTemplate(sl validator.StructLevel) {
+	sot := sl.Current().Interface().(StringOrTemplate)
+
+	hasTemplate := len(sot.Template) > 0
+	hasTupleSet := len(sot.TupleSet) > 0
+	hasRelTemplate := sot.RelationshipTemplate != nil
+
+	fieldCount := 0
+	if hasTemplate {
+		fieldCount++
+	}
+	if hasTupleSet {
+		fieldCount++
+	}
+	if hasRelTemplate {
+		fieldCount++
+	}
+
+	// Must have exactly one field set
+	if fieldCount == 0 {
+		sl.ReportError(sot.Template, "tpl", "Template", "oneof_required", "")
+	} else if fieldCount > 1 {
+		if hasTemplate && hasTupleSet {
+			sl.ReportError(sot.Template, "tpl", "Template", "mutually_exclusive", "tpl and tupleSet cannot both be set")
+		} else if hasTemplate && hasRelTemplate {
+			sl.ReportError(sot.Template, "tpl", "Template", "mutually_exclusive", "tpl and RelationshipTemplate cannot both be set")
+		} else if hasTupleSet && hasRelTemplate {
+			sl.ReportError(sot.TupleSet, "tupleSet", "TupleSet", "mutually_exclusive", "tupleSet and RelationshipTemplate cannot both be set")
+		}
+	}
 }
