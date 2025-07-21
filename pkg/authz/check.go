@@ -13,45 +13,13 @@ import (
 )
 
 // checkRelationships performs authorization checks for a slice of relationships
-// Uses single CheckPermission for one relationship, bulk CheckBulkPermissions for multiple
+// Always uses bulk CheckBulkPermissions API for consistency and performance
 func checkRelationships(ctx context.Context, client v1.PermissionsServiceClient, resolvedRels []*rules.ResolvedRel, checkType string) error {
 	if len(resolvedRels) == 0 {
 		return nil
 	}
 
-	if len(resolvedRels) == 1 {
-		// Single check - use regular CheckPermission
-		rel := resolvedRels[0]
-		req := &v1.CheckPermissionRequest{
-			Consistency: &v1.Consistency{
-				Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
-			},
-			Resource: &v1.ObjectReference{
-				ObjectType: rel.ResourceType,
-				ObjectId:   rel.ResourceID,
-			},
-			Permission: rel.ResourceRelation,
-			Subject: &v1.SubjectReference{
-				Object: &v1.ObjectReference{
-					ObjectType: rel.SubjectType,
-					ObjectId:   rel.SubjectID,
-				},
-				OptionalRelation: rel.SubjectRelation,
-			},
-		}
-		resp, err := client.CheckPermission(ctx, req)
-		if err != nil {
-			return err
-		}
-		if resp.Permissionship != v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
-			return fmt.Errorf("%s failed for %s:%s#%s@%s:%s",
-				checkType, rel.ResourceType, rel.ResourceID, rel.ResourceRelation,
-				rel.SubjectType, rel.SubjectID)
-		}
-		return nil
-	}
-
-	// Multiple checks - use bulk check
+	// Always use bulk check - works for single or multiple relationships
 	items := make([]*v1.CheckBulkPermissionsRequestItem, len(resolvedRels))
 	for i, rel := range resolvedRels {
 		items[i] = &v1.CheckBulkPermissionsRequestItem{
