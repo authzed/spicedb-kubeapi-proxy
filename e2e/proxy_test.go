@@ -1097,6 +1097,114 @@ var _ = Describe("Proxy", func() {
 				// Paul should not be able to perform write operations outside default namespace
 				Expect(k8serrors.IsUnauthorized(DeletePod(ctx, paulClient, paulNamespace, paulPod))).To(BeTrue())
 			})
+
+			When("tupleset is used with pod labels", func() {
+				BeforeEach(func() {
+					createPodWithLabelTupleSet := proxyrule.Config{
+						Spec: proxyrule.Spec{
+							Locking: proxyrule.OptimisticLockMode,
+							Matches: []proxyrule.Match{{
+								GroupVersion: "v1",
+								Resource:     "pods",
+								Verbs:        []string{"create"},
+							}},
+							Update: proxyrule.Update{
+								CreateRelationships: []proxyrule.StringOrTemplate{
+									{
+										Template: "pod:{{namespacedName}}#creator@user:{{user.name}}",
+									},
+									{
+										Template: "pod:{{namespacedName}}#namespace@namespace:{{namespace}}",
+									},
+									{
+										// TupleSet for pod labels - creates a viewer relationship for each label key
+										// Using multi-line pattern with explicit root assignment
+										TupleSet: `let nsName = this.namespacedName
+											let labelKeys = (this.object.metadata.labels | {}).keys()
+											root = $labelKeys.map_each("pod:" + $nsName + "#viewer@user:" + this)`,
+									},
+								},
+							},
+						},
+					}
+
+					matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+						createNamespace(),
+						createPodWithLabelTupleSet,
+						getPod,
+					})
+					Expect(err).To(Succeed())
+					*proxySrv.Matcher = matcher
+					lockMode = proxyrule.OptimisticLockMode
+				})
+
+				It("creates relationships for each pod label", func(ctx context.Context) {
+					// Create namespace first
+					Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+
+					// Create a pod with multiple labels
+					podLabels := map[string]string{
+						"app":         "web-server",
+						"environment": "production",
+						"team":        "backend",
+						"version":     "v1.2.3",
+					}
+
+					pod := &corev1.Pod{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      paulPod,
+							Namespace: paulNamespace,
+							Labels:    podLabels,
+						},
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{{
+								Name:  "nginx",
+								Image: "nginx:1.14.2",
+							}},
+						},
+					}
+
+					_, err := paulClient.CoreV1().Pods(paulNamespace).Create(ctx, pod, metav1.CreateOptions{})
+					Expect(err).To(Succeed())
+
+					// Verify the basic creator relationship exists
+					creatorRels := GetAllTuples(ctx, &v1.RelationshipFilter{
+						ResourceType:       "pod",
+						OptionalResourceId: fmt.Sprintf("%s/%s", paulNamespace, paulPod),
+						OptionalRelation:   "creator",
+					})
+					Expect(len(creatorRels)).To(Equal(1))
+					Expect(creatorRels[0].Relationship.Subject.Object.ObjectId).To(Equal("paul"))
+
+					// Verify the namespace relationship exists
+					namespaceRels := GetAllTuples(ctx, &v1.RelationshipFilter{
+						ResourceType:       "pod",
+						OptionalResourceId: fmt.Sprintf("%s/%s", paulNamespace, paulPod),
+						OptionalRelation:   "namespace",
+					})
+					Expect(len(namespaceRels)).To(Equal(1))
+					Expect(namespaceRels[0].Relationship.Subject.Object.ObjectId).To(Equal(paulNamespace))
+
+					// Verify tupleset created relationships for each label key
+					viewerRels := GetAllTuples(ctx, &v1.RelationshipFilter{
+						ResourceType:       "pod",
+						OptionalResourceId: fmt.Sprintf("%s/%s", paulNamespace, paulPod),
+						OptionalRelation:   "viewer",
+					})
+					Expect(len(viewerRels)).To(Equal(4)) // One for each label key
+
+					// Check that each label key has a corresponding viewer relationship
+					labelKeys := []string{"app", "environment", "team", "version"}
+					actualViewers := make([]string, len(viewerRels))
+					for i, rel := range viewerRels {
+						actualViewers[i] = rel.Relationship.Subject.Object.ObjectId
+					}
+
+					for _, expectedKey := range labelKeys {
+						Expect(actualViewers).To(ContainElement(expectedKey))
+					}
+				})
+			})
 		})
 	})
 })
