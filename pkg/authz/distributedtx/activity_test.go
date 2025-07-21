@@ -59,7 +59,7 @@ func TestWriteToKube(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, `{"hi":"bye"}`, string(resp.Body))
+	require.JSONEq(t, `{"hi":"bye"}`, string(resp.Body))
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 }
 

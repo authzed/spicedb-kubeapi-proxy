@@ -1,0 +1,55 @@
+---
+version: "2"
+run:
+  allow-parallel-runners: true
+linters:
+  enable:
+    - "bidichk"
+    - "bodyclose"
+    - "errcheck"
+    - "errname"
+    - "errorlint"
+    #    - "gocritic"
+    - "goprintffuncname"
+    #    - "gosec"
+    - "govet"
+    - "importas"
+    - "ineffassign"
+    - "makezero"
+    - "prealloc"
+    - "predeclared"
+    - "promlinter"
+    #    - "revive"
+    - "rowserrcheck"
+    - "spancheck"
+    - "staticcheck"
+    - "tagalign"
+    - "testifylint"
+    - "tparallel"
+    - "unconvert"
+    - "usetesting"
+    - "wastedassign"
+    - "whitespace"
+    - "unused"
+  settings:
+    staticcheck:
+      checks:
+        - "all"
+        - "-ST1000" # at least one file in a package should have a package comment
+        - "-ST1003" # poorly chosen identifier
+formatters:
+  enable:
+    - "gci"
+    - "gofmt"
+    - "gofumpt"
+    - "goimports"
+  settings:
+    gci:
+      sections:
+        - "standard"
+        - "default"
+        - "prefix(github.com/authzed)"
+        - "localmodule"
+    goimports:
+      local-prefixes:
+        - "github.com/authzed/spicedb-kubeapi-proxy"

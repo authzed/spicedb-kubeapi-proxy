@@ -8,11 +8,6 @@ import (
 	"path"
 	"testing"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
-	"github.com/authzed/grpcutil"
-	"github.com/authzed/spicedb/pkg/cmd/datastore"
-	"github.com/authzed/spicedb/pkg/cmd/server"
-	"github.com/authzed/spicedb/pkg/cmd/util"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -20,6 +15,12 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/clientcmd"
 	logsv1 "k8s.io/component-base/logs/api/v1"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"github.com/authzed/grpcutil"
+	"github.com/authzed/spicedb/pkg/cmd/datastore"
+	"github.com/authzed/spicedb/pkg/cmd/server"
+	"github.com/authzed/spicedb/pkg/cmd/util"
 )
 
 func TestKubeConfig(t *testing.T) {
@@ -82,7 +83,7 @@ func TestRemoteSpiceDB(t *testing.T) {
 	srv, addr := newTCPSpiceDB(t, ctx)
 	go func() {
 		if err := srv.Run(ctx); err != nil {
-			require.NoError(t, err)
+			require.NoError(t, err) // nolint:testifylint
 		}
 	}()
 
@@ -132,7 +133,7 @@ func TestRuleConfig(t *testing.T) {
 	})
 	require.Len(t, rules, 1)
 	require.Len(t, rules[0].PreFilter, 1)
-	require.Len(t, rules[0].Checks, 0)
+	require.Empty(t, rules[0].Checks)
 	require.Nil(t, rules[0].Update)
 
 	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
@@ -223,7 +224,7 @@ func kubeConfigForTest(t *testing.T) string {
 
 	c, err := clientcmd.NewDefaultClientConfigLoadingRules().Load()
 	require.NoError(t, err)
-	f, err := os.CreateTemp("", "spicedb-kubeapi-proxy")
+	f, err := os.CreateTemp(t.TempDir(), "spicedb-kubeapi-proxy")
 	require.NoError(t, err)
 
 	err = clientcmd.WriteToFile(*c, f.Name())
