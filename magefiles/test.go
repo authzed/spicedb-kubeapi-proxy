@@ -17,21 +17,28 @@ func (t Test) All() error {
 }
 
 // Unit runs the unit tests.
-func (Test) Unit() error {
+func (t Test) Unit() error {
 	// TODO add -race
-	return RunSh("go", WithV())("test", "-count=1", "-coverpkg=./...", "-covermode=atomic", "-coverprofile=coverage.txt", "./...")
+	args := []string{"test", "-count=1"}
+	args = append(args, t.coverageFlags()...)
+	args = append(args, "./...")
+	return RunSh("go", WithV())(args...)
 }
 
 // E2e runs the end-to-end tests against a real apiserver.
-func (Test) E2e() error {
-	return RunSh("go", Tool())(
-		"run",
-		"github.com/onsi/ginkgo/v2/ginkgo",
+func (t Test) E2e() error {
+	args := []string{"run", "github.com/onsi/ginkgo/v2/ginkgo"}
+	args = append(args, t.coverageFlags()...)
+	args = append(args,
 		"--tags=e2e,failpoints",
 		"-r",
 		"-vv",
 		"--fail-fast",
-		"--randomize-all",
-		"../e2e",
-	)
+		"--randomize-all")
+	args = append(args, "../e2e")
+	return RunSh("go", Tool())(args...)
+}
+
+func (t Test) coverageFlags() []string {
+	return []string{"-coverpkg=./...", "-covermode=atomic", "-coverprofile=coverage.txt"}
 }

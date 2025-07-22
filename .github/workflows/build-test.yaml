@@ -87,3 +87,7 @@ jobs:
         with:
           version: "latest"
           args: "test:e2e"
+      - name: "Upload coverage reports to Codecov"
+        uses: "codecov/codecov-action@v5"
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
