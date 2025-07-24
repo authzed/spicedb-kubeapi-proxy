@@ -2,6 +2,7 @@ package distributedtx
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -116,6 +117,97 @@ func TestWorkflow(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Equal(t, v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION, cpr.Permissionship)
+		})
+	}
+}
+
+func TestKubeConflict(t *testing.T) {
+	t.Parallel()
+	testCases := map[string]struct {
+		inputErr     error
+		input        *WriteObjInput
+		expectedJSON string
+	}{
+		`nil input`: {
+			inputErr: errors.New("some err"),
+			input:    nil,
+			expectedJSON: `{
+  "ErrStatus" : {
+    "metadata" : { },
+    "status" : "Failure",
+    "message" : "Operation cannot be fulfilled on  \"\": some err",
+    "reason" : "Conflict",
+    "details" : { },
+    "code" : 409
+  }
+}`,
+		},
+		`nil request info`: {
+			inputErr: errors.New("some err"),
+			input: &WriteObjInput{
+				ObjectMeta: &metav1.ObjectMeta{Name: "my_object_meta"},
+			},
+			expectedJSON: `{
+  "ErrStatus" : {
+    "metadata" : { },
+    "status" : "Failure",
+    "message" : "Operation cannot be fulfilled on  \"my_object_meta\": some err",
+    "reason" : "Conflict",
+    "details" : {
+      "name" : "my_object_meta"
+    },
+    "code" : 409
+  }
+}`,
+		},
+		`nil object meta`: {
+			inputErr: errors.New("some err"),
+			input: &WriteObjInput{
+				RequestInfo: &request.RequestInfo{APIGroup: "foo", Resource: "bar"},
+			},
+			expectedJSON: `{
+  "ErrStatus" : {
+    "metadata" : { },
+    "status" : "Failure",
+    "message" : "Operation cannot be fulfilled on bar.foo \"\": some err",
+    "reason" : "Conflict",
+    "details" : {
+      "group" : "foo",
+      "kind" : "bar"
+    },
+    "code" : 409
+  }
+}`,
+		},
+		`valid input`: {
+			inputErr: errors.New("some err"),
+			input: &WriteObjInput{
+				RequestInfo: &request.RequestInfo{APIGroup: "foo", Resource: "bar"},
+				ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
+			},
+			expectedJSON: `{
+  "ErrStatus" : {
+    "metadata" : { },
+    "status" : "Failure",
+    "message" : "Operation cannot be fulfilled on bar.foo \"my_object_meta\": some err",
+    "reason" : "Conflict",
+    "details" : {
+      "name" : "my_object_meta",
+      "group" : "foo",
+      "kind" : "bar"
+    },
+    "code" : 409
+  }
+}`,
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			res := KubeConflict(tc.inputErr, tc.input)
+			require.NotNil(t, res, "expected non-nil response")
+			require.JSONEq(t, tc.expectedJSON, string(res.Body), "unexpected response body")
 		})
 	}
 }

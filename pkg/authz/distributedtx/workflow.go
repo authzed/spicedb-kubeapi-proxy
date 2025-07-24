@@ -420,11 +420,29 @@ func ResourceLockRel(input *WriteObjInput, workflowID string) *v1.RelationshipUp
 // KubeConflict wraps an error and turns it into a standard kube conflict
 // response.
 func KubeConflict(err error, input *WriteObjInput) *KubeResp {
+	var group, resource, name string
+
+	if input == nil {
+		klog.ErrorS(err, "input to KubeConflict is nil", "error", err)
+	} else {
+		if input.RequestInfo == nil {
+			klog.ErrorS(err, "input to KubeConflict has nil RequestInfo", "error", err)
+		} else {
+			group = input.RequestInfo.APIGroup
+			resource = input.RequestInfo.Resource
+		}
+		if input.ObjectMeta == nil {
+			klog.ErrorS(err, "input to KubeConflict has nil ObjectMeta", "error", err)
+		} else {
+			name = input.ObjectMeta.Name
+		}
+	}
+
 	var out KubeResp
 	statusError := k8serrors.NewConflict(schema.GroupResource{
-		Group:    input.RequestInfo.APIGroup,
-		Resource: input.RequestInfo.Resource,
-	}, input.ObjectMeta.Name, err)
+		Group:    group,
+		Resource: resource,
+	}, name, err)
 	out.StatusCode = http.StatusConflict
 	out.Err = *statusError
 	out.Body, _ = json.Marshal(statusError)
