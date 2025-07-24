@@ -10,4 +10,4 @@ client-key.crt
 *.go__failpoint*
 *.sqlite
 magefiles/mage_output_file.go
-coverage.txt
+*cover*.txt
