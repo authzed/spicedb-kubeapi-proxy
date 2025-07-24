@@ -36,6 +36,7 @@ func (t Test) E2e() error {
 		"-covermode=atomic",
 		"--keep-separate-coverprofiles",
 		"--output-dir=../",
+		"--timeout=5m",
 		"-r",
 		"-vv",
 		"--fail-fast",

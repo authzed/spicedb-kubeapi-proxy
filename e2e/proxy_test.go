@@ -6,13 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -433,14 +433,13 @@ var _ = Describe("Proxy", func() {
 
 			It("supports rules for every verb", func(ctx context.Context) {
 				// watch
-				var wg sync.WaitGroup
+				var wg errgroup.Group
 				defer wg.Wait()
-				wg.Add(1)
-				go func() {
+				wg.Go(func() error {
 					defer GinkgoRecover()
 					Expect(WatchPods(ctx, paulClient, paulNamespace, 1, 10*time.Second)).To(ContainElement(paulPod))
-					wg.Done()
-				}()
+					return nil
+				})
 
 				// create
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
@@ -469,14 +468,13 @@ var _ = Describe("Proxy", func() {
 
 			It("supports rules for every verb on custom resources", func(ctx context.Context) {
 				// watch
-				var wg sync.WaitGroup
+				var wg errgroup.Group
 				defer wg.Wait()
-				wg.Add(1)
-				go func() {
+				wg.Go(func() error {
 					defer GinkgoRecover()
 					Expect(WatchTestResources(ctx, paulDynamicClient, paulNamespace, 1, 10*time.Second)).To(ContainElement(paulCustomResource))
-					wg.Done()
-				}()
+					return nil
+				})
 
 				// create
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
@@ -605,19 +603,18 @@ var _ = Describe("Proxy", func() {
 			})
 
 			It("doesn't show users namespaces the other has created", func(ctx context.Context) {
-				var wg sync.WaitGroup
+				var wg errgroup.Group
 				defer wg.Wait()
-				wg.Add(2)
-				go func() {
+				wg.Go(func() error {
 					defer GinkgoRecover()
 					Expect(WatchNamespaces(ctx, paulClient, 1)).To(ContainElement(paulNamespace))
-					wg.Done()
-				}()
-				go func() {
+					return nil
+				})
+				wg.Go(func() error {
 					defer GinkgoRecover()
 					Expect(WatchNamespaces(ctx, chaniClient, 1)).To(ContainElement(chaniNamespace))
-					wg.Done()
-				}()
+					return nil
+				})
 
 				// each creates their respective namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
@@ -873,27 +870,26 @@ var _ = Describe("Proxy", func() {
 				start := make(chan struct{})
 				errs := make(chan error, 2)
 
-				var wg sync.WaitGroup
-				wg.Add(2)
+				var wg errgroup.Group
 
 				// in theory, these two requests could be run serially, but in
 				// practice they seem to always actually run in parallel as
 				// intended.
-				go func() {
+				wg.Go(func() error {
 					defer GinkgoRecover()
 					<-start
 					errs <- CreateNamespace(ctx, paulClient, paulNamespace)
-					wg.Done()
-				}()
-				go func() {
+					return nil
+				})
+				wg.Go(func() error {
 					defer GinkgoRecover()
 					<-start
 					errs <- CreateNamespace(ctx, chaniClient, paulNamespace)
-					wg.Done()
-				}()
+					return nil
+				})
 				start <- struct{}{}
 				start <- struct{}{}
-				wg.Wait()
+				_ = wg.Wait()
 				close(errs)
 
 				allErrs := make([]error, 0)
@@ -923,21 +919,19 @@ var _ = Describe("Proxy", func() {
 
 				// start a watch waiting for one result, but expect 0 results
 				// after the watch times out
-				var wg sync.WaitGroup
-				wg.Add(1)
-				go func() {
+				var wg errgroup.Group
+				wg.Go(func() error {
 					defer GinkgoRecover()
 					Expect(len(WatchPods(ctx, chaniClient, sharedNamespace, 1, 2*time.Second))).To(BeZero())
-					wg.Done()
-				}()
+					return nil
+				})
 
 				// paul should get an event for the pod he creates
-				wg.Add(1)
-				go func() {
+				wg.Go(func() error {
 					defer GinkgoRecover()
 					Expect(len(WatchPods(ctx, paulClient, sharedNamespace, 1, 2*time.Second))).To(Equal(1))
-					wg.Done()
-				}()
+					return nil
+				})
 
 				// Paul creates chani's pod, will generate kube events that
 				// Chani shouldn't see
