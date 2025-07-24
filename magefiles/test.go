@@ -40,6 +40,7 @@ func (t Test) E2e() error {
 		"-r",
 		"-vv",
 		"--fail-fast",
+		//"--until-it-fails",
 		"--randomize-all")
 	args = append(args, "../e2e")
 	return RunSh("go", Tool())(args...)

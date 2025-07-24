@@ -423,16 +423,16 @@ func KubeConflict(err error, input *WriteObjInput) *KubeResp {
 	var group, resource, name string
 
 	if input == nil {
-		klog.ErrorS(err, "input to KubeConflict is nil", "error", err)
+		klog.Warningf("input to KubeConflict is nil for error %s", err)
 	} else {
 		if input.RequestInfo == nil {
-			klog.ErrorS(err, "input to KubeConflict has nil RequestInfo", "error", err)
+			klog.Warningf("input to KubeConflict has nil RequestInfo for error %s", err)
 		} else {
 			group = input.RequestInfo.APIGroup
 			resource = input.RequestInfo.Resource
 		}
 		if input.ObjectMeta == nil {
-			klog.ErrorS(err, "input to KubeConflict has nil ObjectMeta", "error", err)
+			klog.Warningf("input to KubeConflict has nil ObjectMeta for error %s", err)
 		} else {
 			name = input.ObjectMeta.Name
 		}

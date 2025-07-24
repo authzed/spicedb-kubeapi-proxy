@@ -838,8 +838,7 @@ var _ = Describe("Proxy", func() {
 				if lockMode == proxyrule.OptimisticLockMode {
 					Expect(err).To(Succeed())
 				} else {
-					fmt.Println(err)
-					Expect(k8serrors.IsUnauthorized(err)).To(BeTrue())
+					Expect(k8serrors.IsUnauthorized(err)).To(BeTrue(), "err isn't `unauthorized`:", err.Error())
 					// paul sees the request fail, so he tries again:
 					Expect(DeletePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
 				}
