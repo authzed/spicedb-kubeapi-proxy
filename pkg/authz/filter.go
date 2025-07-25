@@ -201,6 +201,8 @@ func handleFilterListError(ctx context.Context, err error) {
 
 func filterWatch(ctx context.Context, client v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
 	go func() {
+		authzData.Lock()
+		defer authzData.Unlock()
 		defer close(authzData.allowedNNC)
 		defer close(authzData.removedNNC)
 
