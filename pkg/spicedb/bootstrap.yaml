@@ -28,6 +28,11 @@ schema: |-
   definition lock {
     relation workflow: workflow
   }
-  definition workflow {}
+
+  definition workflow {
+    relation idempotency_key: activity
+  }
+
+  definition activity{}
 relationships: |
   namespace:spicedb-kubeapi-proxy#viewer@user:rakis

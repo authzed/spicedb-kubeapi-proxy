@@ -12,6 +12,7 @@ require (
 	github.com/onsi/gomega v1.37.0
 	github.com/samber/lo v1.51.0
 	github.com/spf13/afero v1.14.0
+	golang.org/x/sync v0.15.0
 	k8s.io/api v0.33.1
 	k8s.io/apimachinery v0.34.0-alpha.1
 	k8s.io/apiserver v0.33.1
@@ -261,7 +262,6 @@ require (
 	golang.org/x/mod v0.25.0 // indirect
 	golang.org/x/net v0.41.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
-	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/term v0.32.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
