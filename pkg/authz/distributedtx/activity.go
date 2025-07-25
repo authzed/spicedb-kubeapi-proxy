@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/cespare/xxhash/v2"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
@@ -38,11 +40,97 @@ type ActivityHandler struct {
 }
 
 // WriteToSpiceDB writes relationships to spicedb and returns any errors.
-func (h *ActivityHandler) WriteToSpiceDB(ctx context.Context, input *v1.WriteRelationshipsRequest) (*v1.WriteRelationshipsResponse, error) {
+func (h *ActivityHandler) WriteToSpiceDB(ctx context.Context, input *v1.WriteRelationshipsRequest, workflowID string) (struct{}, error) {
 	failpoints.FailPoint("panicWriteSpiceDB")
-	out, err := h.PermissionClient.WriteRelationships(ctx, input)
-	failpoints.FailPoint("panicSpiceDBReadResp")
-	return out, err
+	idempotencyKey, err := idempotencyKeyForPayload(input, workflowID)
+	if err != nil {
+		return struct{}{}, fmt.Errorf("failed to create idempotency key for payload: %w", err)
+	}
+	cloned := input
+	cloned.Updates = append(cloned.Updates, &v1.RelationshipUpdate{
+		Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
+		Relationship: idempotencyKey,
+	})
+
+	_, err = h.PermissionClient.WriteRelationships(ctx, input)
+	failpoints.FailPoint("panicSpiceDBWriteResp")
+	if err != nil {
+		exists, relErr := isRelExists(ctx, h.PermissionClient, idempotencyKey)
+		if relErr != nil {
+			return struct{}{}, relErr
+		}
+
+		if exists {
+			klog.Infof("idempotency key already exists, relationships were already written: %v", idempotencyKey)
+			return struct{}{}, nil // idempotent write, key already exists
+		}
+
+		return struct{}{}, err
+	}
+
+	return struct{}{}, nil
+}
+
+// idempotencyKeyForPayload computes an idempotency key off a proto payload for a request, and the workflow ID that executed it.
+func idempotencyKeyForPayload(input *v1.WriteRelationshipsRequest, workflowID string) (*v1.Relationship, error) {
+	bytes, err := input.MarshalVT()
+	if err != nil {
+		return nil, err
+	}
+
+	return &v1.Relationship{
+		Resource: &v1.ObjectReference{
+			ObjectType: "workflow",
+			ObjectId:   workflowID,
+		},
+		Relation: "idempotency_key",
+		Subject: &v1.SubjectReference{
+			Object: &v1.ObjectReference{
+				ObjectType: "activity",
+				ObjectId:   fmt.Sprintf("%x", xxhash.Sum64(bytes)),
+			},
+		},
+	}, nil
+}
+
+func isRelExists(ctx context.Context, client v1.PermissionsServiceClient, toCheck *v1.Relationship) (bool, error) {
+	req := readRequestForRel(toCheck)
+
+	resp, err := client.ReadRelationships(ctx, req)
+	if err != nil {
+		klog.ErrorS(err, "failed to check existence of relationship", "rel", toCheck)
+		return false, fmt.Errorf("failed to determine if relationship exists: %w", err)
+	}
+
+	var exists bool
+	_, err = resp.Recv()
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			return false, fmt.Errorf("failed to determine existence of relationship: %w", err)
+		}
+	} else {
+		exists = true
+	}
+
+	return exists, nil
+}
+
+func readRequestForRel(lock *v1.Relationship) *v1.ReadRelationshipsRequest {
+	req := &v1.ReadRelationshipsRequest{
+		RelationshipFilter: &v1.RelationshipFilter{
+			ResourceType:       lock.Resource.ObjectType,
+			OptionalResourceId: lock.Resource.ObjectId,
+			OptionalRelation:   lock.Relation,
+			OptionalSubjectFilter: &v1.SubjectFilter{
+				SubjectType:       lock.Subject.Object.ObjectType,
+				OptionalSubjectId: lock.Subject.Object.ObjectId,
+				OptionalRelation: &v1.SubjectFilter_RelationFilter{
+					Relation: lock.Subject.OptionalRelation,
+				},
+			},
+		},
+	}
+	return req
 }
 
 // ReadRelationships reads relationships from spicedb and returns any errors.
