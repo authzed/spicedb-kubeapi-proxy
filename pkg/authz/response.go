@@ -51,7 +51,7 @@ type AuthzData struct {
 	restMapper    meta.RESTMapper
 	allowedNNC    chan types.NamespacedName
 	removedNNC    chan types.NamespacedName
-	allowedNN     map[types.NamespacedName]struct{}
+	allowedNN     map[types.NamespacedName]struct{} // GUARDED_BY(RWMutex)
 	skipPreFilter bool
 }
 
