@@ -27,6 +27,17 @@ func (t Test) Unit() error {
 
 // E2e runs the end-to-end tests against a real apiserver.
 func (t Test) E2e() error {
+	args := append(e2eArgs(), "../e2e")
+	return RunSh("go", Tool())(args...)
+}
+
+// E2eUntilItFails runs the end-to-end tests indefinitely against a real apiserver until it fails.
+func (t Test) E2eUntilItFails() error {
+	args := append(e2eArgs(), "--until-it-fails", "../e2e")
+	return RunSh("go", Tool())(args...)
+}
+
+func e2eArgs() []string {
 	args := []string{"run", "github.com/onsi/ginkgo/v2/ginkgo"}
 	args = append(args,
 		"--tags=e2e,failpoints",
@@ -40,8 +51,6 @@ func (t Test) E2e() error {
 		"-r",
 		"-vv",
 		"--fail-fast",
-		//"--until-it-fails",
 		"--randomize-all")
-	args = append(args, "../e2e")
-	return RunSh("go", Tool())(args...)
+	return args
 }
