@@ -223,7 +223,7 @@ func TestFilterListResponse(t *testing.T) {
 	}
 
 	// Filter the response
-	err = filterListResponse(context.Background(), recorder, []*rules.RunnableRule{filteredRules}, input, mockClient)
+	err = filterListResponse(t.Context(), recorder, []*rules.RunnableRule{filteredRules}, input, mockClient)
 	require.NoError(t, err)
 
 	// Parse the filtered response
@@ -305,7 +305,7 @@ func TestFilterItemsWithBulkPermissions(t *testing.T) {
 	}
 
 	// Test that only allowed items are returned
-	allowedItems, err := filterItemsWithBulkPermissions(context.Background(), items, []*rules.RunnableRule{filteredRules}, input, mockClient)
+	allowedItems, err := filterItemsWithBulkPermissions(t.Context(), items, []*rules.RunnableRule{filteredRules}, input, mockClient)
 	require.NoError(t, err)
 	require.Len(t, allowedItems, 1)
 
@@ -317,7 +317,7 @@ func TestFilterItemsWithBulkPermissions(t *testing.T) {
 	require.Equal(t, "testpod1", metadata["name"])
 
 	// Test with empty items
-	emptyItems, err := filterItemsWithBulkPermissions(context.Background(), []interface{}{}, []*rules.RunnableRule{filteredRules}, input, mockClient)
+	emptyItems, err := filterItemsWithBulkPermissions(t.Context(), []interface{}{}, []*rules.RunnableRule{filteredRules}, input, mockClient)
 	require.NoError(t, err)
 	require.Empty(t, emptyItems)
 }

@@ -141,26 +141,6 @@ func performUpdate(ctx context.Context, w http.ResponseWriter, r *rules.Runnable
 	return nil
 }
 
-// getSingleUpdateRule returns the first matching rule with `update` defined
-func getSingleUpdateRule(matchingRules []*rules.RunnableRule) (*rules.RunnableRule, error) {
-	rulesWithUpdates := make([]*rules.RunnableRule, 0, len(matchingRules))
-	for _, r := range matchingRules {
-		if r.Update != nil {
-			rulesWithUpdates = append(rulesWithUpdates, r)
-		}
-	}
-
-	if len(rulesWithUpdates) == 0 {
-		return nil, nil
-	}
-
-	if len(rulesWithUpdates) > 1 {
-		return nil, fmt.Errorf("multiple write rules matched: %v", rulesWithUpdates)
-	}
-
-	return rulesWithUpdates[0], nil
-}
-
 // dualWrite configures the dtx for writing to kube and spicedb and waits for
 // the response
 func dualWrite(
