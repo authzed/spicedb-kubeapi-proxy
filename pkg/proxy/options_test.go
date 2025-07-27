@@ -30,7 +30,7 @@ func TestKubeConfig(t *testing.T) {
 	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(context.Background())
+	c, err := opts.Complete(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -38,7 +38,7 @@ func TestKubeConfig(t *testing.T) {
 	opts = optionsForTesting(t)
 	opts.BackendKubeconfigPath = uuid.NewString()
 
-	c, err = opts.Complete(context.Background())
+	c, err = opts.Complete(t.Context())
 	require.ErrorContains(t, err, "couldn't load kubeconfig")
 	require.ErrorContains(t, err, opts.BackendKubeconfigPath)
 	require.Nil(t, c, "expected nil config on error")
@@ -53,7 +53,7 @@ func TestInClusterConfig(t *testing.T) {
 	opts.UseInClusterConfig = true
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(context.Background())
+	c, err := opts.Complete(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, c)
 	require.NotNil(t, opts.RestConfigFunc, "missing kube client REST config")
@@ -67,7 +67,7 @@ func TestEmbeddedSpiceDB(t *testing.T) {
 	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(context.Background())
+	c, err := opts.Complete(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -77,7 +77,7 @@ func TestEmbeddedSpiceDB(t *testing.T) {
 }
 
 func TestRemoteSpiceDB(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	srv, addr := newTCPSpiceDB(t, ctx)
@@ -93,7 +93,7 @@ func TestRemoteSpiceDB(t *testing.T) {
 	opts.SpiceDBOptions.SecureSpiceDBTokensBySpace = "foobar"
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(context.Background())
+	c, err := opts.Complete(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -112,7 +112,7 @@ func TestRemoteSpiceDBCerts(t *testing.T) {
 	opts.SpiceDBOptions.SpicedbCAPath = "test"
 	require.Empty(t, opts.Validate())
 
-	_, err := opts.Complete(context.Background())
+	_, err := opts.Complete(t.Context())
 	require.ErrorContains(t, err, "unable to load custom certificates")
 }
 
@@ -121,7 +121,7 @@ func TestRuleConfig(t *testing.T) {
 	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(context.Background())
+	c, err := opts.Complete(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -157,7 +157,7 @@ prefilter:
 	opts.RuleConfigFile = errConfigFile
 	require.Empty(t, opts.Validate())
 
-	_, err = opts.Complete(context.Background())
+	_, err = opts.Complete(t.Context())
 	require.ErrorContains(t, err, "expected")
 }
 
