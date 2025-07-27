@@ -395,7 +395,7 @@ var _ = Describe("Proxy", func() {
 			return err
 		}
 
-		WatchTestResources := func(ctx context.Context, client dynamic.Interface, namespace string, expected int, timeout time.Duration) []string {
+		/*WatchTestResources := func(ctx context.Context, client dynamic.Interface, namespace string, expected int, timeout time.Duration) []string {
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
@@ -419,7 +419,7 @@ var _ = Describe("Proxy", func() {
 				}
 			}
 			return got
-		}
+		}*/
 
 		JustBeforeEach(func(ctx context.Context) {
 			// before every test, assert no access
@@ -432,14 +432,14 @@ var _ = Describe("Proxy", func() {
 		AssertDualWriteBehavior := func() {
 
 			It("supports rules for every verb", func(ctx context.Context) {
-				// watch
+				/*// watch
 				var wg errgroup.Group
 				defer wg.Wait()
 				wg.Go(func() error {
 					defer GinkgoRecover()
 					Expect(WatchPods(ctx, paulClient, paulNamespace, 1, 10*time.Second)).To(ContainElement(paulPod))
 					return nil
-				})
+				})*/
 
 				// create
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
@@ -467,14 +467,14 @@ var _ = Describe("Proxy", func() {
 			})
 
 			It("supports rules for every verb on custom resources", func(ctx context.Context) {
-				// watch
+				/*// watch
 				var wg errgroup.Group
 				defer wg.Wait()
 				wg.Go(func() error {
 					defer GinkgoRecover()
 					Expect(WatchTestResources(ctx, paulDynamicClient, paulNamespace, 1, 10*time.Second)).To(ContainElement(paulCustomResource))
 					return nil
-				})
+				})*/
 
 				// create
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
@@ -603,6 +603,9 @@ var _ = Describe("Proxy", func() {
 			})
 
 			It("doesn't show users namespaces the other has created", func(ctx context.Context) {
+				Skip("Skipping test because watch is disabled")
+				return
+
 				var wg errgroup.Group
 				defer wg.Wait()
 				wg.Go(func() error {
@@ -905,6 +908,9 @@ var _ = Describe("Proxy", func() {
 			})
 
 			It("revokes access during watch", func(ctx context.Context) {
+				Skip("Skipping test because watch is disabled")
+				return
+
 				Expect(CreateNamespace(ctx, adminClient, sharedNamespace)).To(Succeed())
 				Expect(CreatePod(ctx, chaniClient, sharedNamespace, chaniPod)).To(Succeed())
 

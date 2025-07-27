@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/cschleiden/go-workflows/client"
 	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/klog/v2"
 
@@ -17,24 +17,30 @@ import (
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
-func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient *client.Client, matcher *rules.Matcher, inputExtractor rules.ResolveInputExtractor) (http.Handler, error) {
+var updateVerbs = []string{"create", "update", "patch", "delete"}
+
+// WithAuthorization wraps the provided handler with authorization logic.
+func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper, permissionsClient v1.PermissionsServiceClient, watchClient v1.WatchServiceClient, workflowClient *client.Client, matcher *rules.Matcher, inputExtractor rules.ResolveInputExtractor) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
+		// Extract the request info from the context.
 		input, err := inputExtractor.ExtractFromHttp(req)
 		if err != nil {
 			handleError(w, failed, req, err)
 			return
 		}
 
-		// some non-resource requests are always allowed
+		// Some non-resource requests (such as API checks) are always allowed.
 		if alwaysAllow(input.Request) {
-			req = req.WithContext(WithAuthzData(req.Context(), &AuthzData{}))
+			filterer := NewEmptyResponseFilterer(restMapper, input)
+			req = req.WithContext(WithResponseFilterer(req.Context(), filterer))
 			handler.ServeHTTP(w, req)
 			return
 		}
 
+		// Otherwise, we need to match rule(s) against the request.
 		matchingRules := (*matcher).Match(input.Request)
 		if len(matchingRules) == 0 {
 			klog.FromContext(ctx).V(3).Info(
@@ -47,9 +53,6 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 			return
 		}
 
-		ruleToString := func(item *rules.RunnableRule, index int) string {
-			return item.Name
-		}
 		klog.FromContext(ctx).V(2).Info("matched rules", "rules", lo.Map(matchingRules, ruleToString))
 
 		// Apply CEL condition filtering
@@ -81,7 +84,7 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 		inputKeyValues := input.ToKeyValues()
 		klog.FromContext(ctx).V(4).Info("authorization input details", inputKeyValues...)
 
-		// run all checks for this request
+		// Run all checks for this request
 		if err := runAllMatchingChecks(ctx, filteredRules, input, permissionsClient); err != nil {
 			klog.FromContext(ctx).V(2).Error(err, "input failed authorization checks", inputKeyValues...)
 			handleError(w, failed, req, err)
@@ -89,43 +92,58 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 		}
 		klog.FromContext(ctx).V(3).Info("input passed all authorization checks", inputKeyValues...)
 
-		// if this request is a write, perform the dual write and return
-		rule, err := getSingleUpdateRule(filteredRules)
+		// If this request has an update rule, we need to perform the update of the relationships and the
+		// write to Kubernetes via the workflow engine.
+		updateRule, err := singleUpdateRule(filteredRules)
 		if err != nil {
 			klog.FromContext(ctx).V(2).Error(err, "unable to get single update rule", inputKeyValues...)
 			handleError(w, failed, req, err)
 			return
 		}
 
-		if rule != nil {
-			klog.FromContext(ctx).V(4).Info("single update rule", "rule", rule)
-			if err := performUpdate(ctx, w, rule, input, req.RequestURI, workflowClient); err != nil {
-				klog.FromContext(ctx).V(2).Error(err, "failed to perform update", inputKeyValues...)
+		if updateRule != nil {
+			// Ensure this an update operation.
+			if !slices.Contains(updateVerbs, input.Request.Verb) {
+				err := fmt.Errorf("update rule found but request verb is not create, update, or patch: %s", input.Request.Verb)
+				klog.FromContext(ctx).V(2).Error(err, "invalid request verb for update rule", inputKeyValues...)
 				handleError(w, failed, req, err)
 				return
 			}
+
+			klog.FromContext(ctx).V(4).Info("single update rule", "rule", updateRule)
+			if err := performUpdate(ctx, w, updateRule, input, req.RequestURI, workflowClient); err != nil {
+				klog.FromContext(ctx).V(2).Error(err, "failed to perform update", inputKeyValues...)
+				handleError(w, failed, req, err)
+			}
 			return
-		} else {
-			klog.FromContext(ctx).V(4).Info("no update rule found for request")
+		}
+
+		klog.FromContext(ctx).V(4).Info("no update rule found for request; performing directly")
+
+		// TODO(jschorr): Bring back support for watch requests.
+		if input.Request.Verb == "watch" {
+			klog.FromContext(ctx).V(2).Info("watch requests are not currently supported", "verb", input.Request.Verb)
+			handleError(w, failed, req, fmt.Errorf("watch requests are not currently supported"))
+			return
 		}
 
 		// all other requests are filtered by matching rules
-		authzData := &AuthzData{
-			restMapper: restMapper,
-			allowedNNC: make(chan types.NamespacedName),
-			removedNNC: make(chan types.NamespacedName),
-			allowedNN:  map[types.NamespacedName]struct{}{},
-		}
-		alreadyAuthorized(input, authzData)
-		if err := filterResponse(ctx, filteredRules, input, authzData, permissionsClient, watchClient); err != nil {
-			failed.ServeHTTP(w, req)
+		responseFilterer, err := NewResponseFilterer(restMapper, input, filteredRules, permissionsClient)
+		if err != nil {
+			klog.FromContext(ctx).V(2).Error(err, "failed to create response filterer", inputKeyValues...)
+			handleError(w, failed, req, err)
 			return
 		}
 
-		// filters run in parallel with the upstream request and backfill the
-		// allowed object list while the kube request is running.
+		// Add the response filterer to the request context so that the response can be filtered later, if applicable.
+		req = req.WithContext(WithResponseFilterer(req.Context(), responseFilterer))
 
-		req = req.WithContext(WithAuthzData(req.Context(), authzData))
+		// Run the pre-filters, if any.
+		if err := responseFilterer.RunPreFilters(req); err != nil {
+			klog.FromContext(ctx).V(2).Error(err, "failed to run pre-filters", inputKeyValues...)
+			handleError(w, failed, req, err)
+			return
+		}
 
 		// Check if this request needs PostChecks (non-write and non-list operations)
 		if shouldRunPostChecks(input.Request.Verb) {
@@ -139,7 +157,11 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 		} else {
 			handler.ServeHTTP(w, req)
 		}
-	}), nil
+	})
+}
+
+func ruleToString(item *rules.RunnableRule, index int) string {
+	return item.Name
 }
 
 func handleError(w http.ResponseWriter, failHandler http.Handler, req *http.Request, err error) {
