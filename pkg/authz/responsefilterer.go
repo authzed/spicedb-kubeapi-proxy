@@ -3,6 +3,7 @@ package authz
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -137,7 +138,12 @@ func (rf *ResponseFilterer) RunPreFilters(req *http.Request) error {
 
 		result, err := runLookupResources(req.Context(), rf.client, filter, rf.input)
 		if err != nil {
-			klog.FromContext(req.Context()).Error(err, "error running pre-filter", "request", req)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				klog.FromContext(req.Context()).V(3).Info("context cancelation when running pre-filter", "request", req)
+			} else {
+				klog.FromContext(req.Context()).Error(err, "error running pre-filter", "request", req)
+			}
+
 			rf.preFilterCompleted <- prefilterResult{
 				err: err,
 			}

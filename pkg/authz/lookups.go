@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -64,8 +65,7 @@ func runLookupResources(ctx context.Context, client v1.PermissionsServiceClient,
 	klog.FromContext(ctx).V(3).Info("LookupResources", "request", req)
 	lr, err := client.LookupResources(ctx, req)
 	if err != nil {
-		klog.FromContext(ctx).Error(err, "error calling LookupResources", "request", req)
-		return nil, err
+		return nil, fmt.Errorf("error create LookupResources client: %w", err)
 	}
 
 	filterResult := &prefilterResult{
@@ -80,7 +80,6 @@ func runLookupResources(ctx context.Context, client v1.PermissionsServiceClient,
 		}
 
 		if err != nil {
-			klog.FromContext(ctx).Error(err, "error receiving LookupResources response", "request", req)
 			return nil, err
 		}
 
@@ -91,21 +90,18 @@ func runLookupResources(ctx context.Context, client v1.PermissionsServiceClient,
 
 		byteIn, err := json.Marshal(wrapper{ResourceID: resp.ResourceObjectId})
 		if err != nil {
-			klog.FromContext(ctx).Error(err, "error marshalling LookupResources response", "request", req)
-			return nil, err
+			return nil, fmt.Errorf("error marshalling LookupResources response: %w", err)
 		}
 
 		var data any
 		if err := json.Unmarshal(byteIn, &data); err != nil {
-			klog.FromContext(ctx).Error(err, "error unmarshalling LookupResources response", "request", req)
-			return nil, err
+			return nil, fmt.Errorf("error unmarshalling LookupResources response: %w", err)
 		}
 
 		klog.FromContext(ctx).V(4).Info("received list filter event", "event", string(byteIn))
 		name, err := filter.NameFromObjectID.Query(data)
 		if err != nil {
-			klog.FromContext(ctx).Error(err, "error querying name from object ID", "request", req)
-			return nil, err
+			return nil, fmt.Errorf("error querying name from object ID: %w", err)
 		}
 
 		if name == nil || len(name.(string)) == 0 {
@@ -115,8 +111,7 @@ func runLookupResources(ctx context.Context, client v1.PermissionsServiceClient,
 
 		namespace, err := filter.NamespaceFromObjectID.Query(data)
 		if err != nil {
-			klog.FromContext(ctx).Error(err, "error querying namespace from object ID", "request", req)
-			return nil, err
+			return nil, fmt.Errorf("error querying namespace from object ID: %w", err)
 		}
 
 		if namespace == nil {
@@ -124,8 +119,7 @@ func runLookupResources(ctx context.Context, client v1.PermissionsServiceClient,
 			inputData := convertInputToBloblangData(input)
 			namespace, err = filter.NamespaceFromObjectID.Query(inputData)
 			if err != nil {
-				klog.FromContext(ctx).Error(err, "error querying namespace from object ID", "request", req)
-				return nil, err
+				return nil, fmt.Errorf("error querying namespace from object ID: %w", err)
 			}
 		}
 		if namespace == nil {
