@@ -98,8 +98,8 @@ type wrapper struct {
 }
 
 func filterList(ctx context.Context, client v1.PermissionsServiceClient, filter *rules.ResolvedPreFilter, input *rules.ResolveInput, authzData *AuthzData) {
+	authzData.Lock()
 	go func() {
-		authzData.Lock()
 		defer authzData.Unlock()
 		defer close(authzData.allowedNNC)
 		defer close(authzData.removedNNC)
