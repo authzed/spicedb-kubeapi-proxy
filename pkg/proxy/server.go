@@ -108,7 +108,7 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 		},
 		Transport: transport,
 		ErrorHandler: func(writer http.ResponseWriter, h *http.Request, err error) {
-			klog.V(3).InfoSDepth(1, "upstream Kubernetes API response", "error", err)
+			klog.V(3).InfoSDepth(1, "upstream Kubernetes API error response", "error", err)
 			writer.WriteHeader(http.StatusBadGateway)
 		},
 	}

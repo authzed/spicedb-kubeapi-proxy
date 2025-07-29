@@ -3,11 +3,13 @@ package authz
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -17,15 +19,18 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/runtime/serializer/streaming"
 	"k8s.io/apimachinery/pkg/types"
 	kjson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/klog/v2"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/authzed/ctxkey"
+	"github.com/authzed/spicedb/pkg/genutil/mapz"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
@@ -33,38 +38,31 @@ import (
 // TODO: do we need to do extra work to load upstream types into the scheme?
 var codecs = serializer.NewCodecFactory(scheme.Scheme)
 
-var responseFiltererKey = ctxkey.New[*ResponseFilterer]()
+var responseFiltererKey = ctxkey.New[ResponseFilterer]()
 
 const prefilterTimeout = 10 * time.Second
 
+// ResponseFilterer is an interface that defines the methods for filtering HTTP responses
+// retrieved from the Kubernetes API server, based on authorization rules.
+type ResponseFilterer interface {
+	// RunPreFilters runs the filtering on the response, updating its body and status code
+	// based on the rules and authz data.
+	FilterResp(resp *http.Response) error
+}
+
 // WithResponseFilterer returns a copy of parent in which the responseFilterer value is set
-func WithResponseFilterer(parent context.Context, info *ResponseFilterer) context.Context {
+func WithResponseFilterer(parent context.Context, info ResponseFilterer) context.Context {
 	return context.WithValue(parent, responseFiltererKey, info)
 }
 
 // ResponseFiltererFrom returns the value of the responseFilterer key on the ctx
-func ResponseFiltererFrom(ctx context.Context) (*ResponseFilterer, bool) {
+func ResponseFiltererFrom(ctx context.Context) (ResponseFilterer, bool) {
 	return responseFiltererKey.Value(ctx)
 }
 
-// NewResponseFilterer creates a new ResponseFilterer with the given parameters.
-// It is used to filter the response based on the rules and authz data.
-func NewResponseFilterer(restMapper meta.RESTMapper, input *rules.ResolveInput, filteredRules []*rules.RunnableRule, client v1.PermissionsServiceClient) (*ResponseFilterer, error) {
-	return &ResponseFilterer{
-		restMapper: restMapper,
-		input:      input,
-
-		filteredRules: filteredRules,
-		client:        client,
-
-		prefilteredStarted: false,
-		preFilterCompleted: make(chan prefilterResult, 1),
-	}, nil
-}
-
 // NewEmptyResponseFilterer creates a new ResponseFilterer that does not run any pre-filters.
-func NewEmptyResponseFilterer(restMapper meta.RESTMapper, input *rules.ResolveInput) *ResponseFilterer {
-	rf := &ResponseFilterer{
+func NewEmptyResponseFilterer(restMapper meta.RESTMapper, input *rules.ResolveInput) ResponseFilterer {
+	rf := &StandardResponseFilterer{
 		restMapper: restMapper,
 		input:      input,
 
@@ -78,8 +76,34 @@ func NewEmptyResponseFilterer(restMapper meta.RESTMapper, input *rules.ResolveIn
 	return rf
 }
 
-// ResponseFilterer is used to filter the response based on the rules and authz data.
-type ResponseFilterer struct {
+// NewResponseFilterer creates a new ResponseFilterer with the given parameters.
+// It is used to filter the response based on the rules and authz data.
+func NewResponseFilterer(restMapper meta.RESTMapper, input *rules.ResolveInput, filteredRules []*rules.RunnableRule, client v1.PermissionsServiceClient) (*StandardResponseFilterer, error) {
+	return &StandardResponseFilterer{
+		restMapper: restMapper,
+		input:      input,
+
+		filteredRules: filteredRules,
+		client:        client,
+
+		prefilteredStarted: false,
+		preFilterCompleted: make(chan prefilterResult, 1),
+	}, nil
+}
+
+// NewResponseFiltererForWatch creates a new ResponseFilterer specifically for watch requests.
+func NewResponseFiltererForWatch(restMapper meta.RESTMapper, input *rules.ResolveInput, foundWatchRule *rules.RunnableRule, watchClient v1.WatchServiceClient, checkClient v1.PermissionsServiceClient) (*WatchResponseFilterer, error) {
+	return &WatchResponseFilterer{
+		restMapper:  restMapper,
+		input:       input,
+		watchRule:   foundWatchRule,
+		checkClient: checkClient,
+		watchClient: watchClient,
+	}, nil
+}
+
+// StandardResponseFilterer is used to filter the response based on the rules and authz data.
+type StandardResponseFilterer struct {
 	restMapper meta.RESTMapper
 	input      *rules.ResolveInput
 
@@ -92,33 +116,38 @@ type ResponseFilterer struct {
 
 // RunPreFilters runs the pre-filters for the request, if any. If not invoked before the response is filtered,
 // an error will be returned by the FilterResp method.
-func (rf *ResponseFilterer) RunPreFilters(req *http.Request) error {
+func (rf *StandardResponseFilterer) RunPreFilters(req *http.Request) error {
 	if rf.prefilteredStarted {
 		return fmt.Errorf("pre-filters already started, cannot run again")
 	}
 
 	rf.prefilteredStarted = true
 
-	prefilterRules := preFilterRules(rf.filteredRules)
-	if len(prefilterRules) == 0 {
+	prefilterRule, err := singlePreFilterRule(rf.filteredRules)
+	if err != nil {
+		klog.FromContext(req.Context()).V(2).Error(err, "error getting single pre-filter rule", "request", req)
+		return fmt.Errorf("error getting single pre-filter rule: %w", err)
+	}
+
+	if prefilterRule == nil {
 		// No pre-filters to run, just signal completion
 		rf.preFilterCompleted <- prefilterResult{allAllowed: true}
 		return nil
 	}
 
-	if len(prefilterRules) > 1 {
+	if len(prefilterRule.PreFilter) > 1 {
 		return fmt.Errorf("multiple pre-filters found, only one is allowed per request")
 	}
 
-	if len(prefilterRules[0].PreFilter) == 0 {
+	if len(prefilterRule.PreFilter) == 0 {
 		return fmt.Errorf("pre-filter rule has no filters defined")
 	}
 
-	if len(prefilterRules[0].PreFilter) > 1 {
+	if len(prefilterRule.PreFilter) > 1 {
 		return fmt.Errorf("pre-filter rule has multiple filters defined, only one is allowed")
 	}
 
-	f := prefilterRules[0].PreFilter[0]
+	f := prefilterRule.PreFilter[0]
 	rel, err := rules.ResolveRel(f.Rel, rf.input)
 	if err != nil {
 		return err
@@ -151,26 +180,25 @@ func (rf *ResponseFilterer) RunPreFilters(req *http.Request) error {
 // FilterResp filters the response based on the rules and authz data
 // It reads the response body, decodes it, applies the filters, and writes the filtered
 // response back to the original response object.
-func (rf *ResponseFilterer) FilterResp(resp *http.Response) error {
+func (rf *StandardResponseFilterer) FilterResp(resp *http.Response) error {
 	if !rf.prefilteredStarted {
 		// If pre-filters were not started, we cannot filter the response.
 		return fmt.Errorf("pre-filters were not started, cannot filter response")
 	}
 
+	ctx, cancel := context.WithTimeout(resp.Request.Context(), prefilterTimeout)
+	defer cancel()
+
 	// Wait for pre-filter to complete, if any.
 	select {
-	case <-resp.Request.Context().Done():
-		return resp.Request.Context().Err()
-
-	case <-time.After(prefilterTimeout):
-		return fmt.Errorf("pre-filter timed out")
+	case <-ctx.Done():
+		return ctx.Err()
 
 	case result := <-rf.preFilterCompleted:
 		if result.err != nil {
 			return fmt.Errorf("pre-filter error: %w", result.err)
 		}
 
-		// Filter the response based on the found prefiltered results, if any.
 		info, ok := request.RequestInfoFrom(resp.Request.Context())
 		if !ok {
 			return fmt.Errorf("no info")
@@ -190,10 +218,7 @@ func (rf *ResponseFilterer) FilterResp(resp *http.Response) error {
 		}
 		recognized := scheme.Scheme.Recognizes(gvk)
 
-		if info.Verb == "watch" {
-			return fmt.Errorf("watch requests are not currently supported")
-		}
-
+		// Filter the response based on the found prefiltered results, if any.
 		switch {
 		case resp.StatusCode >= 400 && resp.StatusCode <= 499:
 			return nil
@@ -314,28 +339,7 @@ func (rf *ResponseFilterer) FilterResp(resp *http.Response) error {
 	}
 }
 
-func writeResp(filteredBody bytes.Buffer, filterErr error, resp *http.Response) error {
-	// if there was an error, replace the body with an error message
-	if filterErr != nil {
-		filteredBody.Reset()
-		var merr error
-		errBody, merr := kjson.Marshal(k8serrors.NewUnauthorized(filterErr.Error()))
-		if merr != nil {
-			return merr
-		}
-		filteredBody.Write(errBody)
-		resp.StatusCode = http.StatusUnauthorized
-	}
-
-	resp.Body = io.NopCloser(&filteredBody)
-	resp.Header["Content-Length"] = []string{fmt.Sprint(filteredBody.Len())}
-	if filteredBody.Len() == 0 {
-		resp.StatusCode = http.StatusNotFound
-	}
-	return nil
-}
-
-func (rf *ResponseFilterer) filterTable(body []byte, result prefilterResult) ([]byte, error) {
+func (rf *StandardResponseFilterer) filterTable(body []byte, result prefilterResult) ([]byte, error) {
 	// NOTE: as of kube 1.33, tables are always json encoded.
 	// this may change in the future.
 	table := metav1.Table{}
@@ -362,7 +366,7 @@ func (rf *ResponseFilterer) filterTable(body []byte, result prefilterResult) ([]
 	return kjson.Marshal(table)
 }
 
-func (rf *ResponseFilterer) filterList(originalObj runtime.Object, result prefilterResult) error {
+func (rf *StandardResponseFilterer) filterList(originalObj runtime.Object, result prefilterResult) error {
 	allowedItems := make([]runtime.Object, 0)
 
 	if err := meta.EachListItem(originalObj, func(item runtime.Object) error {
@@ -389,7 +393,7 @@ func (rf *ResponseFilterer) filterList(originalObj runtime.Object, result prefil
 }
 
 // filterObject checks if the object is in the allowedNN map and returns an error if not.
-func (rf *ResponseFilterer) filterObject(obj runtime.Object, result prefilterResult) error {
+func (rf *StandardResponseFilterer) filterObject(obj runtime.Object, result prefilterResult) error {
 	objMeta, err := meta.Accessor(obj)
 	if err != nil {
 		return fmt.Errorf("failed to get object metadata: %w", err)
@@ -401,4 +405,333 @@ func (rf *ResponseFilterer) filterObject(obj runtime.Object, result prefilterRes
 
 	klog.V(3).InfoS("denied resource get", "resource", types.NamespacedName{Name: objMeta.GetName(), Namespace: objMeta.GetNamespace()}.String())
 	return fmt.Errorf("unauthorized")
+}
+
+type decodedWatchEvent struct {
+	watch.Event
+	raw []byte
+	gvk *schema.GroupVersionKind
+}
+
+// WatchResponseFilterer is used to filter watch responses based on the rules and authz data.
+type WatchResponseFilterer struct {
+	restMapper  meta.RESTMapper
+	input       *rules.ResolveInput
+	watchRule   *rules.RunnableRule
+	checkClient v1.PermissionsServiceClient
+	watchClient v1.WatchServiceClient
+
+	watchResultTracker *watchResultTracker
+}
+
+func (rf *WatchResponseFilterer) RunWatcher(req *http.Request) error {
+	if rf.watchResultTracker != nil {
+		return fmt.Errorf("watcher already started, cannot run again")
+	}
+
+	rf.watchResultTracker = &watchResultTracker{
+		foundChanged: make(chan resultChange),
+	}
+
+	if len(rf.watchRule.PreFilter) != 1 {
+		return fmt.Errorf("watch rule must have exactly one pre-filter defined")
+	}
+
+	rel, err := rules.ResolveRel(rf.watchRule.PreFilter[0].Rel, rf.input)
+	if err != nil {
+		return err
+	}
+
+	resolvedConfig := &rules.ResolvedPreFilter{
+		Rel:                   rel,
+		NameFromObjectID:      rf.watchRule.PreFilter[0].NameFromObjectID,
+		NamespaceFromObjectID: rf.watchRule.PreFilter[0].NamespaceFromObjectID,
+	}
+
+	go RunWatch(req.Context(), rf.watchClient, rf.checkClient, rf.watchResultTracker, resolvedConfig, rf.input)
+	return nil
+}
+
+func (rf *WatchResponseFilterer) FilterResp(resp *http.Response) error {
+	if rf.watchResultTracker == nil {
+		// If watcher was not started, we cannot filter the response.
+		return fmt.Errorf("watcher was not started, cannot filter response")
+	}
+
+	// Filter based on watch.
+	info, ok := request.RequestInfoFrom(resp.Request.Context())
+	if !ok {
+		return fmt.Errorf("no info")
+	}
+
+	gvk, err := rf.restMapper.KindFor(schema.GroupVersionResource{
+		Group:    info.APIGroup,
+		Version:  info.APIVersion,
+		Resource: info.Resource,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get GVK for %s: %w", info.Resource, err)
+	}
+	recognized := scheme.Scheme.Recognizes(gvk)
+
+	return rf.filterWatch(resp, recognized)
+}
+
+func (rf *WatchResponseFilterer) filterWatch(resp *http.Response, recognized bool) error {
+	originalRespBody := resp.Body
+	var newRespBody *io.PipeWriter
+	resp.Body, newRespBody = io.Pipe()
+
+	// Use proper Kubernetes content negotiation for stream decoding
+	contentType := resp.Header.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return fmt.Errorf("failed to parse content type %s: %w", contentType, err)
+	}
+
+	// Create a proper client negotiator for stream decoding
+	negotiator := runtime.NewClientNegotiator(codecs, schema.GroupVersion{})
+	_, streamingSerializer, framer, err := negotiator.StreamDecoder(mediaType, params)
+	if err != nil {
+		return fmt.Errorf("failed to get stream decoder for %s: %w", mediaType, err)
+	}
+	if streamingSerializer == nil || framer == nil {
+		return fmt.Errorf("no streaming serializer or framer found for content type %s", contentType)
+	}
+
+	namesLock := sync.RWMutex{}
+	allowedNames := mapz.NewSet[types.NamespacedName]()
+
+	go func() {
+		defer func() {
+			klog.V(4).InfoS("closing watch body")
+			// may have already been closed if there was an error
+			_ = newRespBody.Close()
+		}()
+
+		klog.V(3).InfoS("running watch operation against Kubernetes")
+		events := make(chan decodedWatchEvent)
+		done := make(chan struct{})
+
+		// Create frame capturing reader
+		capturingReader := newFrameCapturingReader(originalRespBody)
+		defer func() {
+			if err := capturingReader.Close(); err != nil {
+				klog.V(3).ErrorS(err, "error closing reader")
+			}
+		}()
+
+		// Monitor context cancellation and close resources
+		go func() {
+			<-resp.Request.Context().Done()
+			klog.V(3).InfoS("context canceled, closing watch filtering")
+			if err := capturingReader.Close(); err != nil {
+				klog.V(3).ErrorS(err, "error closing reader")
+			}
+			close(done)
+			klog.V(4).InfoS("done closing")
+		}()
+
+		eventDecoder := streaming.NewDecoder(framer.NewFrameReader(capturingReader), streamingSerializer)
+		defer func() {
+			if err := eventDecoder.Close(); err != nil {
+				klog.V(3).ErrorS(err, "error closing event decoder")
+			}
+		}()
+
+		writeChunk := func(chunk []byte) error {
+			klog.V(4).InfoS("writing chunk to resp body", "size", len(chunk))
+			_, err := newRespBody.Write(chunk)
+			if err != nil {
+				klog.V(3).ErrorS(err, "error writing chunk to response body")
+				return err
+			}
+			return nil
+		}
+
+		go func() {
+			defer close(events)
+			klog.V(4).InfoS("watching for chunks")
+			for {
+				select {
+				case <-done:
+					klog.V(4).InfoS("stopping chunk watch due to cancellation")
+					return
+				default:
+				}
+
+				// Start capturing bytes for this frame
+				capturingReader.startCapture()
+
+				var watchEvent metav1.WatchEvent
+				obj, gvk, err := eventDecoder.Decode(nil, &watchEvent)
+
+				// Finish capturing and get the raw bytes for this frame
+				rawBytes := capturingReader.finishCapture()
+
+				if err != nil {
+					klog.V(3).ErrorS(err, "decode error for watch event", "captured_bytes", len(rawBytes))
+					return
+				}
+
+				// Watch can send Status messages instead of errors.
+				// These will pass through directly to the client.
+				if gvk.Kind == "Status" && gvk.Version == "v1" {
+					klog.V(3).InfoS("got status event, passing through")
+					if err := writeChunk(rawBytes); err != nil {
+						klog.V(3).ErrorS(err, "error writing status watch event")
+					}
+					return
+				}
+
+				if obj != &watchEvent {
+					klog.V(3).InfoS("unexpected decode result")
+					continue
+				}
+
+				var actualObj runtime.Object
+				var itemGVK *schema.GroupVersionKind
+				if recognized {
+					actualObj, itemGVK, err = scheme.Codecs.UniversalDeserializer().Decode(watchEvent.Object.Raw, nil, nil)
+				} else {
+					// custom types
+					actualObj, itemGVK, err = unstructured.UnstructuredJSONScheme.Decode(watchEvent.Object.Raw, nil, nil)
+				}
+				if err != nil {
+					continue
+				}
+				klog.V(4).InfoS("got watch event", "object", actualObj, "gvk", itemGVK)
+
+				decoded := decodedWatchEvent{
+					raw: rawBytes,
+					gvk: gvk,
+					Event: watch.Event{
+						Type:   watch.EventType(watchEvent.Type),
+						Object: actualObj,
+					},
+				}
+
+				select {
+				case events <- decoded:
+					klog.V(4).InfoS("sent watch event")
+				case <-done:
+					return
+				}
+			}
+		}()
+
+		bufferedEvents := make(map[types.NamespacedName]decodedWatchEvent)
+		for {
+			defer func() { klog.V(4).InfoS("watch event writer closed") }()
+			select {
+			case event, ok := <-events:
+				if !ok {
+					klog.V(4).InfoS("events channel closed")
+					return
+				}
+				select {
+				case <-done:
+					klog.V(4).InfoS("stopping event watch due to cancellation")
+					return
+				default:
+				}
+
+				// this is likely an error message or status we just need to
+				// pass through
+				if event.gvk == nil {
+					if err := writeChunk(event.raw); err != nil {
+						klog.V(3).ErrorS(err, "error writing chunk for nil gvk event")
+					}
+					continue
+				}
+
+				if event.Type == watch.Added || event.Type == watch.Modified {
+					var pom metav1.PartialObjectMetadata
+
+					// Try to get metadata from the decoded object
+					if accessor, err := meta.Accessor(event.Object); err == nil {
+						pom.Name = accessor.GetName()
+						pom.Namespace = accessor.GetNamespace()
+					} else {
+						klog.V(3).InfoS("could not get object metadata")
+						continue
+					}
+					klog.V(4).InfoS("got watch event", "name", pom.Name, "namespace", pom.Namespace)
+
+					// Handle Table unwrapping if needed
+					if event.gvk.Group == "meta.k8s.io" && event.gvk.Kind == "Table" {
+						for _, r := range event.Object.(*metav1.Table).Rows {
+							var rowpom metav1.PartialObjectMetadata
+							if err := json.Unmarshal(r.Object.Raw, &rowpom); err != nil {
+								klog.V(3).ErrorS(err, "error unmarshaling row object")
+								continue
+							}
+							pom = rowpom
+							break
+						}
+					}
+
+					namesLock.RLock()
+					ok := allowedNames.Has(types.NamespacedName{Name: pom.Name, Namespace: pom.Namespace})
+					namesLock.RUnlock()
+
+					klog.V(4).InfoS("checked if resource is allowed", "name", pom.Name, "namespace", pom.Namespace, "allowed", ok)
+					if ok {
+						if err := writeChunk(event.raw); err != nil {
+							break
+						}
+					} else {
+						bufferedEvents[types.NamespacedName{Name: pom.Name, Namespace: pom.Namespace}] = event
+					}
+				}
+			case change := <-rf.watchResultTracker.foundChanged:
+				if change.allowed {
+					namesLock.Lock()
+					allowedNames.Add(change.namespacedName)
+					namesLock.Unlock()
+
+					if chunk, ok := bufferedEvents[change.namespacedName]; ok {
+						err := writeChunk(chunk.raw)
+						if err != nil {
+							break
+						} else {
+							delete(bufferedEvents, change.namespacedName)
+						}
+					}
+				} else {
+					namesLock.Lock()
+					allowedNames.Delete(change.namespacedName)
+					namesLock.Unlock()
+
+					delete(bufferedEvents, change.namespacedName)
+				}
+			case <-done:
+				klog.V(4).InfoS("stopping event processing due to cancellation")
+				return
+			}
+		}
+	}()
+
+	return nil
+}
+
+func writeResp(filteredBody bytes.Buffer, filterErr error, resp *http.Response) error {
+	// if there was an error, replace the body with an error message
+	if filterErr != nil {
+		filteredBody.Reset()
+		var merr error
+		errBody, merr := kjson.Marshal(k8serrors.NewUnauthorized(filterErr.Error()))
+		if merr != nil {
+			return merr
+		}
+		filteredBody.Write(errBody)
+		resp.StatusCode = http.StatusUnauthorized
+	}
+
+	resp.Body = io.NopCloser(&filteredBody)
+	resp.Header["Content-Length"] = []string{fmt.Sprint(filteredBody.Len())}
+	if filteredBody.Len() == 0 {
+		resp.StatusCode = http.StatusNotFound
+	}
+	return nil
 }

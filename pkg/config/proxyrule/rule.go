@@ -99,6 +99,10 @@ type Spec struct {
 	// Update contains the updates to perform if the request matches, the checks succeed,
 	// and this is a write operation of some kind (Create, Update, or Delete).
 	Update Update `json:"update,omitempty" validate:"omitempty"`
+
+	// Watch defines a watch request to perform if the request matches. Only applies
+	// to Watch operations.
+	Watch WatchConfig `json:"watch,omitempty" validate:"omitempty"`
 }
 
 // Update is an update to perform against the SpiceDB relationships.
@@ -195,6 +199,20 @@ type PostFilter struct {
 	// This template will be applied to each object in the response to determine if it should be included.
 	// Use object fields like {{metadata.name}} and {{metadata.namespace}} in the template.
 	CheckPermissionTemplate *StringOrTemplate `json:"checkPermissionTemplate" validate:"required"`
+}
+
+// WatchConfig defines a watch request to perform if the request matches.
+type WatchConfig struct {
+	// FromObjectIDNameExpr is a Bloblang expression defining how to construct an allowed Name from an
+	// LR response.
+	FromObjectIDNameExpr string `json:"fromObjectIDNameExpr,omitempty" validate:"omitempty,min=1"`
+
+	// FromObjectIDNamespaceExpr is a Bloblang expression defining how to construct an allowed Namespace
+	// from an LR  response.
+	FromObjectIDNamespaceExpr string `json:"fromObjectIDNamespaceExpr,omitempty" validate:"omitempty,min=1"`
+
+	// WatchMatchingResources is a template defining a Watch request to perform.
+	WatchMatchingResources *StringOrTemplate `json:"watchMatchingResources" validate:"required"`
 }
 
 // RelationshipTemplate represents a relationship where some fields may be

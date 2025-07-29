@@ -120,14 +120,42 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 
 		klog.FromContext(ctx).V(4).Info("no update rule found for request; performing directly")
 
-		// TODO(jschorr): Bring back support for watch requests.
+		// If this is a watch request, we need to handle it differently, as it is a long-running operation.
 		if input.Request.Verb == "watch" {
-			klog.FromContext(ctx).V(2).Info("watch requests are not currently supported", "verb", input.Request.Verb)
-			handleError(w, failed, req, fmt.Errorf("watch requests are not currently supported"))
+			foundWatchRule, err := singlePreFilterRule(filteredRules)
+			if err != nil {
+				klog.FromContext(ctx).V(2).Error(err, "error getting single pre-filter rule", inputKeyValues...)
+				handleError(w, failed, req, err)
+				return
+			}
+
+			if foundWatchRule == nil {
+				klog.FromContext(ctx).V(2).Info("no watch rule found for request", inputKeyValues...)
+				handleError(w, failed, req, fmt.Errorf("no watch rule found for request"))
+				return
+			}
+
+			responseFilterer, err := NewResponseFiltererForWatch(restMapper, input, foundWatchRule, watchClient, permissionsClient)
+			if err != nil {
+				klog.FromContext(ctx).V(2).Error(err, "failed to create response filterer", inputKeyValues...)
+				handleError(w, failed, req, err)
+				return
+			}
+
+			req = req.WithContext(WithResponseFilterer(req.Context(), responseFilterer))
+
+			// Kick off the watch request.
+			if err := responseFilterer.RunWatcher(req); err != nil {
+				klog.FromContext(ctx).V(2).Error(err, "failed to run watcher", inputKeyValues...)
+				handleError(w, failed, req, err)
+				return
+			}
+
+			handler.ServeHTTP(w, req)
 			return
 		}
 
-		// all other requests are filtered by matching rules
+		// All other requests are filtered by matching rules.
 		responseFilterer, err := NewResponseFilterer(restMapper, input, filteredRules, permissionsClient)
 		if err != nil {
 			klog.FromContext(ctx).V(2).Error(err, "failed to create response filterer", inputKeyValues...)

@@ -45,3 +45,17 @@ func postFilterRules(matchingRules []*rules.RunnableRule) []*rules.RunnableRule 
 		return len(r.PostFilter) > 0
 	})
 }
+
+func singlePreFilterRule(matchingRules []*rules.RunnableRule) (*rules.RunnableRule, error) {
+	rulesWithPreFilter := preFilterRules(matchingRules)
+
+	if len(rulesWithPreFilter) == 0 {
+		return nil, nil
+	}
+
+	if len(rulesWithPreFilter) > 1 {
+		return nil, fmt.Errorf("multiple pre-filter rules matched: %v", rulesWithPreFilter)
+	}
+
+	return rulesWithPreFilter[0], nil
+}
