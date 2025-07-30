@@ -86,7 +86,7 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 
 		// Run all checks for this request
 		if err := runAllMatchingChecks(ctx, filteredRules, input, permissionsClient); err != nil {
-			klog.FromContext(ctx).V(2).Error(err, "input failed authorization checks", inputKeyValues...)
+			klog.FromContext(ctx).V(2).Info("input failed authorization checks", inputKeyValues...)
 			handleError(w, failed, req, err)
 			return
 		}
