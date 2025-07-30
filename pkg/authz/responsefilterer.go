@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -166,6 +168,12 @@ func (rf *StandardResponseFilterer) RunPreFilters(req *http.Request) error {
 
 		result, err := runLookupResources(req.Context(), rf.client, filter, rf.input)
 		if err != nil {
+			if status.Code(err) == codes.Canceled {
+				klog.FromContext(req.Context()).V(3).Info("pre-filter canceled", "request", req)
+				rf.preFilterCompleted <- prefilterResult{err: err}
+				return
+			}
+
 			klog.FromContext(req.Context()).Error(err, "error running pre-filter", "request", req)
 			rf.preFilterCompleted <- prefilterResult{
 				err: err,
