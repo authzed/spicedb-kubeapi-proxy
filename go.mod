@@ -16,6 +16,7 @@ require (
 	github.com/go-playground/validator/v10 v10.27.0
 	github.com/google/cel-go v0.25.0
 	github.com/google/uuid v1.6.0
+	github.com/puzpuzpuz/xsync/v4 v4.1.0
 	github.com/samber/lo v1.51.0
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/pflag v1.0.6

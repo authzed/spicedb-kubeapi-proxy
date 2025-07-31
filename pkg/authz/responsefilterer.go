@@ -9,7 +9,6 @@ import (
 	"mime"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -32,7 +31,7 @@ import (
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/authzed/ctxkey"
-	"github.com/authzed/spicedb/pkg/genutil/mapz"
+	"github.com/puzpuzpuz/xsync/v4"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
@@ -400,7 +399,7 @@ func (rf *StandardResponseFilterer) filterList(originalObj runtime.Object, resul
 	return meta.SetList(originalObj, allowedItems)
 }
 
-// filterObject checks if the object is in the allowedNN map and returns an error if not.
+// filterObject checks if the object is in the allowed set in the result and returns an error if not.
 func (rf *StandardResponseFilterer) filterObject(obj runtime.Object, result prefilterResult) error {
 	objMeta, err := meta.Accessor(obj)
 	if err != nil {
@@ -507,9 +506,7 @@ func (rf *WatchResponseFilterer) filterWatch(resp *http.Response, recognized boo
 		return fmt.Errorf("no streaming serializer or framer found for content type %s", contentType)
 	}
 
-	namesLock := sync.RWMutex{}
-	allowedNames := mapz.NewSet[types.NamespacedName]()
-
+	allowedNames := xsync.NewMap[types.NamespacedName, bool]()
 	go func() {
 		defer func() {
 			klog.V(4).InfoS("closing watch body")
@@ -679,10 +676,7 @@ func (rf *WatchResponseFilterer) filterWatch(resp *http.Response, recognized boo
 						}
 					}
 
-					namesLock.RLock()
-					ok := allowedNames.Has(types.NamespacedName{Name: pom.Name, Namespace: pom.Namespace})
-					namesLock.RUnlock()
-
+					_, ok := allowedNames.Load(types.NamespacedName{Name: pom.Name, Namespace: pom.Namespace})
 					klog.V(4).InfoS("checked if resource is allowed", "name", pom.Name, "namespace", pom.Namespace, "allowed", ok)
 					if ok {
 						if err := writeChunk(event.raw); err != nil {
@@ -694,9 +688,7 @@ func (rf *WatchResponseFilterer) filterWatch(resp *http.Response, recognized boo
 				}
 			case change := <-rf.watchResultTracker.foundChanged:
 				if change.allowed {
-					namesLock.Lock()
-					allowedNames.Add(change.namespacedName)
-					namesLock.Unlock()
+					allowedNames.Store(change.namespacedName, true)
 
 					if chunk, ok := bufferedEvents[change.namespacedName]; ok {
 						err := writeChunk(chunk.raw)
@@ -707,9 +699,7 @@ func (rf *WatchResponseFilterer) filterWatch(resp *http.Response, recognized boo
 						}
 					}
 				} else {
-					namesLock.Lock()
 					allowedNames.Delete(change.namespacedName)
-					namesLock.Unlock()
 
 					delete(bufferedEvents, change.namespacedName)
 				}
