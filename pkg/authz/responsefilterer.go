@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/puzpuzpuz/xsync/v4"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,7 +32,6 @@ import (
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/authzed/ctxkey"
-	"github.com/puzpuzpuz/xsync/v4"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
