@@ -46,7 +46,8 @@ func (h *ActivityHandler) WriteToSpiceDB(ctx context.Context, input *v1.WriteRel
 	if err != nil {
 		return nil, fmt.Errorf("failed to create idempotency key for payload: %w", err)
 	}
-	cloned := input
+
+	cloned := input.CloneVT()
 	cloned.Updates = append(cloned.Updates, &v1.RelationshipUpdate{
 		Operation:    v1.RelationshipUpdate_OPERATION_CREATE,
 		Relationship: idempotencyKey,
