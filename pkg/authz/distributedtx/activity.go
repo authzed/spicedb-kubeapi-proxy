@@ -40,11 +40,11 @@ type ActivityHandler struct {
 }
 
 // WriteToSpiceDB writes relationships to spicedb and returns any errors.
-func (h *ActivityHandler) WriteToSpiceDB(ctx context.Context, input *v1.WriteRelationshipsRequest, workflowID string) (struct{}, error) {
+func (h *ActivityHandler) WriteToSpiceDB(ctx context.Context, input *v1.WriteRelationshipsRequest, workflowID string) (*v1.ZedToken, error) {
 	failpoints.FailPoint("panicWriteSpiceDB")
 	idempotencyKey, err := idempotencyKeyForPayload(input, workflowID)
 	if err != nil {
-		return struct{}{}, fmt.Errorf("failed to create idempotency key for payload: %w", err)
+		return nil, fmt.Errorf("failed to create idempotency key for payload: %w", err)
 	}
 	cloned := input
 	cloned.Updates = append(cloned.Updates, &v1.RelationshipUpdate{
@@ -52,23 +52,23 @@ func (h *ActivityHandler) WriteToSpiceDB(ctx context.Context, input *v1.WriteRel
 		Relationship: idempotencyKey,
 	})
 
-	_, err = h.PermissionClient.WriteRelationships(ctx, input)
+	response, err := h.PermissionClient.WriteRelationships(ctx, input)
 	failpoints.FailPoint("panicSpiceDBWriteResp")
 	if err != nil {
-		exists, relErr := isRelExists(ctx, h.PermissionClient, idempotencyKey)
+		exists, evaluatedAt, relErr := isRelExists(ctx, h.PermissionClient, idempotencyKey)
 		if relErr != nil {
-			return struct{}{}, relErr
+			return nil, relErr
 		}
 
 		if exists {
 			klog.Infof("idempotency key already exists, relationships were already written: %v", idempotencyKey)
-			return struct{}{}, nil // idempotent write, key already exists
+			return evaluatedAt, nil // idempotent write, key already exists
 		}
 
-		return struct{}{}, err
+		return nil, err
 	}
 
-	return struct{}{}, nil
+	return response.WrittenAt, nil
 }
 
 // idempotencyKeyForPayload computes an idempotency key off a proto payload for a request, and the workflow ID that executed it.
@@ -93,30 +93,37 @@ func idempotencyKeyForPayload(input *v1.WriteRelationshipsRequest, workflowID st
 	}, nil
 }
 
-func isRelExists(ctx context.Context, client v1.PermissionsServiceClient, toCheck *v1.Relationship) (bool, error) {
+func isRelExists(ctx context.Context, client v1.PermissionsServiceClient, toCheck *v1.Relationship) (bool, *v1.ZedToken, error) {
 	req := readRequestForRel(toCheck)
 
 	resp, err := client.ReadRelationships(ctx, req)
 	if err != nil {
 		klog.ErrorS(err, "failed to check existence of relationship", "rel", toCheck)
-		return false, fmt.Errorf("failed to determine if relationship exists: %w", err)
+		return false, nil, fmt.Errorf("failed to determine if relationship exists: %w", err)
 	}
 
 	var exists bool
-	_, err = resp.Recv()
+	var token *v1.ZedToken
+	res, err := resp.Recv()
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
-			return false, fmt.Errorf("failed to determine existence of relationship: %w", err)
+			return false, nil, fmt.Errorf("failed to determine existence of relationship: %w", err)
 		}
 	} else {
+		token = res.ReadAt
 		exists = true
 	}
 
-	return exists, nil
+	return exists, token, nil
 }
 
 func readRequestForRel(lock *v1.Relationship) *v1.ReadRelationshipsRequest {
 	req := &v1.ReadRelationshipsRequest{
+		Consistency: &v1.Consistency{
+			Requirement: &v1.Consistency_FullyConsistent{
+				FullyConsistent: true,
+			},
+		},
 		RelationshipFilter: &v1.RelationshipFilter{
 			ResourceType:       lock.Resource.ObjectType,
 			OptionalResourceId: lock.Resource.ObjectId,

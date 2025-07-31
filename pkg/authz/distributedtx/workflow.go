@@ -106,7 +106,7 @@ func (r *RollbackRelationships) Cleanup(ctx workflow.Context, workflowID, reason
 	}
 
 	for {
-		f := workflow.ExecuteActivity[struct{}](ctx,
+		f := workflow.ExecuteActivity[*v1.ZedToken](ctx,
 			workflow.DefaultActivityOptions,
 			activityHandler.WriteToSpiceDB,
 			&v1.WriteRelationshipsRequest{Updates: updates}, workflowID)
@@ -181,7 +181,7 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 		Updates:               append(updates, resourceLockRel),
 	}
 
-	_, err := workflow.ExecuteActivity[struct{}](ctx,
+	_, err := workflow.ExecuteActivity[*v1.ZedToken](ctx,
 		workflow.DefaultActivityOptions,
 		activityHandler.WriteToSpiceDB,
 		arg, instance.InstanceID).Get(ctx)
@@ -312,7 +312,7 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 
 	instance := workflow.WorkflowInstance(ctx)
 	rollback := NewRollbackRelationships(updates...)
-	_, err := workflow.ExecuteActivity[struct{}](ctx,
+	_, err := workflow.ExecuteActivity[*v1.ZedToken](ctx,
 		workflow.DefaultActivityOptions,
 		activityHandler.WriteToSpiceDB,
 		&v1.WriteRelationshipsRequest{
