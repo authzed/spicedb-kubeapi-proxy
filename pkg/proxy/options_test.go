@@ -210,6 +210,7 @@ func newTCPSpiceDB(t *testing.T, ctx context.Context) (server.RunnableServer, st
 		server.WithDispatchCacheConfig(server.CacheConfig{Enabled: false, Metrics: false}),
 		server.WithNamespaceCacheConfig(server.CacheConfig{Enabled: false, Metrics: false}),
 		server.WithClusterDispatchCacheConfig(server.CacheConfig{Enabled: false, Metrics: false}),
+		server.WithEnableExperimentalRelationshipExpiration(true),
 		server.WithDatastore(ds),
 	}
 

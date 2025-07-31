@@ -12,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/rest/fake"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 )
 
 type testRoundTripper struct {
@@ -104,4 +106,19 @@ func TestCheckKubeResourceError(t *testing.T) {
 	})
 
 	require.Error(t, err)
+}
+
+func TestIdempotencyKey(t *testing.T) {
+	payload := &v1.WriteRelationshipsRequest{}
+	key, err := idempotencyKeyForPayload(payload, "test-key")
+	require.NoError(t, err)
+	require.NotNil(t, key)
+	require.Equal(t, "test-key", key.Resource.ObjectId)
+	require.NotNil(t, key.OptionalExpiresAt)
+
+	sameKey, err := idempotencyKeyForPayload(payload, "test-key")
+	require.NoError(t, err)
+	key.OptionalExpiresAt = nil
+	sameKey.OptionalExpiresAt = nil
+	require.True(t, key.EqualMessageVT(sameKey))
 }

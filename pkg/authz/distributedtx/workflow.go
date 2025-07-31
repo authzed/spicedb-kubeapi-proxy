@@ -83,7 +83,7 @@ func (r *RollbackRelationships) WithRels(relationships ...*v1.RelationshipUpdate
 	return r
 }
 
-func (r *RollbackRelationships) Cleanup(ctx workflow.Context, reason string) {
+func (r *RollbackRelationships) Cleanup(ctx workflow.Context, workflowID, reason string) {
 	invert := func(op v1.RelationshipUpdate_Operation) v1.RelationshipUpdate_Operation {
 		switch op {
 		case v1.RelationshipUpdate_OPERATION_CREATE:
@@ -106,10 +106,10 @@ func (r *RollbackRelationships) Cleanup(ctx workflow.Context, reason string) {
 	}
 
 	for {
-		f := workflow.ExecuteActivity[*v1.WriteRelationshipsResponse](ctx,
+		f := workflow.ExecuteActivity[*v1.ZedToken](ctx,
 			workflow.DefaultActivityOptions,
 			activityHandler.WriteToSpiceDB,
-			&v1.WriteRelationshipsRequest{Updates: updates})
+			&v1.WriteRelationshipsRequest{Updates: updates}, workflowID)
 
 		if _, err := f.Get(ctx); err != nil {
 			if s, ok := status.FromError(err); ok {
@@ -181,10 +181,10 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 		Updates:               append(updates, resourceLockRel),
 	}
 
-	_, err := workflow.ExecuteActivity[*v1.WriteRelationshipsResponse](ctx,
+	_, err := workflow.ExecuteActivity[*v1.ZedToken](ctx,
 		workflow.DefaultActivityOptions,
 		activityHandler.WriteToSpiceDB,
-		arg).Get(ctx)
+		arg, instance.InstanceID).Get(ctx)
 	if err != nil {
 		// request failed for some reason
 		klog.ErrorS(err, "spicedb write failed")
@@ -192,7 +192,7 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 			klog.V(3).InfoS("update details", "update", u.String(), "relationship", u)
 		}
 
-		rollback.WithRels(updates...).Cleanup(ctx, "rollback due to failed SpiceDB write")
+		rollback.WithRels(updates...).Cleanup(ctx, instance.InstanceID, "rollback due to failed SpiceDB write")
 
 		// if the spicedb write fails, report it as a kube conflict error
 		// we return this for any error, not just lock conflicts, so that the
@@ -231,21 +231,21 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 		isSuccessful, err := isSuccessfulKuberentesOperation(input, out)
 		if err != nil {
 			klog.V(1).ErrorS(err, "error checking kube response", "response", out, "verb", input.RequestInfo.Verb)
-			rollback.WithRels(updates...).Cleanup(ctx, "rollback due to failed kube operation after max attempts")
+			rollback.WithRels(updates...).Cleanup(ctx, instance.InstanceID, "rollback due to failed kube operation after max attempts")
 			return nil, fmt.Errorf("failed to communicate with kubernetes after %d attempts: %w", MaxKubeAttempts, err)
 		}
 
 		if isSuccessful {
-			rollback.Cleanup(ctx, fmt.Sprintf("cleanup after successful kube operation: %s", input.RequestInfo.Verb))
+			rollback.Cleanup(ctx, instance.InstanceID, fmt.Sprintf("cleanup after successful kube operation: %s", input.RequestInfo.Verb))
 			return out, nil
 		}
 
 		klog.V(3).ErrorS(err, "unsuccessful Kube API operation on PessimisticWriteToSpiceDBAndKube", "response", out, "verb", input.RequestInfo.Verb)
-		rollback.WithRels(updates...).Cleanup(ctx, "rollback due to unsuccessful kube operation")
+		rollback.WithRels(updates...).Cleanup(ctx, instance.InstanceID, "rollback due to unsuccessful kube operation")
 		return out, nil
 	}
 
-	rollback.WithRels(updates...).Cleanup(ctx, "rollback due to failed kube operation after max attempts")
+	rollback.WithRels(updates...).Cleanup(ctx, instance.InstanceID, "rollback due to failed kube operation after max attempts")
 	return nil, fmt.Errorf("failed to communicate with kubernetes after %d attempts", MaxKubeAttempts)
 }
 
@@ -310,15 +310,16 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 		return nil, fmt.Errorf("failed to append deletes from filters: %w", err)
 	}
 
+	instance := workflow.WorkflowInstance(ctx)
 	rollback := NewRollbackRelationships(updates...)
-	_, err := workflow.ExecuteActivity[*v1.WriteRelationshipsResponse](ctx,
+	_, err := workflow.ExecuteActivity[*v1.ZedToken](ctx,
 		workflow.DefaultActivityOptions,
 		activityHandler.WriteToSpiceDB,
 		&v1.WriteRelationshipsRequest{
 			Updates: updates,
-		}).Get(ctx)
+		}, instance.InstanceID).Get(ctx)
 	if err != nil {
-		rollback.Cleanup(ctx, "rollback due to failed SpiceDB write")
+		rollback.Cleanup(ctx, instance.InstanceID, "rollback due to failed SpiceDB write")
 		klog.ErrorS(err, "SpiceDB write failed")
 		// report spicedb write errors as conflicts
 		return KubeConflict(err, input), nil
@@ -342,7 +343,7 @@ func OptimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput)
 
 		// if the object doesn't exist, clean up the spicedb write
 		if !exists {
-			rollback.Cleanup(ctx, "rollback due to failed Kube write")
+			rollback.Cleanup(ctx, instance.InstanceID, "rollback due to failed Kube write")
 			return nil, err
 		}
 	}
@@ -420,11 +421,29 @@ func ResourceLockRel(input *WriteObjInput, workflowID string) *v1.RelationshipUp
 // KubeConflict wraps an error and turns it into a standard kube conflict
 // response.
 func KubeConflict(err error, input *WriteObjInput) *KubeResp {
+	var group, resource, name string
+
+	if input == nil {
+		klog.Warningf("input to KubeConflict is nil for error %s", err)
+	} else {
+		if input.RequestInfo == nil {
+			klog.Warningf("input to KubeConflict has nil RequestInfo for error %s", err)
+		} else {
+			group = input.RequestInfo.APIGroup
+			resource = input.RequestInfo.Resource
+		}
+		if input.ObjectMeta == nil {
+			klog.Warningf("input to KubeConflict has nil ObjectMeta for error %s", err)
+		} else {
+			name = input.ObjectMeta.Name
+		}
+	}
+
 	var out KubeResp
 	statusError := k8serrors.NewConflict(schema.GroupResource{
-		Group:    input.RequestInfo.APIGroup,
-		Resource: input.RequestInfo.Resource,
-	}, input.ObjectMeta.Name, err)
+		Group:    group,
+		Resource: resource,
+	}, name, err)
 	out.StatusCode = http.StatusConflict
 	out.Err = *statusError
 	out.Body, _ = json.Marshal(statusError)

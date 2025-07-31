@@ -792,23 +792,20 @@ var _ = Describe("Proxy", func() {
 				Expect(owners[0].Relationship.Subject.Object.ObjectId).To(Equal("chani"))
 			})
 
-			It("recovers writes when spicedb write succeeds but crashes", func(ctx context.Context) {
+			It("recovers a `create` operation after a SpiceDB write followed by crash, retries and succeeds", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 
-				// make spicedb write crash on chani's namespace write
-				failpoints.EnableFailPoint("panicSpiceDBReadResp", 1)
+				// make spicedb write crash on chani's namespace write, it should be retried idempotently and succeed
+				failpoints.EnableFailPoint("panicSpiceDBWriteResp", 1)
 				err := CreateNamespace(ctx, chaniClient, chaniNamespace)
-				Expect(err).ToNot(BeNil())
-				// pessimistic locking reports a conflict, optimistic locking reports already exists
-				Expect(k8serrors.IsConflict(err) || k8serrors.IsAlreadyExists(err)).To(BeTrue())
+				Expect(err).To(Succeed())
 
-				// paul creates chani's namespace so that the namespace exists
-				Expect(CreateNamespace(ctx, paulClient, chaniNamespace)).To(Succeed())
+				// check that chani can get her namespace
+				Expect(GetNamespace(ctx, chaniClient, chaniNamespace)).To(Succeed())
 
-				// check that chani can't get her namespace, indirectly showing
-				// that the spicedb write was rolled back
-				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, chaniNamespace))).To(BeTrue())
+				// check that paul can't read chani's namespace
+				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
 
 				// confirm the relationship doesn't exist
 				Expect(len(GetAllTuples(ctx, &v1.RelationshipFilter{
@@ -816,33 +813,24 @@ var _ = Describe("Proxy", func() {
 					OptionalResourceId:    chaniNamespace,
 					OptionalRelation:      "creator",
 					OptionalSubjectFilter: &v1.SubjectFilter{SubjectType: "user", OptionalSubjectId: "chani"},
-				}))).To(BeZero())
-
-				// confirm paul can get the namespace
-				Expect(GetNamespace(ctx, paulClient, chaniNamespace)).To(Succeed())
+				}))).To(Equal(1))
 			})
 
-			It("recovers deletes when spicedb write succeeds but crashes", func(ctx context.Context) {
+			It("recovers a `delete` operation after a SpiceDB write followed by crash, retries and succeeds", func(ctx context.Context) {
 				// paul creates his namespace
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 				Expect(CreatePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
 
 				// chani can't create the same pod
 				Expect(k8serrors.IsAlreadyExists(CreatePod(ctx, chaniClient, paulNamespace, paulPod))).To(BeTrue())
-				fmt.Println(GetPod(ctx, chaniClient, paulNamespace, paulPod))
-				Expect(k8serrors.IsUnauthorized(GetPod(ctx, chaniClient, paulNamespace, paulPod))).To(BeTrue())
+				// chani isn't authorized to get the pod
+				err := GetPod(ctx, chaniClient, paulNamespace, paulPod)
+				Expect(k8serrors.IsUnauthorized(err)).To(BeTrue())
 
 				// make spicedb write crash on pod delete
-				failpoints.EnableFailPoint("panicSpiceDBReadResp", 1)
-				err := DeletePod(ctx, paulClient, paulNamespace, paulPod)
-				if lockMode == proxyrule.OptimisticLockMode {
-					Expect(err).To(Succeed())
-				} else {
-					fmt.Println(err)
-					Expect(k8serrors.IsUnauthorized(err)).To(BeTrue())
-					// paul sees the request fail, so he tries again:
-					Expect(DeletePod(ctx, paulClient, paulNamespace, paulPod)).To(Succeed())
-				}
+				failpoints.EnableFailPoint("panicSpiceDBWriteResp", 1)
+				err = DeletePod(ctx, paulClient, paulNamespace, paulPod)
+				Expect(err).To(Succeed())
 
 				// chani can now re-create paul's pod and take ownership
 				Expect(CreatePod(ctx, chaniClient, paulNamespace, paulPod)).To(Succeed())
