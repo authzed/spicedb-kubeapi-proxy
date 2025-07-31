@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/failpoints"
 )
+
+const defaultIdempotencyKeyExpiration = 24 * time.Hour
 
 type KubeReqInput struct {
 	RequestURI  string
@@ -53,7 +57,7 @@ func (h *ActivityHandler) WriteToSpiceDB(ctx context.Context, input *v1.WriteRel
 		Relationship: idempotencyKey,
 	})
 
-	response, err := h.PermissionClient.WriteRelationships(ctx, input)
+	response, err := h.PermissionClient.WriteRelationships(ctx, cloned)
 	failpoints.FailPoint("panicSpiceDBWriteResp")
 	if err != nil {
 		exists, evaluatedAt, relErr := isRelExists(ctx, h.PermissionClient, idempotencyKey)
@@ -90,6 +94,9 @@ func idempotencyKeyForPayload(input *v1.WriteRelationshipsRequest, workflowID st
 				ObjectType: "activity",
 				ObjectId:   fmt.Sprintf("%x", xxhash.Sum64(bytes)),
 			},
+		},
+		OptionalExpiresAt: &timestamppb.Timestamp{
+			Seconds: time.Now().Add(defaultIdempotencyKeyExpiration).Unix(),
 		},
 	}, nil
 }
