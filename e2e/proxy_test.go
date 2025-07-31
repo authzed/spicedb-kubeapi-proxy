@@ -430,7 +430,6 @@ var _ = Describe("Proxy", func() {
 		})
 
 		AssertDualWriteBehavior := func() {
-
 			It("supports rules for every verb", func(ctx context.Context) {
 				// watch
 				var wg errgroup.Group
@@ -913,7 +912,6 @@ var _ = Describe("Proxy", func() {
 				Expect(DeletePod(ctx, chaniClient, sharedNamespace, chaniPod)).To(Succeed())
 
 				Eventually(func(g Gomega) {
-					fmt.Println(GetPod(ctx, adminClient, sharedNamespace, chaniPod))
 					g.Expect(GetPod(ctx, adminClient, sharedNamespace, chaniPod)).To(Not(Succeed()))
 				}).Should(Succeed())
 

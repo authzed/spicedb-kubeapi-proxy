@@ -44,7 +44,7 @@ func WriteTuples(ctx context.Context, rels []*v1.Relationship) {
 			Relationship: rel,
 		})
 	}
-	
+
 	_, err := proxySrv.PermissionClient().WriteRelationships(ctx, &v1.WriteRelationshipsRequest{
 		Updates: updates,
 	})

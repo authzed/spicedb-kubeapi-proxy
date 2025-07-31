@@ -100,15 +100,15 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 			klog.V(3).InfoSDepth(1, "upstream Kubernetes API response",
 				"status", response.StatusCode,
 				"headers", response.Header)
-			authzData, ok := authz.AuthzDataFrom(response.Request.Context())
+			responseFilterer, ok := authz.ResponseFiltererFrom(response.Request.Context())
 			if !ok {
 				return fmt.Errorf("no authz data")
 			}
-			return authzData.FilterResp(response)
+			return responseFilterer.FilterResp(response)
 		},
 		Transport: transport,
 		ErrorHandler: func(writer http.ResponseWriter, h *http.Request, err error) {
-			klog.V(3).InfoSDepth(1, "upstream Kubernetes API response", "error", err)
+			klog.V(3).InfoSDepth(1, "upstream Kubernetes API error response", "error", err)
 			writer.WriteHeader(http.StatusBadGateway)
 		},
 	}
@@ -123,11 +123,6 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 		),
 	}
 
-	scheme := runtime.NewScheme()
-	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Group: "", Version: "v1"})
-	codecs := serializer.NewCodecFactory(scheme)
-	failHandler := genericapifilters.Unauthorized(codecs)
-
 	workflowClient, worker, err := distributedtx.SetupWithSQLiteBackend(ctx,
 		s.opts.PermissionsClient,
 		s.KubeClient.RESTClient(),
@@ -139,11 +134,13 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 
 	// Matcher is a pointer to an interface to make it easy to swap at runtime in tests
 	s.Matcher = &s.opts.Matcher
-	handler, err := authz.WithAuthorization(clusterProxy, failHandler, restMapper, c.config.PermissionsClient, c.config.WatchClient, workflowClient, s.Matcher, s.opts.InputExtractor)
-	if err != nil {
-		return nil, fmt.Errorf("unable to create authorization handler: %w", err)
-	}
 
+	scheme := runtime.NewScheme()
+	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Group: "", Version: "v1"})
+	codecs := serializer.NewCodecFactory(scheme)
+	failHandler := genericapifilters.Unauthorized(codecs)
+
+	handler := authz.WithAuthorization(clusterProxy, failHandler, restMapper, c.config.PermissionsClient, c.config.WatchClient, workflowClient, s.Matcher, s.opts.InputExtractor)
 	handler = withAuthentication(handler, failHandler, s.opts.AuthenticationInfo.Authenticator)
 	handler = genericapifilters.WithRequestInfo(handler, requestInfoResolver)
 	handler = genericfilters.WithHTTPLogging(handler)
