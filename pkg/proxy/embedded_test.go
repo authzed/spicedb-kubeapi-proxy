@@ -40,7 +40,7 @@ func TestEmbeddedMode(t *testing.T) {
 
 		resp, err := client.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Should get a response (may be 404 but not connection error)
 		require.NotEqual(t, 0, resp.StatusCode, "should get a status code")
@@ -66,13 +66,12 @@ func TestEmbeddedMode(t *testing.T) {
 		// The error should not be a connection refused error
 		require.NotContains(t, err.Error(), "connection refused")
 	})
-
 }
 
 func TestEmbeddedModeCustomHeaders(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	// Create a proxy with custom header names
@@ -102,7 +101,7 @@ func TestEmbeddedModeCustomHeaders(t *testing.T) {
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Should get a response
 	require.NotEqual(t, 0, resp.StatusCode, "should get a status code")
@@ -115,7 +114,7 @@ func TestEmbeddedModeCustomHeaders(t *testing.T) {
 func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	// Create one proxy with multiple header configuration for all tests
@@ -144,7 +143,7 @@ func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
 
 		resp, err := client.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		require.NotEqual(t, 0, resp.StatusCode, "should get a status code")
 
@@ -165,7 +164,7 @@ func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
 
 		resp, err := client.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		require.NotEqual(t, 0, resp.StatusCode, "should get a status code")
 
@@ -187,7 +186,7 @@ func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
 
 		resp, err := client.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		require.NotEqual(t, 0, resp.StatusCode, "should get a status code")
 
@@ -199,7 +198,7 @@ func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
 func TestEmbeddedModeDefaults(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	// Create embedded proxy with no explicit header configuration to test defaults
@@ -211,7 +210,7 @@ func TestEmbeddedModeDefaults(t *testing.T) {
 		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"kind": "Status", "status": "Success"}`))
+			_, _ = w.Write([]byte(`{"kind": "Status", "status": "Success"}`))
 		}))
 		t.Cleanup(mockServer.Close)
 
@@ -226,7 +225,7 @@ func TestEmbeddedModeDefaults(t *testing.T) {
 	// Use empty rules for testing - allow all requests
 	opts.Matcher = rules.MatcherFunc(func(match *request.RequestInfo) []*rules.RunnableRule {
 		return []*rules.RunnableRule{{
-			Checks: []*rules.RelExpr{},
+			Checks: []rules.RelationshipExpr{},
 		}}
 	})
 
@@ -249,7 +248,7 @@ func TestEmbeddedModeDefaults(t *testing.T) {
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Should get a response
 	require.NotEqual(t, 0, resp.StatusCode, "should get a status code")
@@ -262,7 +261,7 @@ func TestEmbeddedModeDefaults(t *testing.T) {
 func TestEmbeddedClientFunctionalOptions(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	// Create one proxy server for all subtests to avoid logging config issues
@@ -283,7 +282,7 @@ func TestEmbeddedClientFunctionalOptions(t *testing.T) {
 
 		resp, err := client.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		require.NotEqual(t, 0, resp.StatusCode)
 		_, err = io.ReadAll(resp.Body)
@@ -306,8 +305,9 @@ func TestEmbeddedClientFunctionalOptions(t *testing.T) {
 		req, err := http.NewRequest("GET", "http://example.com/test", nil)
 		require.NoError(t, err)
 
-		_, err = transport.RoundTrip(req)
+		resp, err := transport.RoundTrip(req)
 		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
 
 		// Check that baseTransport received the request with added headers
 		capturedReq := baseTransport.lastRequest
@@ -347,13 +347,12 @@ func TestEmbeddedClientFunctionalOptions(t *testing.T) {
 		require.Equal(t, []string{"X-Remote-Group"}, transport.groupHeaders)
 		require.Equal(t, []string{"X-Remote-Extra-"}, transport.extraHeaderPrefixes)
 	})
-
 }
 
 func TestEmbeddedClientCustomHeaderConfig(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	// Create proxy with custom header names
@@ -409,7 +408,7 @@ func createEmbeddedTestOptions(t *testing.T) *Options {
 		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"kind": "Status", "status": "Success"}`))
+			_, _ = w.Write([]byte(`{"kind": "Status", "status": "Success"}`))
 		}))
 		t.Cleanup(mockServer.Close)
 
@@ -424,7 +423,7 @@ func createEmbeddedTestOptions(t *testing.T) *Options {
 	// Use empty rules for testing - allow all requests
 	opts.Matcher = rules.MatcherFunc(func(match *request.RequestInfo) []*rules.RunnableRule {
 		return []*rules.RunnableRule{{
-			Checks: []*rules.RelExpr{},
+			Checks: []rules.RelationshipExpr{},
 		}}
 	})
 

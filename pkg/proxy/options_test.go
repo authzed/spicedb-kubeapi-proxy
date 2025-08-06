@@ -218,7 +218,7 @@ relationships: |
 func TestWithEmbeddedSpiceDBBootstrapIntegration(t *testing.T) {
 	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	// Create custom bootstrap content
