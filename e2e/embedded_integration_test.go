@@ -54,6 +54,8 @@ func TestEmbeddedModeIntegration(t *testing.T) {
 	// Create custom bootstrap content for the test
 	bootstrapContent := map[string][]byte{
 		"bootstrap.yaml": []byte(`schema: |-
+  use expiration
+
   definition cluster {}
   definition user {}
   definition namespace {
@@ -83,7 +85,10 @@ func TestEmbeddedModeIntegration(t *testing.T) {
   definition lock {
     relation workflow: workflow
   }
-  definition workflow {}
+  definition workflow {
+    relation idempotency_key: activity with expiration
+  }
+  definition activity{}
 relationships: |
 `),
 	}

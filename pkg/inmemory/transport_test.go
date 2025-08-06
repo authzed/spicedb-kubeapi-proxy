@@ -16,7 +16,7 @@ func TestTransportBasic(t *testing.T) {
 		executed = true
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message": "hello world"}`))
+		_, _ = w.Write([]byte(`{"message": "hello world"}`))
 	})
 
 	transport := New(handler)
@@ -35,7 +35,7 @@ func TestTransportBasic(t *testing.T) {
 	// Handler should be executed immediately during RoundTrip
 	require.True(t, executed)
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Status and headers should be available immediately
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -45,7 +45,7 @@ func TestTransportBasic(t *testing.T) {
 	// Read the body
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	require.Equal(t, `{"message": "hello world"}`, string(body))
+	require.JSONEq(t, `{"message": "hello world"}`, string(body))
 }
 
 func TestTransportImmediateExecution(t *testing.T) {
@@ -55,7 +55,7 @@ func TestTransportImmediateExecution(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Custom", "test-value")
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"message": "hello"}`))
+		_, _ = w.Write([]byte(`{"message": "hello"}`))
 	})
 
 	transport := New(handler)
@@ -77,7 +77,7 @@ func TestTransportImmediateExecution(t *testing.T) {
 	// Multiple header access should work
 	require.Equal(t, []string{"test-value"}, resp.Header.Values("X-Custom"))
 
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestTransportWithClient(t *testing.T) {
@@ -85,14 +85,14 @@ func TestTransportWithClient(t *testing.T) {
 		switch r.URL.Path {
 		case "/health":
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("healthy"))
+			_, _ = w.Write([]byte("healthy"))
 		case "/echo":
 			body, _ := io.ReadAll(r.Body)
 			w.Header().Set("Echo-Method", r.Method)
-			w.Write(body)
+			_, _ = w.Write(body)
 		default:
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("not found"))
+			_, _ = w.Write([]byte("not found"))
 		}
 	})
 
@@ -102,7 +102,7 @@ func TestTransportWithClient(t *testing.T) {
 	// Test GET request
 	resp, err := client.Get("http://example.com/health")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
@@ -112,7 +112,7 @@ func TestTransportWithClient(t *testing.T) {
 	// Test POST request
 	resp, err = client.Post("http://example.com/echo", "text/plain", strings.NewReader("hello"))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err = io.ReadAll(resp.Body)
 	require.NoError(t, err)
@@ -142,7 +142,7 @@ func TestTransportStatusCodes(t *testing.T) {
 				if tc.handlerStatus != 0 {
 					w.WriteHeader(tc.handlerStatus)
 				}
-				w.Write([]byte("response"))
+				_, _ = w.Write([]byte("response"))
 			})
 
 			transport := New(handler)
@@ -151,10 +151,10 @@ func TestTransportStatusCodes(t *testing.T) {
 
 			resp, err := transport.RoundTrip(req)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			// Read body to trigger execution
-			io.ReadAll(resp.Body)
+			_, _ = io.ReadAll(resp.Body)
 
 			require.Equal(t, tc.expectedStatus, resp.StatusCode)
 		})
@@ -169,7 +169,7 @@ func TestTransportHeaders(t *testing.T) {
 		}
 		w.Header().Set("Custom-Header", "custom-value")
 		w.WriteHeader(http.StatusAccepted)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	transport := New(handler)
@@ -181,10 +181,10 @@ func TestTransportHeaders(t *testing.T) {
 
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read body to trigger execution
-	io.ReadAll(resp.Body)
+	_, _ = io.ReadAll(resp.Body)
 
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 	require.Equal(t, "custom-value", resp.Header.Get("Custom-Header"))
@@ -199,7 +199,7 @@ func TestTransportLargeResponse(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(largeData))
+		_, _ = w.Write([]byte(largeData))
 	})
 
 	transport := New(handler)
@@ -208,7 +208,7 @@ func TestTransportLargeResponse(t *testing.T) {
 
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestTransportMultipleReads(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		executionCount++
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("test response"))
+		_, _ = w.Write([]byte("test response"))
 	})
 
 	transport := New(handler)
@@ -230,7 +230,7 @@ func TestTransportMultipleReads(t *testing.T) {
 
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Handler should be executed once during RoundTrip
 	require.Equal(t, 1, executionCount)
@@ -270,7 +270,7 @@ func TestTransportRequestBody(t *testing.T) {
 		w.Header().Set("Echo-Content-Length", fmt.Sprintf("%d", len(body)))
 		w.Header().Set("Echo-Content-Type", r.Header.Get("Content-Type"))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf("Received: %s", string(body))))
+		_, _ = fmt.Fprintf(w, "Received: %s", string(body))
 	})
 
 	transport := New(handler)
@@ -282,7 +282,7 @@ func TestTransportRequestBody(t *testing.T) {
 
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read body to trigger execution
 	body, err := io.ReadAll(resp.Body)
@@ -300,6 +300,9 @@ func TestTransportNilHandler(t *testing.T) {
 	require.NoError(t, err)
 
 	resp, err := transport.RoundTrip(req)
+	if err == nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	require.Error(t, err)
 	require.Nil(t, resp)
 	require.Contains(t, err.Error(), "no handler configured")
@@ -310,7 +313,7 @@ func TestTransportCloseWithoutRead(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		executed = true
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("test"))
+		_, _ = w.Write([]byte("test"))
 	})
 
 	transport := New(handler)
@@ -342,7 +345,7 @@ func TestTransportMultipleHeaders(t *testing.T) {
 		w.Header().Add("X-Custom", "value1")
 		w.Header().Add("X-Custom", "value2")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	transport := New(handler)
@@ -351,10 +354,10 @@ func TestTransportMultipleHeaders(t *testing.T) {
 
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read body to trigger execution
-	io.ReadAll(resp.Body)
+	_, _ = io.ReadAll(resp.Body)
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -374,7 +377,7 @@ func BenchmarkTransport(b *testing.B) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "ok"}`))
+		_, _ = w.Write([]byte(`{"status": "ok"}`))
 	})
 
 	transport := New(handler)
@@ -391,8 +394,8 @@ func BenchmarkTransport(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
 		}
 	})
 }
@@ -401,7 +404,7 @@ func BenchmarkTransportWithBody(b *testing.B) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
-		w.Write(body)
+		_, _ = w.Write(body)
 	})
 
 	transport := New(handler)
@@ -419,8 +422,8 @@ func BenchmarkTransportWithBody(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
 		}
 	})
 }
@@ -432,7 +435,7 @@ func BenchmarkTransportLargeResponse(b *testing.B) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(largeData))
+		_, _ = w.Write([]byte(largeData))
 	})
 
 	transport := New(handler)
@@ -442,7 +445,7 @@ func BenchmarkTransportLargeResponse(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		req, _ := http.NewRequest("GET", "http://example.com/large", nil)
 		resp, _ := transport.RoundTrip(req)
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 	}
 }
