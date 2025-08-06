@@ -25,6 +25,11 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
+		// in embedded mode, we need to manually set the RequestURI
+		if req.RequestURI == "" && req.URL != nil {
+			req.RequestURI = req.URL.RequestURI()
+		}
+
 		// Extract the request info from the context.
 		input, err := inputExtractor.ExtractFromHttp(req)
 		if err != nil {

@@ -4,15 +4,36 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/spf13/pflag"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
+	"k8s.io/apiserver/pkg/authentication/user"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	kubeoptions "k8s.io/kubernetes/pkg/kubeapiserver/options"
 )
 
+// EmbeddedAuthentication configures authentication for embedded mode
+type EmbeddedAuthentication struct {
+	Enabled             bool
+	UsernameHeaders     []string
+	GroupHeaders        []string
+	ExtraHeaderPrefixes []string
+}
+
+// NewEmbeddedAuthentication creates a new embedded authentication configuration with defaults
+func NewEmbeddedAuthentication() *EmbeddedAuthentication {
+	return &EmbeddedAuthentication{
+		Enabled:             false,
+		UsernameHeaders:     []string{"X-Remote-User"},
+		GroupHeaders:        []string{"X-Remote-Group"},
+		ExtraHeaderPrefixes: []string{"X-Remote-Extra-"},
+	}
+}
+
 type Authentication struct {
 	BuiltInOptions *kubeoptions.BuiltInAuthenticationOptions
+	Embedded       EmbeddedAuthentication
 }
 
 func NewAuthentication() *Authentication {
@@ -24,6 +45,7 @@ func NewAuthentication() *Authentication {
 			// WithServiceAccounts().
 			WithTokenFile().
 			WithRequestHeader(),
+		Embedded: *NewEmbeddedAuthentication(),
 	}
 	// TODO: ServiceAccounts
 	// auth.BuiltInOptions.ServiceAccounts.Issuers = []string{"https://spicedb-kubeapi-proxy.default.svc"}
@@ -31,7 +53,7 @@ func NewAuthentication() *Authentication {
 }
 
 func (c *Authentication) AdditionalAuthEnabled() bool {
-	return c.tokenAuthEnabled() || c.serviceAccountAuthEnabled() || c.oidcAuthEnabled()
+	return c.tokenAuthEnabled() || c.serviceAccountAuthEnabled() || c.oidcAuthEnabled() || c.Embedded.Enabled
 }
 
 func (c *Authentication) oidcAuthEnabled() bool {
@@ -47,6 +69,56 @@ func (c *Authentication) serviceAccountAuthEnabled() bool {
 }
 
 func (c *Authentication) ApplyTo(ctx context.Context, authenticationInfo *genericapiserver.AuthenticationInfo, servingInfo *genericapiserver.SecureServingInfo) error {
+	if c.Embedded.Enabled {
+		// For embedded mode, use dedicated embedded authentication configuration
+		usernameHeaders := c.Embedded.UsernameHeaders
+		groupHeaders := c.Embedded.GroupHeaders
+		extraHeaderPrefixes := c.Embedded.ExtraHeaderPrefixes
+
+		authenticationInfo.Authenticator = authenticator.RequestFunc(func(req *http.Request) (*authenticator.Response, bool, error) {
+			// Try username headers in order
+			var username string
+			for _, header := range usernameHeaders {
+				if value := req.Header.Get(header); value != "" {
+					username = value
+					break
+				}
+			}
+			if username == "" {
+				return nil, false, nil
+			}
+
+			// Collect groups from all group headers
+			var groups []string
+			for _, header := range groupHeaders {
+				groups = append(groups, req.Header.Values(header)...)
+			}
+
+			// Collect extra fields
+			extra := make(map[string][]string)
+			for key, values := range req.Header {
+				for _, prefix := range extraHeaderPrefixes {
+					if strings.HasPrefix(key, prefix) {
+						extraKey := strings.TrimPrefix(key, prefix)
+						// Convert to lowercase as per Kubernetes convention
+						extraKey = strings.ToLower(extraKey)
+						extra[extraKey] = values
+						break
+					}
+				}
+			}
+
+			return &authenticator.Response{
+				User: &user.DefaultInfo{
+					Name:   username,
+					Groups: groups,
+					Extra:  extra,
+				},
+			}, true, nil
+		})
+		return nil
+	}
+
 	authenticatorConfig, err := c.BuiltInOptions.ToAuthenticationConfig()
 	if err != nil {
 		return err

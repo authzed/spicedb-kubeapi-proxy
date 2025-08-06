@@ -33,7 +33,7 @@ func TestWorkflow(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
-			srv, err := spicedb.NewServer(ctx, "")
+			srv, err := spicedb.NewServer(ctx, "", nil)
 			require.NoError(t, err)
 			go func() {
 				require.NoError(t, srv.Run(ctx)) // nolint:testifylint

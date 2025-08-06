@@ -2,6 +2,8 @@ module github.com/authzed/spicedb-kubeapi-proxy
 
 go 1.24.4
 
+tool github.com/ecordell/optgen
+
 require (
 	github.com/authzed/authzed-go v1.4.1
 	github.com/authzed/ctxkey v0.0.0-20250226155515-d49f99185584
@@ -132,6 +134,7 @@ require (
 	github.com/daixiang0/gci v0.13.6 // indirect
 	github.com/dalzilio/rudd v1.1.1-0.20230806153452-9e08a6ea8170 // indirect
 	github.com/dave/dst v0.27.3 // indirect
+	github.com/dave/jennifer v1.7.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/denis-tingaikin/go-header v0.5.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect

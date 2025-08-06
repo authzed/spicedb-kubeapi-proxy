@@ -4,12 +4,22 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"os"
+	goruntime "runtime"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/authzed/spicedb/pkg/tuple"
+	"github.com/go-logr/logr"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
+	"github.com/spf13/afero"
+	"sigs.k8s.io/controller-runtime/tools/setup-envtest/env"
+	"sigs.k8s.io/controller-runtime/tools/setup-envtest/remote"
+	"sigs.k8s.io/controller-runtime/tools/setup-envtest/store"
+	"sigs.k8s.io/controller-runtime/tools/setup-envtest/versions"
+	"sigs.k8s.io/controller-runtime/tools/setup-envtest/workflows"
 )
 
 // GetAllTuples collects all tuples matching the filter from SpiceDB
@@ -49,4 +59,44 @@ func WriteTuples(ctx context.Context, rels []*v1.Relationship) {
 		Updates: updates,
 	})
 	Expect(err).To(Succeed())
+}
+
+// setupEnvtest sets up the Kubernetes test binaries using setup-envtest
+func setupEnvtest(log logr.Logger) string {
+	e := &env.Env{
+		Log: log,
+		Client: &remote.HTTPClient{
+			Log:      log,
+			IndexURL: remote.DefaultIndexURL,
+		},
+		Version: versions.Spec{
+			Selector:    versions.TildeSelector{},
+			CheckLatest: false,
+		},
+		VerifySum:     true,
+		ForceDownload: false,
+		Platform: versions.PlatformItem{
+			Platform: versions.Platform{
+				OS:   goruntime.GOOS,
+				Arch: goruntime.GOARCH,
+			},
+		},
+		FS:    afero.Afero{Fs: afero.NewOsFs()},
+		Store: store.NewAt("../testbin"),
+		Out:   os.Stdout,
+	}
+
+	version, err := versions.FromExpr("~1.33.0")
+	if err != nil {
+		panic(fmt.Sprintf("failed to parse version: %v", err))
+	}
+	e.Version = version
+
+	workflows.Use{
+		UseEnv:      true,
+		PrintFormat: env.PrintOverview,
+		AssetsPath:  "../testbin",
+	}.Do(e)
+
+	return fmt.Sprintf("../testbin/k8s/%s-%s-%s", e.Version.AsConcrete(), e.Platform.OS, e.Platform.Arch)
 }
