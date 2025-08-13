@@ -95,7 +95,7 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 		AllowedNames:        []string{"service"},
 	}
 
-	opts := NewOptions()
+	opts := NewOptions(WithEmbeddedSpiceDBEndpoint)
 	opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
 		ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -164,7 +164,6 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 
 		return rc, transport, nil
 	}
-	opts.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
 	opts.SecureServing.ServerCert.CertKey = certStore.servingCertKey
 	opts.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
 	opts.SecureServing.BindPort = port

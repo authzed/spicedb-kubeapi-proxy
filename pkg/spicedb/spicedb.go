@@ -15,9 +15,11 @@ import (
 //go:embed bootstrap.yaml
 var bootstrap []byte
 
-func NewServer(ctx context.Context, bootstrapFilePath string) (server.RunnableServer, error) {
+func NewServer(ctx context.Context, bootstrapFilePath string, bootstrapContent map[string][]byte) (server.RunnableServer, error) {
 	bootstrapOption := datastore.SetBootstrapFileContents(map[string][]byte{"schema": bootstrap})
-	if bootstrapFilePath != "" {
+	if len(bootstrapContent) > 0 {
+		bootstrapOption = datastore.SetBootstrapFileContents(bootstrapContent)
+	} else if len(bootstrapFilePath) > 0 {
 		bootstrapOption = datastore.SetBootstrapFiles([]string{bootstrapFilePath})
 	}
 	return server.NewConfigWithOptionsAndDefaults(server.WithGRPCServer(util.GRPCServerConfig{

@@ -39,11 +39,12 @@ import (
 
 const (
 	defaultWorkflowDatabasePath = "/tmp/dtx.sqlite"
-	EmbeddedSpiceDBEndpoint     = "embedded://"
+	Embedded                    = "embedded"
+	EmbeddedSpiceDBEndpoint     = Embedded + "://"
+	EmbeddedProxyScheme         = Embedded
+	EmbeddedProxyHost           = "http://" + Embedded
 	defaultDialerTimeout        = 5 * time.Second
 )
-
-//go:generate go run github.com/ecordell/optgen -output zz_spicedb_options.go . SpiceDBOptions
 
 type Options struct {
 	SecureServing             apiserveroptions.SecureServingOptionsWithLoopback `debugmap:"hidden"`
@@ -65,6 +66,9 @@ type Options struct {
 
 	CertDir string `debugmap:"visible"`
 
+	// Embedded mode configuration
+	EmbeddedMode bool `debugmap:"visible"`
+
 	AuthenticationInfo    genericapiserver.AuthenticationInfo `debugmap:"hidden"`
 	ServingInfo           *genericapiserver.SecureServingInfo `debugmap:"hidden"`
 	AdditionalAuthEnabled bool                                `debugmap:"visible"`
@@ -78,9 +82,11 @@ type Options struct {
 	PermissionsClient v1.PermissionsServiceClient `debugmap:"hidden"`
 }
 
+//go:generate go run github.com/ecordell/optgen -output zz_spicedb_options.go . SpiceDBOptions
 type SpiceDBOptions struct {
 	SpiceDBEndpoint            string                `debugmap:"visible"`
 	EmbeddedSpiceDB            server.RunnableServer `debugmap:"hidden"`
+	BootstrapContent           map[string][]byte     `debugmap:"hidden"`
 	Insecure                   bool                  `debugmap:"sensitive"`
 	SkipVerifyCA               bool                  `debugmap:"visible"`
 	SecureSpiceDBTokensBySpace string                `debugmap:"sensitive"`
@@ -107,7 +113,9 @@ func (so *SpiceDBOptions) AddFlags(fs *pflag.FlagSet) {
 
 const tlsCertificatePairName = "tls"
 
-func NewOptions() *Options {
+type setOpt func(*Options)
+
+func NewOptions(opts ...setOpt) *Options {
 	o := &Options{
 		SecureServing:  *apiserveroptions.NewSecureServingOptions().WithLoopback(),
 		Authentication: *NewAuthentication(),
@@ -117,7 +125,55 @@ func NewOptions() *Options {
 	o.Logs.Verbosity = logsv1.VerbosityLevel(3)
 	o.SecureServing.BindPort = 443
 	o.SecureServing.ServerCert.PairName = tlsCertificatePairName
+
+	for _, opt := range opts {
+		opt(o)
+	}
+
 	return o
+}
+
+// WithEmbeddedProxy configures the proxy to run in embedded mode.
+// In embedded mode, the proxy runs as an HTTP server without TLS termination,
+// suitable for use behind a load balancer or ingress controller.
+func WithEmbeddedProxy(o *Options) {
+	o.EmbeddedMode = true
+}
+
+// WithEmbeddedSpiceDBEndpoint configures the proxy to use an embedded SpiceDB instance.
+// This creates an in-memory SpiceDB instance that runs within the proxy process.
+// Use this for development, testing, or single-node deployments.
+func WithEmbeddedSpiceDBEndpoint(o *Options) {
+	o.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+}
+
+// WithEmbeddedSpiceDBBootstrap configures the proxy to use an embedded SpiceDB instance
+// with custom bootstrap content. This allows you to provide your own schema and initial
+// relationships directly as a byte slice instead of using a file.
+//
+// The bootstrap content should be provided as a map with filename as key and YAML content as value:
+//
+//	bootstrapContent := map[string][]byte{
+//		"bootstrap.yaml": []byte(`schema: |-
+//	  definition user {}
+//	  definition namespace {
+//	    relation creator: user
+//	    permission view = creator
+//	  }
+//	  definition lock {
+//	    relation workflow: workflow
+//	  }
+//	  definition workflow {}
+//	relationships: |
+//	`),
+//	}
+//
+// Use this for testing or when you want to programmatically define your SpiceDB schema.
+func WithEmbeddedSpiceDBBootstrap(bootstrapContent map[string][]byte) func(*Options) {
+	return func(o *Options) {
+		o.SpiceDBOptions.SpiceDBEndpoint = EmbeddedSpiceDBEndpoint
+		o.SpiceDBOptions.BootstrapContent = bootstrapContent
+	}
 }
 
 func (o *Options) FromRESTConfig(restConfig *rest.Config) *Options {
@@ -224,33 +280,40 @@ func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
 		o.InputExtractor = rules.ResolveInputExtractorFunc(rules.NewResolveInputFromHttp)
 	}
 
-	if !filepath.IsAbs(o.SecureServing.ServerCert.CertDirectory) {
-		o.SecureServing.ServerCert.CertDirectory = filepath.Join(o.CertDir, o.SecureServing.ServerCert.CertDirectory)
+	// Set embedded mode in authentication
+	o.Authentication.Embedded.Enabled = o.EmbeddedMode
+
+	if !o.EmbeddedMode {
+		if !filepath.IsAbs(o.SecureServing.ServerCert.CertDirectory) {
+			o.SecureServing.ServerCert.CertDirectory = filepath.Join(o.CertDir, o.SecureServing.ServerCert.CertDirectory)
+		}
+
+		if err := o.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}, nil); err != nil {
+			return nil, err
+		}
+
+		var loopbackClientConfig *rest.Config
+		if err := o.SecureServing.ApplyTo(&o.ServingInfo, &loopbackClientConfig); err != nil {
+			return nil, err
+		}
 	}
 
-	if err := o.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}, nil); err != nil {
-		return nil, err
-	}
-
-	var loopbackClientConfig *rest.Config
-	if err := o.SecureServing.ApplyTo(&o.ServingInfo, &loopbackClientConfig); err != nil {
-		return nil, err
-	}
 	if err := o.Authentication.ApplyTo(ctx, &o.AuthenticationInfo, o.ServingInfo); err != nil {
 		return nil, err
 	}
 
 	o.AdditionalAuthEnabled = o.Authentication.AdditionalAuthEnabled()
 
-	spicedbURl, err := url.Parse(o.SpiceDBOptions.SpiceDBEndpoint)
+	spicedbURL, err := url.Parse(o.SpiceDBOptions.SpiceDBEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse SpiceDB endpoint URL: %w", err)
 	}
 
 	var conn *grpc.ClientConn
-	if spicedbURl.Scheme == "embedded" {
-		klog.FromContext(ctx).WithValues("spicedb-endpoint", spicedbURl).Info("using embedded SpiceDB")
-		o.SpiceDBOptions.EmbeddedSpiceDB, err = spicedb.NewServer(ctx, spicedbURl.Path)
+	if spicedbURL.Scheme == EmbeddedProxyScheme {
+		klog.FromContext(ctx).WithValues("spicedb-endpoint", spicedbURL).Info("using embedded SpiceDB")
+
+		o.SpiceDBOptions.EmbeddedSpiceDB, err = spicedb.NewServer(ctx, spicedbURL.Path, o.SpiceDBOptions.BootstrapContent)
 		if err != nil {
 			return nil, fmt.Errorf("unable to stand up embedded SpiceDB: %w", err)
 		}
@@ -349,7 +412,7 @@ func (o *Options) configFromPath() (*clientcmdapi.Config, error) {
 func (o *Options) Validate() []error {
 	var errs []error
 
-	if len(o.BackendKubeconfigPath) == 0 && !o.UseInClusterConfig {
+	if len(o.BackendKubeconfigPath) == 0 && !o.UseInClusterConfig && o.RestConfigFunc == nil {
 		errs = append(errs, fmt.Errorf("either --backend-kubeconfig or --use-in-cluster-config must be specified"))
 	}
 
@@ -357,9 +420,9 @@ func (o *Options) Validate() []error {
 		errs = append(errs, fmt.Errorf("--rule-config is required"))
 	}
 
-	errs = append(errs, o.SecureServing.Validate()...)
-	errs = append(errs, o.Authentication.Validate()...)
-
+	if !o.EmbeddedMode {
+		errs = append(errs, o.SecureServing.Validate()...)
+	}
 	return errs
 }
 

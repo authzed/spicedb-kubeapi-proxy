@@ -144,3 +144,37 @@ export KUBECONFIG=$(pwd)/dev.kubeconfig
 kubectx proxy
 kubectl --insecure-skip-tls-verify get namespace
 ```
+
+## Embedded Mode
+
+The proxy supports an embedded mode that allows direct in-process connections without network overhead. 
+This is useful for applications that want to embed the proxy functionality directly.
+
+In embedded mode:
+- No TLS/network layer - requests go directly through handlers
+- Authentication via configurable HTTP headers (programmatic configuration only)
+- High performance with sub-microsecond latency
+- Compatible with standard HTTP clients and kubernetes client-go
+
+Embedded mode is designed for programmatic use when embedding the proxy in Go applications:
+
+```go
+// Basic embedded mode setup
+opts := proxy.NewOptions(proxy.WithEmbeddedProxy, proxy.WithEmbeddedSpiceDBEndpoint)
+
+// Complete configuration
+completedConfig, _ := opts.Complete(ctx)
+proxySrv, _ := proxy.NewServer(ctx, completedConfig)
+
+// Get client with automatic authentication headers
+client := proxySrv.GetEmbeddedClient(
+    proxy.WithUser("alice"),
+    proxy.WithGroups("developers", "admin"),
+    proxy.WithExtra("department", "engineering"),
+)
+
+// Or get a basic client without authentication
+basicClient := proxySrv.GetEmbeddedClient()
+```
+
+See [docs/embedding.md](docs/embedding.md) for detailed usage examples.

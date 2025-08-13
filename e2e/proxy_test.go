@@ -395,29 +395,44 @@ var _ = Describe("Proxy", func() {
 			return err
 		}
 
-		WatchTestResources := func(ctx context.Context, client dynamic.Interface, namespace string, expected int, timeout time.Duration) []string {
-			ctx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-
+		// WatchTestResources starts a watch for test resources and waits for the specified number
+		// of ADDED events. It properly handles watch establishment to avoid race conditions.
+		WatchTestResources := func(ctx context.Context, client dynamic.Interface, namespace string, expected int, timeout time.Duration, createResourceFn func() error) []string {
 			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "testresources"}
-			got := make([]string, 0, expected)
-			watcher, err := client.Resource(gvr).Namespace(namespace).Watch(ctx, metav1.ListOptions{
-				ResourceVersion: "0",
+
+			// Get current resource version to start watching from
+			list, err := client.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+
+			// Start watching from current resource version (only new events)
+			watchCtx, watchCancel := context.WithTimeout(ctx, timeout)
+			defer watchCancel()
+
+			watcher, err := client.Resource(gvr).Namespace(namespace).Watch(watchCtx, metav1.ListOptions{
+				ResourceVersion: list.GetResourceVersion(),
 			})
 			Expect(err).To(Succeed())
 			defer watcher.Stop()
 
-			for e := range watcher.ResultChan() {
-				fmt.Println("Event received:", e.Type, e.Object)
-				resource, ok := e.Object.(*unstructured.Unstructured)
-				if !ok {
-					return got
-				}
-				got = append(got, resource.GetName())
-				if len(got) == expected {
+			// Create the resource(s) first - this should generate watch ADDED event(s)
+			Expect(createResourceFn()).To(Succeed())
+
+			// Collect watch events
+			got := make([]string, 0, expected)
+			for len(got) < expected {
+				select {
+				case e := <-watcher.ResultChan():
+					if e.Type == "ADDED" {
+						resource, ok := e.Object.(*unstructured.Unstructured)
+						if ok {
+							got = append(got, resource.GetName())
+						}
+					}
+				case <-watchCtx.Done():
 					return got
 				}
 			}
+
 			return got
 		}
 
@@ -466,18 +481,14 @@ var _ = Describe("Proxy", func() {
 			})
 
 			It("supports rules for every verb on custom resources", func(ctx context.Context) {
-				// watch
-				var wg errgroup.Group
-				defer wg.Wait()
-				wg.Go(func() error {
-					defer GinkgoRecover()
-					Expect(WatchTestResources(ctx, paulDynamicClient, paulNamespace, 1, 10*time.Second)).To(ContainElement(paulCustomResource))
-					return nil
-				})
-
-				// create
+				// create namespace first
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
-				Expect(CreateTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
+
+				// watch - test that paul can see resource creation events
+				watchedResources := WatchTestResources(ctx, paulDynamicClient, paulNamespace, 1, 10*time.Second, func() error {
+					return CreateTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)
+				})
+				Expect(watchedResources).To(ContainElement(paulCustomResource))
 
 				// get
 				Expect(GetTestResource(ctx, paulDynamicClient, paulNamespace, paulCustomResource)).To(Succeed())
