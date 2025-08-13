@@ -9,5 +9,5 @@ import (
 // to the embedded client transport that requests should be handled
 // in-memory rather than over the network.
 var EmbeddedRestConfig = &rest.Config{
-	Host: "http://embedded",
+	Host: EmbeddedProxyHost,
 }

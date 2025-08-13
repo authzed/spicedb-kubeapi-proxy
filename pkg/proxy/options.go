@@ -39,7 +39,10 @@ import (
 
 const (
 	defaultWorkflowDatabasePath = "/tmp/dtx.sqlite"
-	EmbeddedSpiceDBEndpoint     = "embedded://"
+	Embedded                    = "embedded"
+	EmbeddedSpiceDBEndpoint     = Embedded + "://"
+	EmbeddedProxyScheme         = Embedded
+	EmbeddedProxyHost           = "http://" + Embedded
 	defaultDialerTimeout        = 5 * time.Second
 )
 
@@ -307,7 +310,7 @@ func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
 	}
 
 	var conn *grpc.ClientConn
-	if spicedbURL.Scheme == "embedded" {
+	if spicedbURL.Scheme == EmbeddedProxyScheme {
 		klog.FromContext(ctx).WithValues("spicedb-endpoint", spicedbURL).Info("using embedded SpiceDB")
 
 		o.SpiceDBOptions.EmbeddedSpiceDB, err = spicedb.NewServer(ctx, spicedbURL.Path, o.SpiceDBOptions.BootstrapContent)

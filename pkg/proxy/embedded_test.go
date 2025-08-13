@@ -35,7 +35,7 @@ func TestEmbeddedMode(t *testing.T) {
 		require.NotNil(t, client, "embedded client should not be nil")
 
 		// Test basic request (health endpoint doesn't require auth)
-		req, err := http.NewRequestWithContext(ctx, "GET", "http://embedded/healthz", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", EmbeddedProxyHost+"/healthz", nil)
 		require.NoError(t, err)
 
 		resp, err := client.Do(req)
@@ -91,7 +91,7 @@ func TestEmbeddedModeCustomHeaders(t *testing.T) {
 	require.NotNil(t, client)
 
 	// Test request with custom headers
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://embedded/healthz", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", EmbeddedProxyHost+"/healthz", nil)
 	require.NoError(t, err)
 
 	// Use custom header names
@@ -135,7 +135,7 @@ func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
 
 	t.Run("username header priority", func(t *testing.T) {
 		// Test with secondary header (Primary-User missing)
-		req, err := http.NewRequestWithContext(ctx, "GET", "http://embedded/healthz", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", EmbeddedProxyHost+"/healthz", nil)
 		require.NoError(t, err)
 
 		req.Header.Set("Secondary-User", "alice")
@@ -153,7 +153,7 @@ func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
 
 	t.Run("multiple group headers", func(t *testing.T) {
 		// Test with groups from both headers
-		req, err := http.NewRequestWithContext(ctx, "GET", "http://embedded/healthz", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", EmbeddedProxyHost+"/healthz", nil)
 		require.NoError(t, err)
 
 		req.Header.Set("X-Remote-User", "bob")
@@ -174,7 +174,7 @@ func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
 
 	t.Run("multiple extra header prefixes", func(t *testing.T) {
 		// Test with extra attributes from both prefixes
-		req, err := http.NewRequestWithContext(ctx, "GET", "http://embedded/healthz", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", EmbeddedProxyHost+"/healthz", nil)
 		require.NoError(t, err)
 
 		req.Header.Set("X-Remote-User", "charlie")
@@ -239,7 +239,7 @@ func TestEmbeddedModeDefaults(t *testing.T) {
 	require.NotNil(t, client)
 
 	// Test with default headers (X-Remote-User, X-Remote-Group, X-Remote-Extra-)
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://embedded/healthz", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", EmbeddedProxyHost+"/healthz", nil)
 	require.NoError(t, err)
 
 	req.Header.Set("X-Remote-User", "default-user")
@@ -277,7 +277,7 @@ func TestEmbeddedClientFunctionalOptions(t *testing.T) {
 		require.NotNil(t, client)
 
 		// Basic client should not add any authentication headers automatically
-		req, err := http.NewRequestWithContext(ctx, "GET", "http://embedded/healthz", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", EmbeddedProxyHost+"/healthz", nil)
 		require.NoError(t, err)
 
 		resp, err := client.Do(req)
