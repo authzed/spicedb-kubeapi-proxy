@@ -1766,8 +1766,8 @@ github.com/uudashr/gocognit v1.2.0 h1:3BU9aMr1xbhPlvJLSydKwdLN3tEUUrzPSSM8S4hDYR
 github.com/uudashr/gocognit v1.2.0/go.mod h1:k/DdKPI6XBZO1q7HgoV2juESI2/Ofj9AcHPZhBBdrTU=
 github.com/uudashr/iface v1.4.0 h1:ImZ+1oEJPXvjap7nK0md7gA9RRH7PMp4vliaLkJ2+cg=
 github.com/uudashr/iface v1.4.0/go.mod h1:i/H4cfRMPe0izticV8Yz0g6/zcsh5xXlvthrdh1kqcY=
-github.com/warpstreamlabs/bento v1.8.2 h1:8JfgCq7Hs7tA85CYW2KYNNh/XMpJ0JdM8+3pdU6BEPM=
-github.com/warpstreamlabs/bento v1.8.2/go.mod h1:1yTw33su1sYywDnSvzXb4zT1wdFmZo4u1h69Tb33iZI=
+github.com/warpstreamlabs/bento v1.10.0 h1:gsgv7DGypcK9kcSiXLa5wl9qIdgD32lEHdyXsmK01Po=
+github.com/warpstreamlabs/bento v1.10.0/go.mod h1:Jj/ZtMoa7cywI9bmVnE8SyB0VSQ87Mjp/YRbc9gZCJ0=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
 github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f/go.mod h1:N2zxlSyiKSe5eX1tZViRH5QA0qijqEDrYZiPEAiq3wU=
