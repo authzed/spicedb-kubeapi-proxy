@@ -126,7 +126,7 @@ func (rf *StandardResponseFilterer) RunPreFilters(req *http.Request) error {
 
 	prefilterRule, err := singlePreFilterRule(rf.filteredRules)
 	if err != nil {
-		klog.FromContext(req.Context()).V(2).Error(err, "error getting single pre-filter rule", "request", req)
+		klog.FromContext(req.Context()).V(2).Error(err, "error getting single pre-filter rule", "request", requestLogger(req))
 		return fmt.Errorf("error getting single pre-filter rule: %w", err)
 	}
 
@@ -163,17 +163,17 @@ func (rf *StandardResponseFilterer) RunPreFilters(req *http.Request) error {
 
 	// Run LookupResources for the prefilter rule and write the results to the channel.
 	go func() {
-		klog.FromContext(req.Context()).V(3).Info("running pre-filter", "request", req, "filter", filter)
+		klog.FromContext(req.Context()).V(3).Info("running pre-filter", "request", requestLogger(req), "filter", filter)
 
 		result, err := runLookupResources(req.Context(), rf.client, filter, rf.input)
 		if err != nil {
 			if status.Code(err) == codes.Canceled {
-				klog.FromContext(req.Context()).V(3).Info("pre-filter canceled", "request", req)
+				klog.FromContext(req.Context()).V(3).Info("pre-filter canceled", "request", requestLogger(req))
 				rf.preFilterCompleted <- prefilterResult{err: err}
 				return
 			}
 
-			klog.FromContext(req.Context()).Error(err, "error running pre-filter", "request", req)
+			klog.FromContext(req.Context()).Error(err, "error running pre-filter", "request", requestLogger(req))
 			rf.preFilterCompleted <- prefilterResult{
 				err: err,
 			}
