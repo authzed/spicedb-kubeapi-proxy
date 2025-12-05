@@ -44,7 +44,7 @@ func NewServer(ctx context.Context, bootstrapFilePath string, bootstrapContent m
 		server.WithDispatchCacheConfig(server.CacheConfig{Enabled: false, Metrics: false}),
 		server.WithNamespaceCacheConfig(server.CacheConfig{Enabled: false, Metrics: false}),
 		server.WithClusterDispatchCacheConfig(server.CacheConfig{Enabled: false, Metrics: false}),
-		server.WithEnableExperimentalRelationshipExpiration(true),
+		server.WithEnableRelationshipExpiration(true),
 		server.WithDatastoreConfig(
 			*datastore.NewConfigWithOptionsAndDefaults().WithOptions(
 				datastore.WithEngine(datastore.MemoryEngine),

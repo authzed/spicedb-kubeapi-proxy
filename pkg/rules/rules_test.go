@@ -1918,7 +1918,6 @@ func TestConvertToBloblangInput(t *testing.T) {
 							"deploy.kubernetes.io/revision":                    "1",
 							"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apps/v1","kind":"Deployment"}`,
 						},
-						"creationTimestamp": nil,
 					},
 				},
 				"metadata": map[string]any{
@@ -1933,7 +1932,6 @@ func TestConvertToBloblangInput(t *testing.T) {
 						"deploy.kubernetes.io/revision":                    "1",
 						"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apps/v1","kind":"Deployment"}`,
 					},
-					"creationTimestamp": nil,
 				},
 				"headers": map[string]any{
 					"X-Build-Id": []any{"12345"},
