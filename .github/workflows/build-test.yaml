@@ -16,7 +16,7 @@ jobs:
     outputs:
       codechange: "${{ steps.code-filter.outputs.codechange }}"
     steps:
-      - uses: "actions/checkout@v4"
+      - uses: "actions/checkout@v6"
       - uses: "dorny/paths-filter@v3"
         id: "code-filter"
         with:
@@ -38,7 +38,7 @@ jobs:
     if: |
       needs.paths-filter.outputs.codechange == 'true'
     steps:
-      - uses: "actions/checkout@v4"
+      - uses: "actions/checkout@v6"
       - uses: "authzed/actions/setup-go@main"
       - uses: "authzed/actions/go-build@main"
 
@@ -49,7 +49,7 @@ jobs:
     if: |
       needs.paths-filter.outputs.codechange == 'true'
     steps:
-      - uses: "actions/checkout@v4"
+      - uses: "actions/checkout@v6"
       - uses: "authzed/actions/setup-go@main"
       - name: "Lint Go"
         uses: "authzed/actions/golangci-lint@main"
@@ -61,7 +61,7 @@ jobs:
     if: |
       needs.paths-filter.outputs.codechange == 'true'
     steps:
-      - uses: "actions/checkout@v4"
+      - uses: "actions/checkout@v6"
       - uses: "authzed/actions/setup-go@main"
       - name: "Unit tests"
         uses: "magefile/mage-action@v3"
@@ -80,7 +80,7 @@ jobs:
     if: |
       needs.paths-filter.outputs.codechange == 'true'
     steps:
-      - uses: "actions/checkout@v4"
+      - uses: "actions/checkout@v6"
       - uses: "authzed/actions/setup-go@main"
       - name: "e2e tests"
         uses: "magefile/mage-action@v3"
