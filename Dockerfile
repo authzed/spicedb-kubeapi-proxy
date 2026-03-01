@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.25.5-alpine3.22 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.0-alpine3.22 AS builder
 ARG TARGETOS TARGETARCH
 
 WORKDIR /go/src/spicedb-kubeapi-proxy
