@@ -9,8 +9,6 @@ import (
 	"os"
 	goruntime "runtime"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
-	"github.com/authzed/spicedb/pkg/tuple"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
@@ -20,6 +18,9 @@ import (
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/store"
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/versions"
 	"sigs.k8s.io/controller-runtime/tools/setup-envtest/workflows"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"github.com/authzed/spicedb/pkg/tuple"
 )
 
 // GetAllTuples collects all tuples matching the filter from SpiceDB

@@ -24,7 +24,6 @@ import (
 	"github.com/onsi/gomega/gexec"
 	"golang.org/x/exp/slices"
 	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
-
 	kind "sigs.k8s.io/kind/pkg/cluster"
 	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 	"sigs.k8s.io/kind/pkg/cmd"

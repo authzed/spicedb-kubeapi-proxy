@@ -2,6 +2,7 @@ package authz
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -233,7 +234,25 @@ func (rf *StandardResponseFilterer) FilterResp(resp *http.Response) error {
 			return nil
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		bodyStream := resp.Body
+
+		// NOTE: we need to manually check for gzipped encoding here
+		// because we're proxying - the request/response context would
+		// know about the encoding if we were the ones originating the
+		// request, but since we aren't, we need to manually check this.
+		// This is needed because the k8s API will automatically gzip responses
+		// above 128kb by default.
+		if resp.Header.Get("Content-Encoding") == "gzip" {
+			bodyStream, err = gzip.NewReader(bodyStream)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				_ = bodyStream.Close()
+			}()
+		}
+
+		body, err := io.ReadAll(bodyStream)
 		if err != nil {
 			return err
 		}

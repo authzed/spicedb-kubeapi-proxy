@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"compress/gzip"
 	"context"
 	"io"
 	"net/http"
@@ -449,6 +450,124 @@ func createKubernetesClient(t *testing.T, embeddedClient *http.Client, username 
 	require.NoError(t, err)
 
 	return clientset
+}
+
+// TestGzippedUpstreamResponse tests that the proxy correctly handles gzip-encoded
+// responses from the upstream k8s API server. The k8s API server automatically
+// gzip-compresses responses that exceed ~128KB. When a k8s client (kubectl,
+// client-go) includes Accept-Encoding: gzip on its request, the proxy forwards
+// that header upstream. Go's HTTP transport only auto-decompresses a response
+// when the transport itself injected Accept-Encoding — because the header was
+// already present, the proxy's transport leaves the body compressed. FilterResp
+// must therefore decompress Content-Encoding: gzip bodies before attempting to
+// decode them as JSON or protobuf.
+func TestGzippedUpstreamResponse(t *testing.T) {
+	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	responseText := `{"kind":"NamespaceList","apiVersion":"v1","metadata":{"resourceVersion":"1000"},"items":[]}`
+
+	// Isolate the REST-mapper discovery cache so test artefacts don't leak.
+	t.Setenv("KUBECACHEDIR", t.TempDir())
+
+	opts := NewOptions(WithEmbeddedProxy, WithEmbeddedSpiceDBEndpoint)
+	opts.Authentication.Embedded.Enabled = true
+
+	opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
+		// A TLS test server is required because the reverse proxy's Director
+		// always rewrites the upstream scheme to "https://".
+		mockServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api":
+				// Core API group discovery.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"kind":"APIVersions","apiVersion":"v1","versions":["v1"],"serverAddressByClientCIDRs":[{"clientCIDR":"0.0.0.0/0","serverAddress":"localhost"}]}`))
+			case "/apis":
+				// API group list discovery.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"kind":"APIGroupList","apiVersion":"v1","groups":[]}`))
+			case "/api/v1":
+				// Core v1 resource list — tells the REST mapper about Namespace.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"kind":"APIResourceList","apiVersion":"v1","groupVersion":"v1","resources":[{"name":"namespaces","singularName":"namespace","namespaced":false,"kind":"Namespace","verbs":["create","delete","get","list","patch","update","watch"]}]}`))
+			case "/api/v1/namespaces":
+				// Simulate the k8s API server's automatic gzip compression for
+				// responses exceeding ~128KB. The body here is small, but the
+				// Content-Encoding: gzip header exercises the same FilterResp
+				// code path as a real large response.
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Encoding", "gzip")
+				gz := gzip.NewWriter(w)
+				_, _ = gz.Write([]byte(responseText))
+				_ = gz.Close()
+			default:
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"kind":"Status","status":"Success"}`))
+			}
+		}))
+		t.Cleanup(mockServer.Close)
+
+		// Return the TLS server's own client transport so the reverse proxy
+		// trusts the self-signed certificate. The transport's
+		// DisableCompression=false default means it *would* auto-decompress if
+		// it had injected Accept-Encoding: gzip itself — but because the
+		// incoming client request already carries that header (see below), the
+		// transport forwards it unchanged and skips auto-decompression.
+		return &rest.Config{
+			Host: mockServer.URL,
+			// Insecure=true lets the REST mapper's discovery client connect to
+			// the mock TLS server without certificate errors.
+			TLSClientConfig: rest.TLSClientConfig{Insecure: true},
+		}, mockServer.Client().Transport, nil
+	}
+
+	opts.Matcher = rules.MatcherFunc(func(match *request.RequestInfo) []*rules.RunnableRule {
+		return []*rules.RunnableRule{{
+			Checks: []rules.RelationshipExpr{},
+		}}
+	})
+
+	completedConfig, err := opts.Complete(ctx)
+	require.NoError(t, err)
+
+	proxySrv, err := NewServer(ctx, completedConfig)
+	require.NoError(t, err)
+
+	client := proxySrv.GetEmbeddedClient(
+		WithUser("test-user"),
+		WithGroups("test-group"),
+	)
+	require.NotNil(t, client)
+
+	// Include Accept-Encoding: gzip on the request, exactly as kubectl and
+	// client-go do. The proxy copies this header to its upstream request; the
+	// upstream transport then sees the header was already present and does NOT
+	// auto-decompress the gzip response it receives. FilterResp therefore sees
+	// the raw compressed bytes when it reads resp.Body.
+	req, err := http.NewRequestWithContext(ctx, "GET", EmbeddedProxyHost+"/api/v1/namespaces", nil)
+	require.NoError(t, err)
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = resp.Body.Close()
+	})
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"), "expecting the response to be gzipped")
+	require.Equal(t, responseText+"\n", string(body), "unexpected body value")
+
+	// The proxy should relay the response successfully.
+	// A 502 Bad Gateway here means FilterResp attempted to decode the gzip
+	// bytes as JSON/protobuf without first decompressing them. The fix is to
+	// detect Content-Encoding: gzip in FilterResp and decompress the body
+	// before passing it to the codec decoder.
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"proxy must handle gzip-encoded upstream responses; a 502 indicates the body was not decompressed before decoding")
 }
 
 // headerAddingTransport wraps an http.RoundTripper to add authentication headers
