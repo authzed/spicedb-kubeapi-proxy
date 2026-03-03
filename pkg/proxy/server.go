@@ -99,6 +99,12 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 			host := strings.TrimPrefix(clusterHost, "https://")
 			req.URL.Host = strings.TrimSuffix(host, "/")
 			req.URL.Scheme = "https"
+			// Remove Accept-Encoding so the proxy's transport owns gzip negotiation.
+			// When the transport adds Accept-Encoding: gzip itself, it also auto-decompresses
+			// the response and strips Content-Encoding: gzip before ModifyResponse/FilterResp
+			// runs. This ensures FilterResp always receives uncompressed bytes regardless of
+			// response size.
+			req.Header.Del("Accept-Encoding")
 		},
 		ModifyResponse: func(response *http.Response) error {
 			klog.V(3).InfoSDepth(1, "upstream Kubernetes API response",
