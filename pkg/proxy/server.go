@@ -99,7 +99,7 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 			host := strings.TrimPrefix(clusterHost, "https://")
 			req.URL.Host = strings.TrimSuffix(host, "/")
 			req.URL.Scheme = "https"
-			req.Header.Del("Accept-Encoding")
+			req.Header.Set("Accept-Encoding", "identity")
 		},
 		ModifyResponse: func(response *http.Response) error {
 			klog.V(3).InfoSDepth(1, "upstream Kubernetes API response",
