@@ -108,6 +108,50 @@ func TestCheckKubeResourceError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestWriteToKubeDoesNotForwardAcceptEncoding(t *testing.T) {
+	// Verify that Accept-Encoding is stripped from forwarded headers.
+	// If Accept-Encoding is forwarded to kube, kube may gzip-encode its response,
+	// but the REST transport won't auto-decompress (it only decompresses when it
+	// added Accept-Encoding itself, setting requestedGzip=true internally).
+	// Forwarding Accept-Encoding would cause res.Raw() to return compressed bytes.
+	var capturedHeader http.Header
+	roundtripper := func(req *http.Request) (*http.Response, error) {
+		capturedHeader = req.Header.Clone()
+		header := http.Header{}
+		header.Set("Content-Type", runtime.ContentTypeJSON)
+		return &http.Response{
+			Header:     header,
+			StatusCode: http.StatusCreated,
+			Body:       io.NopCloser(bytes.NewReader([]byte(`{"hi":"bye"}`))),
+		}, nil
+	}
+	client := &fake.RESTClient{
+		Client:               fake.CreateHTTPClient(roundtripper),
+		NegotiatedSerializer: &serializer.CodecFactory{},
+	}
+	ah := ActivityHandler{KubeClient: client}
+
+	resp, err := ah.WriteToKube(t.Context(), &KubeReqInput{
+		RequestInfo: &request.RequestInfo{Path: "my_way", Namespace: "ns", Verb: "post"},
+		RequestURI:  "/my_way",
+		ObjectMeta:  &metav1.ObjectMeta{Name: "my_object_meta"},
+		Body:        []byte(`{"hi":"bye"}`),
+		Header: http.Header{
+			"Accept-Encoding": []string{"gzip"},
+			"Content-Type":    []string{"application/json"},
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, capturedHeader)
+	require.Empty(t, capturedHeader.Get("Accept-Encoding"),
+		"Accept-Encoding must not be forwarded: if kube gzip-encodes the response, "+
+			"the REST transport won't decompress it because it didn't set the header itself")
+	require.Equal(t, "application/json", capturedHeader.Get("Content-Type"),
+		"non-encoding headers should still be forwarded")
+	require.JSONEq(t, `{"hi":"bye"}`, string(resp.Body))
+}
+
 func TestIdempotencyKey(t *testing.T) {
 	payload := &v1.WriteRelationshipsRequest{}
 	key, err := idempotencyKeyForPayload(payload, "test-key")
