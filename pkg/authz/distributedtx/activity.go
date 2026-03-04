@@ -205,6 +205,13 @@ func (h *ActivityHandler) WriteToKube(ctx context.Context, req *KubeReqInput) (*
 
 	kreq := h.KubeClient.Verb(verb).RequestURI(req.RequestURI).Body(req.Body)
 	for h, v := range req.Header {
+		// Don't forward Accept-Encoding: the REST client's transport must own
+		// gzip negotiation so it can auto-decompress large responses. If we set
+		// Accept-Encoding ourselves, the transport won't know to decompress and
+		// res.Raw() returns compressed bytes.
+		if http.CanonicalHeaderKey(h) == "Accept-Encoding" {
+			continue
+		}
 		kreq.SetHeader(h, v...)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -1195,6 +1196,86 @@ var _ = Describe("Proxy", func() {
 						Expect(actualViewers).To(ContainElement(expectedKey))
 					}
 				})
+			})
+		})
+
+		When("creating and getting a large configmap through the proxy", func() {
+			// This test validates both gzip failure paths:
+			// 1. The workflow engine path (WriteToKube in activity.go): a large CREATE
+			//    response is gzip-encoded by kube; without the fix, WriteToKube would
+			//    forward Accept-Encoding from the client, preventing the REST transport
+			//    from auto-decompressing, and the client receives raw gzip bytes.
+			// 2. The reverse proxy path (Director in server.go): a large GET response
+			//    is gzip-encoded by kube; without the fix, FilterResp receives gzip
+			//    bytes and fails to decode them as JSON.
+			BeforeEach(func() {
+				createConfigMap := proxyrule.Config{Spec: proxyrule.Spec{
+					Locking: proxyrule.OptimisticLockMode,
+					Matches: []proxyrule.Match{{
+						GroupVersion: "v1",
+						Resource:     "configmaps",
+						Verbs:        []string{"create"},
+					}},
+					Update: proxyrule.Update{
+						CreateRelationships: []proxyrule.StringOrTemplate{{
+							// testresource view = viewer + creator, so this grants
+							// the creator permission to view the configmap below.
+							Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
+						}},
+					},
+				}}
+
+				getConfigMap := proxyrule.Config{Spec: proxyrule.Spec{
+					Matches: []proxyrule.Match{{
+						GroupVersion: "v1",
+						Resource:     "configmaps",
+						Verbs:        []string{"get"},
+					}},
+					Checks: []proxyrule.StringOrTemplate{{
+						Template: "testresource:{{namespacedName}}#view@user:{{user.name}}",
+					}},
+				}}
+
+				matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+					createNamespace(),
+					createConfigMap,
+					getConfigMap,
+				})
+				Expect(err).To(Succeed())
+				*proxySrv.Matcher = matcher
+			})
+
+			It("handles gzip-encoded responses from the workflow engine and reverse proxy", func(ctx context.Context) {
+				// Create namespace via proxy (goes through workflow engine).
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+
+				// 300KB is large enough to trigger kube's gzip encoding (threshold ~128KB).
+				const dataSize = 300 * 1024
+				cmName := names.SimpleNameGenerator.GenerateName("large-cm-")
+
+				// CREATE the large configmap through the proxy.
+				// This goes through the workflow engine (WriteToKube in activity.go).
+				// kube gzip-encodes the ~300KB 201 Created response; without the fix
+				// in WriteToKube, the client receives raw gzip bytes and fails to decode.
+				_, err := paulClient.CoreV1().ConfigMaps(paulNamespace).Create(ctx, &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      cmName,
+						Namespace: paulNamespace,
+					},
+					Data: map[string]string{
+						"payload": strings.Repeat("x", dataSize),
+					},
+				}, metav1.CreateOptions{})
+				Expect(err).To(Succeed())
+
+				// GET the large configmap through the proxy.
+				// This goes through the reverse proxy (Director + FilterResp in server.go).
+				// kube gzip-encodes the ~300KB response; without the fix in Director,
+				// FilterResp receives gzip bytes and cannot decode them as JSON.
+				cm, err := paulClient.CoreV1().ConfigMaps(paulNamespace).Get(ctx, cmName, metav1.GetOptions{})
+				Expect(err).To(Succeed())
+				Expect(cm.Name).To(Equal(cmName))
+				Expect(cm.Data["payload"]).To(HaveLen(dataSize))
 			})
 		})
 	})
