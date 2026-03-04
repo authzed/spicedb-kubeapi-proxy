@@ -25,7 +25,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
@@ -196,7 +196,7 @@ var _ = Describe("Proxy", func() {
 			if err != nil {
 				return err
 			}
-			_, err = client.CoreV1().Pods(namespace).Patch(ctx, name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: "Test", Force: pointer.Bool(true)})
+			_, err = client.CoreV1().Pods(namespace).Patch(ctx, name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: "Test", Force: ptr.To(true)})
 			return err
 		}
 		ListPods := func(ctx context.Context, client kubernetes.Interface, namespace string) []string {
@@ -1196,6 +1196,79 @@ var _ = Describe("Proxy", func() {
 						Expect(actualViewers).To(ContainElement(expectedKey))
 					}
 				})
+			})
+		})
+
+		When("reading a large configmap through the proxy", func() {
+			BeforeEach(func() {
+				createConfigMap := proxyrule.Config{Spec: proxyrule.Spec{
+					Locking: proxyrule.OptimisticLockMode,
+					Matches: []proxyrule.Match{{
+						GroupVersion: "v1",
+						Resource:     "configmaps",
+						Verbs:        []string{"create"},
+					}},
+					Update: proxyrule.Update{
+						CreateRelationships: []proxyrule.StringOrTemplate{{
+							Template: "testresource:{{namespacedName}}#creator@user:{{user.name}}",
+						}},
+					},
+				}}
+
+				getConfigMap := proxyrule.Config{Spec: proxyrule.Spec{
+					Matches: []proxyrule.Match{{
+						GroupVersion: "v1",
+						Resource:     "configmaps",
+						Verbs:        []string{"get"},
+					}},
+					Checks: []proxyrule.StringOrTemplate{{
+						Template: "testresource:{{namespacedName}}#view@user:{{user.name}}",
+					}},
+				}}
+
+				matcher, err := rules.NewMapMatcher([]proxyrule.Config{
+					createNamespace(),
+					createConfigMap,
+					getConfigMap,
+				})
+				Expect(err).To(Succeed())
+				*proxySrv.Matcher = matcher
+			})
+
+			FIt("successfully reads a ~200KB configmap", func(ctx context.Context) {
+				// Create namespace for the test
+				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
+
+				// Generate approximately 200KB of data
+				const targetSize = 200 * 1024
+				data := make([]byte, targetSize)
+				for i := range data {
+					data[i] = 'a' + byte(i%26)
+				}
+				largeValue := string(data)
+
+				cmName := names.SimpleNameGenerator.GenerateName("large-cm-")
+
+				// Create the large configmap via the proxy
+				_, err := paulClient.CoreV1().ConfigMaps(paulNamespace).Create(ctx, &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      cmName,
+						Namespace: paulNamespace,
+					},
+					Data: map[string]string{
+						"large-key": largeValue,
+					},
+				}, metav1.CreateOptions{})
+				Expect(err).To(Succeed())
+
+				// Read the configmap back through the proxy
+				retrieved, err := paulClient.CoreV1().ConfigMaps(paulNamespace).Get(ctx, cmName, metav1.GetOptions{})
+				Expect(err).To(Succeed())
+
+				// Verify the full data was returned intact
+				Expect(retrieved.Data).To(HaveKey("large-key"))
+				Expect(retrieved.Data["large-key"]).To(HaveLen(targetSize))
+				Expect(retrieved.Data["large-key"]).To(Equal(largeValue))
 			})
 		})
 	})
