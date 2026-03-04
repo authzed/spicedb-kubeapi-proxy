@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
@@ -205,6 +206,14 @@ func (h *ActivityHandler) WriteToKube(ctx context.Context, req *KubeReqInput) (*
 
 	kreq := h.KubeClient.Verb(verb).RequestURI(req.RequestURI).Body(req.Body)
 	for h, v := range req.Header {
+		// Do not forward Accept-Encoding. Go's http.Transport only auto-decompresses
+		// gzip responses when it added Accept-Encoding: gzip itself. If the caller
+		// explicitly sets Accept-Encoding: gzip, the transport returns raw compressed
+		// bytes — causing large gzip-encoded upstream responses to arrive as undecompressed
+		// bytes that corrupt the response body seen by the client.
+		if strings.EqualFold(h, "Accept-Encoding") {
+			continue
+		}
 		kreq.SetHeader(h, v...)
 	}
 
