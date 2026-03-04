@@ -250,6 +250,11 @@ func (rf *StandardResponseFilterer) FilterResp(resp *http.Response) error {
 			defer func() {
 				_ = bodyStream.Close()
 			}()
+			// We're decompressing the body here, so remove the header.
+			// If we leave it, the downstream HTTP transport will try to
+			// gzip-decompress the already-plain bytes and fail with
+			// "gzip: invalid header".
+			resp.Header.Del("Content-Encoding")
 		}
 
 		body, err := io.ReadAll(bodyStream)
