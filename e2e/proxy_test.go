@@ -1235,7 +1235,7 @@ var _ = Describe("Proxy", func() {
 				*proxySrv.Matcher = matcher
 			})
 
-			FIt("successfully reads a ~200KB configmap", func(ctx context.Context) {
+			It("successfully reads a ~200KB configmap", func(ctx context.Context) {
 				// Create namespace for the test
 				Expect(CreateNamespace(ctx, paulClient, paulNamespace)).To(Succeed())
 
