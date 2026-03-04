@@ -558,14 +558,9 @@ func TestGzippedUpstreamResponse(t *testing.T) {
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"), "expecting the response to be gzipped")
+	require.Empty(t, resp.Header.Get("Content-Encoding"),
+		"decompressingTransport must strip Content-Encoding: gzip after decompression")
 	require.Equal(t, responseText+"\n", string(body), "unexpected body value")
-
-	// The proxy should relay the response successfully.
-	// A 502 Bad Gateway here means FilterResp attempted to decode the gzip
-	// bytes as JSON/protobuf without first decompressing them. The fix is to
-	// detect Content-Encoding: gzip in FilterResp and decompress the body
-	// before passing it to the codec decoder.
 	require.Equal(t, http.StatusOK, resp.StatusCode,
 		"proxy must handle gzip-encoded upstream responses; a 502 indicates the body was not decompressed before decoding")
 }

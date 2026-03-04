@@ -1,8 +1,11 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"os"
@@ -110,7 +113,7 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 			}
 			return responseFilterer.FilterResp(response)
 		},
-		Transport: transport,
+		Transport: &decompressingTransport{base: transport},
 		ErrorHandler: func(writer http.ResponseWriter, h *http.Request, err error) {
 			klog.V(3).InfoSDepth(1, "upstream Kubernetes API error response", "error", err)
 			writer.WriteHeader(http.StatusBadGateway)
@@ -386,4 +389,40 @@ func (t *authHeaderTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	}
 
 	return t.base.RoundTrip(newReq)
+}
+
+// decompressingTransport wraps an http.RoundTripper and transparently decompresses
+// Content-Encoding: gzip responses from the upstream.
+type decompressingTransport struct {
+	base http.RoundTripper
+}
+
+func (t *decompressingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+
+	resp, err := base.RoundTrip(req)
+	if err != nil || resp == nil || resp.Header.Get("Content-Encoding") != "gzip" {
+		return resp, err
+	}
+
+	gr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("decompressingTransport: gzip.NewReader: %w", err)
+	}
+
+	body, err := io.ReadAll(gr)
+	_ = gr.Close()
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("decompressingTransport: reading gzip body: %w", err)
+	}
+
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.Header.Del("Content-Encoding")
+	resp.ContentLength = int64(len(body))
+	return resp, nil
 }
