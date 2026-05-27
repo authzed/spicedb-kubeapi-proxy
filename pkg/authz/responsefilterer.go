@@ -46,7 +46,7 @@ const prefilterTimeout = 10 * time.Second
 // ResponseFilterer is an interface that defines the methods for filtering HTTP responses
 // retrieved from the Kubernetes API server, based on authorization rules.
 type ResponseFilterer interface {
-	// RunPreFilters runs the filtering on the response, updating its body and status code
+	// FilterResp runs the filtering on the response, updating its body and status code
 	// based on the rules and authz data.
 	FilterResp(resp *http.Response) error
 }
@@ -626,8 +626,8 @@ func (rf *WatchResponseFilterer) filterWatch(resp *http.Response, recognized boo
 		}()
 
 		bufferedEvents := make(map[types.NamespacedName]decodedWatchEvent)
+		defer func() { klog.V(4).InfoS("watch event writer closed") }()
 		for {
-			defer func() { klog.V(4).InfoS("watch event writer closed") }()
 			select {
 			case event, ok := <-events:
 				if !ok {

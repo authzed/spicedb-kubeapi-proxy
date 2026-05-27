@@ -144,9 +144,8 @@ func PessimisticWriteToSpiceDBAndKube(ctx workflow.Context, input *WriteObjInput
 	// the lock when complete.
 	rollback := NewRollbackRelationships(resourceLockRel)
 
-	preconditions := []*v1.Precondition{
-		resourceLockDoesNotExist(resourceLockRel.Relationship),
-	}
+	preconditions := make([]*v1.Precondition, 0, 1+len(input.Preconditions))
+	preconditions = append(preconditions, resourceLockDoesNotExist(resourceLockRel.Relationship))
 	preconditions = append(preconditions, input.Preconditions...)
 
 	updates := make([]*v1.RelationshipUpdate, 0, len(input.CreateRelationships)+len(input.TouchRelationships)+len(input.DeleteRelationships))

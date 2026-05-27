@@ -271,7 +271,8 @@ func getFreePort(t *testing.T, listenAddr string) int {
 func newTCPSpiceDB(t *testing.T, ctx context.Context) (server.RunnableServer, string) {
 	t.Helper()
 
-	ds, err := datastore.NewDatastore(ctx,
+	ds, err := datastore.NewDatastore(
+		ctx,
 		datastore.DefaultDatastoreConfig().ToOption(),
 		datastore.WithRequestHedgingEnabled(false),
 	)
