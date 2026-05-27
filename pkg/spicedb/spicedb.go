@@ -22,11 +22,12 @@ func NewServer(ctx context.Context, bootstrapFilePath string, bootstrapContent m
 	} else if len(bootstrapFilePath) > 0 {
 		bootstrapOption = datastore.SetBootstrapFiles([]string{bootstrapFilePath})
 	}
-	return server.NewConfigWithOptionsAndDefaults(server.WithGRPCServer(util.GRPCServerConfig{
-		Network:    util.BufferedNetwork,
-		Enabled:    true,
-		BufferSize: 10 * humanize.MiByte,
-	}),
+	return server.NewConfigWithOptionsAndDefaults(
+		server.WithGRPCServer(util.GRPCServerConfig{
+			Network:    util.BufferedNetwork,
+			Enabled:    true,
+			BufferSize: 10 * humanize.MiByte,
+		}),
 		server.WithDispatchServer(util.GRPCServerConfig{Enabled: false}),
 		server.WithDispatchUpstreamAddr(""),
 		server.WithHTTPGatewayUpstreamAddr(""),
@@ -51,7 +52,8 @@ func NewServer(ctx context.Context, bootstrapFilePath string, bootstrapContent m
 				bootstrapOption,
 				datastore.WithRequestHedgingEnabled(false),
 				datastore.WithGCWindow(24*time.Hour),
-			)),
+			),
+		),
 		server.WithGRPCAuthFunc(func(ctx context.Context) (context.Context, error) { return ctx, nil }),
 	).Complete(ctx)
 }

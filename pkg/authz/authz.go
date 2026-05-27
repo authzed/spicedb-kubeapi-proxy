@@ -53,7 +53,8 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 				"verb", input.Request.Verb,
 				"APIGroup", input.Request.APIGroup,
 				"APIVersion", input.Request.APIVersion,
-				"Resource", input.Request.Resource)
+				"Resource", input.Request.Resource,
+			)
 			handleError(w, failed, req, fmt.Errorf("request did not match any authorization rule"))
 			return
 		}
@@ -75,7 +76,8 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 				"verb", input.Request.Verb,
 				"APIGroup", input.Request.APIGroup,
 				"APIVersion", input.Request.APIVersion,
-				"Resource", input.Request.Resource)
+				"Resource", input.Request.Resource,
+			)
 			handleError(w, failed, req, fmt.Errorf("request matched authorization rule/s but failed CEL conditions"))
 			return
 		}
@@ -85,7 +87,8 @@ func WithAuthorization(handler, failed http.Handler, restMapper meta.RESTMapper,
 			"verb", input.Request.Verb,
 			"APIGroup", input.Request.APIGroup,
 			"APIVersion", input.Request.APIVersion,
-			"Resource", input.Request.Resource)
+			"Resource", input.Request.Resource,
+		)
 		inputKeyValues := input.ToKeyValues()
 		klog.FromContext(ctx).V(4).Info("authorization input details", inputKeyValues...)
 

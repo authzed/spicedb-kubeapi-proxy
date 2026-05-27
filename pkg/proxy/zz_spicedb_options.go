@@ -4,7 +4,6 @@ package proxy
 import (
 	server "github.com/authzed/spicedb/pkg/cmd/server"
 	defaults "github.com/creasty/defaults"
-	helpers "github.com/ecordell/optgen/helpers"
 )
 
 type SpiceDBOptionsOption func(s *SpiceDBOptions)
@@ -12,8 +11,8 @@ type SpiceDBOptionsOption func(s *SpiceDBOptions)
 // NewSpiceDBOptionsWithOptions creates a new SpiceDBOptions with the passed in options set
 func NewSpiceDBOptionsWithOptions(opts ...SpiceDBOptionsOption) *SpiceDBOptions {
 	s := &SpiceDBOptions{}
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
@@ -22,8 +21,8 @@ func NewSpiceDBOptionsWithOptions(opts ...SpiceDBOptionsOption) *SpiceDBOptions 
 func NewSpiceDBOptionsWithOptionsAndDefaults(opts ...SpiceDBOptionsOption) *SpiceDBOptions {
 	s := &SpiceDBOptions{}
 	defaults.MustSet(s)
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
@@ -33,6 +32,7 @@ func (s *SpiceDBOptions) ToOption() SpiceDBOptionsOption {
 	return func(to *SpiceDBOptions) {
 		to.SpiceDBEndpoint = s.SpiceDBEndpoint
 		to.EmbeddedSpiceDB = s.EmbeddedSpiceDB
+		to.BootstrapContent = s.BootstrapContent
 		to.Insecure = s.Insecure
 		to.SkipVerifyCA = s.SkipVerifyCA
 		to.SecureSpiceDBTokensBySpace = s.SecureSpiceDBTokensBySpace
@@ -41,28 +41,61 @@ func (s *SpiceDBOptions) ToOption() SpiceDBOptionsOption {
 }
 
 // DebugMap returns a map form of SpiceDBOptions for debugging
-func (s SpiceDBOptions) DebugMap() map[string]any {
+func (s *SpiceDBOptions) DebugMap() map[string]any {
 	debugMap := map[string]any{}
-	debugMap["SpiceDBEndpoint"] = helpers.DebugValue(s.SpiceDBEndpoint, false)
-	debugMap["Insecure"] = helpers.SensitiveDebugValue(s.Insecure)
-	debugMap["SkipVerifyCA"] = helpers.DebugValue(s.SkipVerifyCA, false)
-	debugMap["SecureSpiceDBTokensBySpace"] = helpers.SensitiveDebugValue(s.SecureSpiceDBTokensBySpace)
-	debugMap["SpicedbCAPath"] = helpers.DebugValue(s.SpicedbCAPath, false)
+	if s.SpiceDBEndpoint == "" {
+		debugMap["SpiceDBEndpoint"] = "(empty)"
+	} else {
+		debugMap["SpiceDBEndpoint"] = s.SpiceDBEndpoint
+	}
+	debugMap["Insecure"] = "(sensitive)"
+	debugMap["SkipVerifyCA"] = s.SkipVerifyCA
+	if s.SecureSpiceDBTokensBySpace == "" {
+		debugMap["SecureSpiceDBTokensBySpace"] = "(empty)"
+	} else {
+		debugMap["SecureSpiceDBTokensBySpace"] = "(sensitive)"
+	}
+	if s.SpicedbCAPath == "" {
+		debugMap["SpicedbCAPath"] = "(empty)"
+	} else {
+		debugMap["SpicedbCAPath"] = s.SpicedbCAPath
+	}
 	return debugMap
+}
+
+// FlatDebugMap returns a flattened map form of SpiceDBOptions for debugging
+// Nested maps are flattened using dot notation (e.g., "parent.child.field")
+func (s *SpiceDBOptions) FlatDebugMap() map[string]any {
+	var flatten func(m map[string]any) map[string]any
+	flatten = func(m map[string]any) map[string]any {
+		result := make(map[string]any, len(m))
+		for key, value := range m {
+			childMap, ok := value.(map[string]any)
+			if ok {
+				for childKey, childValue := range flatten(childMap) {
+					result[key+"."+childKey] = childValue
+				}
+				continue
+			}
+			result[key] = value
+		}
+		return result
+	}
+	return flatten(s.DebugMap())
 }
 
 // SpiceDBOptionsWithOptions configures an existing SpiceDBOptions with the passed in options set
 func SpiceDBOptionsWithOptions(s *SpiceDBOptions, opts ...SpiceDBOptionsOption) *SpiceDBOptions {
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
 
 // WithOptions configures the receiver SpiceDBOptions with the passed in options set
 func (s *SpiceDBOptions) WithOptions(opts ...SpiceDBOptionsOption) *SpiceDBOptions {
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
@@ -78,6 +111,20 @@ func WithSpiceDBEndpoint(spiceDBEndpoint string) SpiceDBOptionsOption {
 func WithEmbeddedSpiceDB(embeddedSpiceDB server.RunnableServer) SpiceDBOptionsOption {
 	return func(s *SpiceDBOptions) {
 		s.EmbeddedSpiceDB = embeddedSpiceDB
+	}
+}
+
+// WithBootstrapContent returns an option that can append BootstrapContents to SpiceDBOptions.BootstrapContent
+func WithBootstrapContent(key string, value []byte) SpiceDBOptionsOption {
+	return func(s *SpiceDBOptions) {
+		s.BootstrapContent[key] = value
+	}
+}
+
+// SetBootstrapContent returns an option that can set BootstrapContent on a SpiceDBOptions
+func SetBootstrapContent(bootstrapContent map[string][]byte) SpiceDBOptionsOption {
+	return func(s *SpiceDBOptions) {
+		s.BootstrapContent = bootstrapContent
 	}
 }
 

@@ -241,7 +241,8 @@ type ResolveInput struct {
 
 func (r ResolveInput) ToKeyValues() []any {
 	expanded := make([]any, 0, 10+len(r.Headers)*2+(2*5)+(2*3))
-	expanded = append(expanded,
+	expanded = append(
+		expanded,
 		"name", r.Name,
 		"namespace", r.Namespace,
 		"namespacedName", r.NamespacedName,
@@ -251,7 +252,8 @@ func (r ResolveInput) ToKeyValues() []any {
 
 	// Expand r.Request fields
 	if r.Request != nil {
-		expanded = append(expanded,
+		expanded = append(
+			expanded,
 			"request.verb", r.Request.Verb,
 			"request.resource", r.Request.Resource,
 			"request.labelSelector", r.Request.LabelSelector,
@@ -261,7 +263,8 @@ func (r ResolveInput) ToKeyValues() []any {
 	}
 
 	if r.User != nil {
-		expanded = append(expanded,
+		expanded = append(
+			expanded,
 			"user.name", r.User.Name,
 			"user.groups", r.User.Groups,
 			"user.extra", r.User.Extra,

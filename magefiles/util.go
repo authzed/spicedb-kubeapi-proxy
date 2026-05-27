@@ -112,7 +112,8 @@ func provisionKind(name string, images []string, archives []string, config *v1al
 		return kubeconfig, deprovision, exportLogs, err
 	}
 
-	err = provider.Create(name,
+	err = provider.Create(
+		name,
 		kind.CreateWithWaitForReady(5*time.Minute),
 		kind.CreateWithV1Alpha4Config(config),
 	)

@@ -898,8 +898,9 @@ var _ = Describe("Proxy", func() {
 					}
 				}
 				Expect(len(allErrs)).To(Equal(1))
-				Expect(k8serrors.IsConflict(allErrs[0]) || // pessimistic lock
-					k8serrors.IsAlreadyExists(allErrs[0]), // optimistic lock
+				Expect(
+					k8serrors.IsConflict(allErrs[0]) || // pessimistic lock
+						k8serrors.IsAlreadyExists(allErrs[0]), // optimistic lock
 				).To(BeTrue())
 			})
 
