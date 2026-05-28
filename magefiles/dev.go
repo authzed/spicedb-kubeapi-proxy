@@ -57,6 +57,12 @@ func (d Dev) Run() error {
 
 // Up brings up a dev cluster with the proxy installed.
 func (d Dev) Up(ctx context.Context) error {
+	if err := checkDocker(); err != nil {
+		return err
+	}
+	if err := checkKustomizer(); err != nil {
+		return err
+	}
 	var proxyHostPort int32
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		proxyHostPort, err = GetFreePort("localhost")
@@ -220,6 +226,9 @@ func getBytesFromSecretField(ctx context.Context, clientset *kubernetes.Clientse
 
 // Clean deletes the dev stack cluster.
 func (d Dev) Clean() error {
+	if err := checkDocker(); err != nil {
+		return err
+	}
 	provider := kind.NewProvider(
 		kind.ProviderWithLogger(cmd.NewLogger()),
 	)
