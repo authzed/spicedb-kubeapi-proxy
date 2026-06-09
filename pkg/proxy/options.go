@@ -318,7 +318,7 @@ func (o *Options) Complete(ctx context.Context) (*CompletedConfig, error) {
 			return nil, fmt.Errorf("unable to stand up embedded SpiceDB: %w", err)
 		}
 
-		conn, err = o.SpiceDBOptions.EmbeddedSpiceDB.GRPCDialContext(ctx, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err = o.SpiceDBOptions.EmbeddedSpiceDB.NewClient(grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			return nil, fmt.Errorf("unable to open gRPC connection with embedded SpiceDB: %w", err)
 		}
