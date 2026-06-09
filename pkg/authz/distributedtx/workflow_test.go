@@ -36,10 +36,10 @@ func TestWorkflow(t *testing.T) {
 			srv, err := spicedb.NewServer(ctx, "", nil)
 			require.NoError(t, err)
 			go func() {
-				require.NoError(t, srv.Run(ctx)) // nolint:testifylint
+				_ = srv.Run(ctx)
 			}()
 
-			dialCtx, err := srv.GRPCDialContext(ctx)
+			dialCtx, err := srv.NewClient()
 			require.NoError(t, err)
 
 			psc := v1.NewPermissionsServiceClient(dialCtx)
