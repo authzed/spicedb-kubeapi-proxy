@@ -6,7 +6,7 @@ require (
 	github.com/authzed/authzed-go v1.10.0
 	github.com/authzed/ctxkey v0.0.0-20260210154927-ca132876f62c
 	github.com/authzed/grpcutil v0.0.0-20260105210157-e237581949c2
-	github.com/authzed/spicedb v1.53.1-0.20260609144442-221681b35ad4
+	github.com/authzed/spicedb v1.53.1-0.20260609214739-87482ed4fbea
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/creasty/defaults v1.8.0
 	github.com/cschleiden/go-workflows v1.0.1
