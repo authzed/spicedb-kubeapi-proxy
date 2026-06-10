@@ -2,17 +2,38 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 )
+
+// deploymentGVK is the kind deploymentsGVR resolves to.
+var deploymentGVK = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+
+// countingRESTMapper is a test double that records how many times KindFor is invoked
+// and returns a configurable result. It embeds meta.RESTMapper (nil) to satisfy the
+// interface; only KindFor is exercised.
+type countingRESTMapper struct {
+	meta.RESTMapper
+	kindForCalls  int
+	kindForResult schema.GroupVersionKind
+	kindForErr    error
+}
+
+func (c *countingRESTMapper) KindFor(schema.GroupVersionResource) (schema.GroupVersionKind, error) {
+	c.kindForCalls++
+	return c.kindForResult, c.kindForErr
+}
 
 // deploymentsGVR is a stock Kubernetes resource used to exercise KindFor. The bug is
 // independent of which resource is resolved; any GVR served by discovery will do.
@@ -113,4 +134,69 @@ func TestNewCachedRESTMapper_ConcurrentKindForIsRaceFree(t *testing.T) {
 	for err := range errs {
 		require.NoError(t, err)
 	}
+}
+
+// TestCachingRESTMapper_MemoizesSuccessfulKindFor verifies repeated lookups for the
+// same resource resolve from the in-process cache rather than re-hitting the
+// (expensive, per-call discovery-reading) delegate on every request.
+func TestCachingRESTMapper_MemoizesSuccessfulKindFor(t *testing.T) {
+	underlying := &countingRESTMapper{kindForResult: deploymentGVK}
+	mapper := newCachingRESTMapper(underlying, time.Hour)
+
+	for i := 0; i < 5; i++ {
+		gvk, err := mapper.KindFor(deploymentsGVR)
+		require.NoError(t, err)
+		require.Equal(t, "Deployment", gvk.Kind)
+	}
+
+	require.Equal(t, 1, underlying.kindForCalls, "underlying KindFor should be invoked once and memoized thereafter")
+}
+
+// TestCachingRESTMapper_DoesNotCacheErrors verifies failed lookups are not cached, so a
+// transient discovery error (or a resource type that does not exist yet) is retried
+// rather than permanently poisoning the cache.
+func TestCachingRESTMapper_DoesNotCacheErrors(t *testing.T) {
+	underlying := &countingRESTMapper{kindForErr: errors.New("discovery unavailable")}
+	mapper := newCachingRESTMapper(underlying, time.Hour)
+
+	_, err := mapper.KindFor(deploymentsGVR)
+	require.Error(t, err)
+
+	// Discovery recovers; the next lookup must hit the underlying mapper again and succeed.
+	underlying.kindForErr = nil
+	underlying.kindForResult = deploymentGVK
+
+	gvk, err := mapper.KindFor(deploymentsGVR)
+	require.NoError(t, err)
+	require.Equal(t, "Deployment", gvk.Kind)
+	require.Equal(t, 2, underlying.kindForCalls, "error result must not be cached")
+}
+
+// TestCachingRESTMapper_RefreshesAfterTTL verifies the in-process cache honors the TTL:
+// a cached entry is re-resolved through the delegate once it is older than the TTL, so
+// memoization never serves data staler than the underlying discovery cache would.
+func TestCachingRESTMapper_RefreshesAfterTTL(t *testing.T) {
+	underlying := &countingRESTMapper{kindForResult: deploymentGVK}
+	mapper := newCachingRESTMapper(underlying, time.Hour)
+
+	now := time.Unix(1_000_000, 0)
+	mapper.now = func() time.Time { return now }
+
+	_, err := mapper.KindFor(deploymentsGVR) // miss -> delegate (calls=1)
+	require.NoError(t, err)
+	_, err = mapper.KindFor(deploymentsGVR) // hit (calls=1)
+	require.NoError(t, err)
+	require.Equal(t, 1, underlying.kindForCalls)
+
+	// Within the TTL: still served from cache.
+	now = now.Add(59 * time.Minute)
+	_, err = mapper.KindFor(deploymentsGVR)
+	require.NoError(t, err)
+	require.Equal(t, 1, underlying.kindForCalls, "entry within TTL should stay cached")
+
+	// Past the TTL: re-resolved through the delegate.
+	now = now.Add(2 * time.Minute) // total 61m > 60m TTL
+	_, err = mapper.KindFor(deploymentsGVR)
+	require.NoError(t, err)
+	require.Equal(t, 2, underlying.kindForCalls, "entry older than TTL should be refreshed")
 }
