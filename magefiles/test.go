@@ -18,10 +18,19 @@ func (t Test) All() error {
 
 // Unit runs the unit tests.
 func (t Test) Unit() error {
-	// TODO add -race
-	args := []string{"test", "-count=1"}
-	args = append(args, []string{"-coverpkg=./...", "-covermode=atomic", "-coverprofile=coverageunit.txt"}...)
-	args = append(args, "./...")
+	args := []string{
+		"test",
+		// bypass cache
+		"-count=1",
+		// check for data races
+		"-race",
+		// coverage flags
+		"-coverpkg=./...",
+		"-covermode=atomic",
+		"-coverprofile=coverageunit.txt",
+		// package
+		"./...",
+	}
 	return RunSh("go", WithV())(args...)
 }
 
