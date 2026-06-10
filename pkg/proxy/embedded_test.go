@@ -10,17 +10,30 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/endpoints/request"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	logsv1 "k8s.io/component-base/logs/api/v1"
+	"k8s.io/klog/v2"
+	"k8s.io/klog/v2/ktesting"
 
 	"github.com/authzed/spicedb-kubeapi-proxy/pkg/rules"
 )
 
+// testContext returns a context whose klog logger writes to t.Log. Proxy and
+// embedded-SpiceDB output is then captured per-test by the testing framework and
+// only printed when the test fails (or under -v), so successful runs are quiet.
+//
+// The logger is injected via the context rather than klog.SetLogger so that it
+// never mutates klog's global logger; mutating that global races with background
+// server goroutines from earlier tests under -race (which is why the options keep
+// SkipLoggerSetupForTesting set).
+func testContext(t testing.TB) context.Context {
+	t.Helper()
+	logger := ktesting.NewLogger(t, ktesting.NewConfig(ktesting.Verbosity(3)))
+	return klog.NewContext(t.Context(), logger)
+}
+
 func TestEmbeddedMode(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-	ctx := t.Context()
+	ctx := testContext(t)
 
 	opts := createEmbeddedTestOptions(t)
 	completedConfig, err := opts.Complete(ctx)
@@ -69,9 +82,7 @@ func TestEmbeddedMode(t *testing.T) {
 }
 
 func TestEmbeddedModeCustomHeaders(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(testContext(t))
 	t.Cleanup(cancel)
 
 	// Create a proxy with custom header names
@@ -112,9 +123,7 @@ func TestEmbeddedModeCustomHeaders(t *testing.T) {
 }
 
 func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(testContext(t))
 	t.Cleanup(cancel)
 
 	// Create one proxy with multiple header configuration for all tests
@@ -196,14 +205,13 @@ func TestEmbeddedModeAuthenticationConfiguration(t *testing.T) {
 }
 
 func TestEmbeddedModeDefaults(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(testContext(t))
 	t.Cleanup(cancel)
 
 	// Create embedded proxy with no explicit header configuration to test defaults
 	opts := NewOptions(WithEmbeddedProxy, WithEmbeddedSpiceDBEndpoint)
 	opts.Authentication.Embedded.Enabled = true
+	opts.SkipLoggerSetupForTesting = true
 
 	// Configure mock upstream server
 	opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
@@ -259,9 +267,7 @@ func TestEmbeddedModeDefaults(t *testing.T) {
 }
 
 func TestEmbeddedClientFunctionalOptions(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(testContext(t))
 	t.Cleanup(cancel)
 
 	// Create one proxy server for all subtests to avoid logging config issues
@@ -350,9 +356,7 @@ func TestEmbeddedClientFunctionalOptions(t *testing.T) {
 }
 
 func TestEmbeddedClientCustomHeaderConfig(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(testContext(t))
 	t.Cleanup(cancel)
 
 	// Create proxy with custom header names
@@ -402,6 +406,7 @@ func createEmbeddedTestOptions(t *testing.T) *Options {
 
 	opts := NewOptions(WithEmbeddedProxy, WithEmbeddedSpiceDBEndpoint)
 	opts.Authentication.Embedded.Enabled = true
+	opts.SkipLoggerSetupForTesting = true
 
 	// Configure mock upstream server
 	opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
