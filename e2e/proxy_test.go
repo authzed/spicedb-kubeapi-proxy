@@ -104,6 +104,16 @@ var _ = Describe("Proxy", func() {
 			_ = adminDynamicClient.Resource(gvr).Namespace(sharedNamespace).Delete(ctx, paulCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
 			_ = adminDynamicClient.Resource(gvr).Namespace(sharedNamespace).Delete(ctx, chaniCustomResource, metav1.DeleteOptions{PropagationPolicy: &orphan})
 
+			// Delete the namespace relationships this spec created so that view grants
+			// don't accumulate across specs. envtest has no namespace GC, so orphaned
+			// namespaces otherwise pile up in each user's cluster-scoped list/watch and
+			// make those specs flaky. Namespaces are the only cluster-scoped resource
+			// involved here; pods and custom resources are scoped to a fresh per-spec
+			// namespace, so they don't leak across specs.
+			for _, ns := range []string{paulNamespace, chaniNamespace, sharedNamespace} {
+				DeleteAllTuples(ctx, &v1.RelationshipFilter{ResourceType: "namespace", OptionalResourceId: ns})
+			}
+
 			// ensure there are no remaining locks
 			Expect(len(GetAllTuples(ctx, &v1.RelationshipFilter{
 				ResourceType:          "lock",
@@ -639,13 +649,14 @@ var _ = Describe("Proxy", func() {
 				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, paulClient, chaniNamespace))).To(BeTrue())
 				Expect(k8serrors.IsUnauthorized(GetNamespace(ctx, chaniClient, paulNamespace))).To(BeTrue())
 
-				// neither can see each other's namespace in the list
+				// Each user sees exactly their own namespace and nothing else. Per-spec
+				// cleanup of namespace grants (AfterEach) means there is no stale state, so
+				// ConsistOf is an exact match: any cross-user namespace -- current or stale
+				// from an earlier spec -- would fail this, making it a robust leak check.
 				paulList := ListNamespaces(ctx, paulClient)
 				chaniList := ListNamespaces(ctx, chaniClient)
-				Expect(paulList).ToNot(ContainElement(chaniNamespace))
-				Expect(paulList).To(ContainElement(paulNamespace))
-				Expect(chaniList).ToNot(ContainElement(paulNamespace))
-				Expect(chaniList).To(ContainElement(chaniNamespace))
+				Expect(paulList).To(ConsistOf(paulNamespace))
+				Expect(chaniList).To(ConsistOf(chaniNamespace))
 			})
 
 			It("recovers when there are kube write failures", func(ctx context.Context) {
@@ -665,6 +676,17 @@ var _ = Describe("Proxy", func() {
 
 				// paul isn't able to create chanis namespace
 				Expect(CreateNamespace(ctx, paulClient, chaniNamespace)).ToNot(BeNil())
+
+				// paul's failed create must not leave a dangling `creator` grant behind: with
+				// `permission view = viewer + creator`, that would let paul get/list/watch
+				// chani's namespace. This surfaces incomplete rollback of the optimistically
+				// written relationship when the kube write fails.
+				Expect(GetAllTuples(ctx, &v1.RelationshipFilter{
+					ResourceType:          "namespace",
+					OptionalResourceId:    chaniNamespace,
+					OptionalRelation:      "creator",
+					OptionalSubjectFilter: &v1.SubjectFilter{SubjectType: "user", OptionalSubjectId: "paul"},
+				})).To(BeEmpty())
 
 				// paul can only get his namespace
 				Expect(GetNamespace(ctx, paulClient, paulNamespace)).To(Succeed())

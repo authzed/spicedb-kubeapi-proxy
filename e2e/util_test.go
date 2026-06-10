@@ -61,6 +61,14 @@ func WriteTuples(ctx context.Context, rels []*v1.Relationship) {
 	Expect(err).To(Succeed())
 }
 
+// DeleteAllTuples deletes every relationship matching the filter from SpiceDB.
+func DeleteAllTuples(ctx context.Context, filter *v1.RelationshipFilter) {
+	_, err := proxySrv.PermissionClient().DeleteRelationships(ctx, &v1.DeleteRelationshipsRequest{
+		RelationshipFilter: filter,
+	})
+	Expect(err).To(Succeed())
+}
+
 // setupEnvtest sets up the Kubernetes test binaries using setup-envtest
 func setupEnvtest(log logr.Logger) string {
 	e := &env.Env{

@@ -233,11 +233,16 @@ func withAuthentication(handler, failed http.Handler, auth authenticator.Request
 // toRestMapper creates a rest.M from the provided rest.Config.
 func toRestMapper(config *rest.Config) (meta.RESTMapper, error) {
 	cacheDir := getDefaultCacheDir()
-
 	httpCacheDir := filepath.Join(cacheDir, "http")
 	discoveryCacheDir := computeDiscoverCacheDir(filepath.Join(cacheDir, "discovery"), config.Host)
+	return newCachedRESTMapper(config, discoveryCacheDir, httpCacheDir, 6*time.Hour)
+}
 
-	discoveryClient, err := diskcached.NewCachedDiscoveryClientForConfig(config, discoveryCacheDir, httpCacheDir, 6*time.Hour)
+// newCachedRESTMapper builds the discovery-backed REST mapper used to resolve
+// GroupVersionKinds while filtering responses. The cache directories and TTL are
+// parameters (rather than hardcoded) so the mapper can be exercised in tests.
+func newCachedRESTMapper(config *rest.Config, discoveryCacheDir, httpCacheDir string, ttl time.Duration) (meta.RESTMapper, error) {
+	discoveryClient, err := diskcached.NewCachedDiscoveryClientForConfig(config, discoveryCacheDir, httpCacheDir, ttl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discovery client: %w", err)
 	}
@@ -245,7 +250,10 @@ func toRestMapper(config *rest.Config) (meta.RESTMapper, error) {
 	expander := restmapper.NewShortcutExpander(mapper, discoveryClient, func(a string) {
 		klog.V(3).InfoSDepth(1, "discovery warning", "error", err)
 	})
-	return expander, nil
+	// Wrap with a caching mapper that serializes access (the discovery-backed mapper
+	// is not concurrency-safe) and memoizes KindFor results using the same TTL as the
+	// discovery cache, so per-request discovery reads don't dominate under load.
+	return newCachingRESTMapper(expander, ttl), nil
 }
 
 // getDefaultCacheDir returns default caching directory path.
