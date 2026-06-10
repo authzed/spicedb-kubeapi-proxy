@@ -250,7 +250,10 @@ func newCachedRESTMapper(config *rest.Config, discoveryCacheDir, httpCacheDir st
 	expander := restmapper.NewShortcutExpander(mapper, discoveryClient, func(a string) {
 		klog.V(3).InfoSDepth(1, "discovery warning", "error", err)
 	})
-	return newSynchronizedRESTMapper(expander), nil
+	// Wrap with a caching mapper that serializes access (the discovery-backed mapper
+	// is not concurrency-safe) and memoizes KindFor results using the same TTL as the
+	// discovery cache, so per-request discovery reads don't dominate under load.
+	return newCachingRESTMapper(expander, ttl), nil
 }
 
 // getDefaultCacheDir returns default caching directory path.
