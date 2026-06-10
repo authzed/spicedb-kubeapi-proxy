@@ -31,7 +31,6 @@ import (
 type cachingRESTMapper struct {
 	delegate meta.RESTMapper
 	ttl      time.Duration
-	now      func() time.Time // overridable in tests
 
 	mu    sync.Mutex
 	cache map[schema.GroupVersionResource]kindForEntry
@@ -46,7 +45,6 @@ func newCachingRESTMapper(delegate meta.RESTMapper, ttl time.Duration) *cachingR
 	return &cachingRESTMapper{
 		delegate: delegate,
 		ttl:      ttl,
-		now:      time.Now,
 		cache:    make(map[schema.GroupVersionResource]kindForEntry),
 	}
 }
@@ -57,7 +55,7 @@ func (m *cachingRESTMapper) KindFor(resource schema.GroupVersionResource) (schem
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if e, ok := m.cache[resource]; ok && m.now().Sub(e.storedAt) < m.ttl {
+	if e, ok := m.cache[resource]; ok && time.Since(e.storedAt) < m.ttl {
 		return e.gvk, nil
 	}
 
@@ -67,7 +65,7 @@ func (m *cachingRESTMapper) KindFor(resource schema.GroupVersionResource) (schem
 		// resource type must be retried, not memoized.
 		return gvk, err
 	}
-	m.cache[resource] = kindForEntry{gvk: gvk, storedAt: m.now()}
+	m.cache[resource] = kindForEntry{gvk: gvk, storedAt: time.Now()}
 	return gvk, nil
 }
 

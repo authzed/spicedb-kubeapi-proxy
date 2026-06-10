@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -143,7 +144,7 @@ func TestCachingRESTMapper_MemoizesSuccessfulKindFor(t *testing.T) {
 	underlying := &countingRESTMapper{kindForResult: deploymentGVK}
 	mapper := newCachingRESTMapper(underlying, time.Hour)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		gvk, err := mapper.KindFor(deploymentsGVR)
 		require.NoError(t, err)
 		require.Equal(t, "Deployment", gvk.Kind)
@@ -176,27 +177,28 @@ func TestCachingRESTMapper_DoesNotCacheErrors(t *testing.T) {
 // a cached entry is re-resolved through the delegate once it is older than the TTL, so
 // memoization never serves data staler than the underlying discovery cache would.
 func TestCachingRESTMapper_RefreshesAfterTTL(t *testing.T) {
-	underlying := &countingRESTMapper{kindForResult: deploymentGVK}
-	mapper := newCachingRESTMapper(underlying, time.Hour)
+	// synctest gives the test a fake clock, so time.Sleep advances time instantly
+	// without a real clock dependency in the mapper.
+	synctest.Test(t, func(t *testing.T) {
+		underlying := &countingRESTMapper{kindForResult: deploymentGVK}
+		mapper := newCachingRESTMapper(underlying, time.Hour)
 
-	now := time.Unix(1_000_000, 0)
-	mapper.now = func() time.Time { return now }
+		_, err := mapper.KindFor(deploymentsGVR) // miss -> delegate (calls=1)
+		require.NoError(t, err)
+		_, err = mapper.KindFor(deploymentsGVR) // hit (calls=1)
+		require.NoError(t, err)
+		require.Equal(t, 1, underlying.kindForCalls)
 
-	_, err := mapper.KindFor(deploymentsGVR) // miss -> delegate (calls=1)
-	require.NoError(t, err)
-	_, err = mapper.KindFor(deploymentsGVR) // hit (calls=1)
-	require.NoError(t, err)
-	require.Equal(t, 1, underlying.kindForCalls)
+		// Within the TTL: still served from cache.
+		time.Sleep(59 * time.Minute)
+		_, err = mapper.KindFor(deploymentsGVR)
+		require.NoError(t, err)
+		require.Equal(t, 1, underlying.kindForCalls, "entry within TTL should stay cached")
 
-	// Within the TTL: still served from cache.
-	now = now.Add(59 * time.Minute)
-	_, err = mapper.KindFor(deploymentsGVR)
-	require.NoError(t, err)
-	require.Equal(t, 1, underlying.kindForCalls, "entry within TTL should stay cached")
-
-	// Past the TTL: re-resolved through the delegate.
-	now = now.Add(2 * time.Minute) // total 61m > 60m TTL
-	_, err = mapper.KindFor(deploymentsGVR)
-	require.NoError(t, err)
-	require.Equal(t, 2, underlying.kindForCalls, "entry older than TTL should be refreshed")
+		// Past the TTL: re-resolved through the delegate.
+		time.Sleep(2 * time.Minute) // 61m total > 60m TTL
+		_, err = mapper.KindFor(deploymentsGVR)
+		require.NoError(t, err)
+		require.Equal(t, 2, underlying.kindForCalls, "entry older than TTL should be refreshed")
+	})
 }
