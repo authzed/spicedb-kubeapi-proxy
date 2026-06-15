@@ -34,7 +34,7 @@ import (
 )
 
 func TestRequestHeaderAuth(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(testContext(t))
 	t.Cleanup(cancel)
 
 	userInfo := runProxyRequest(t, ctx, map[string][]string{
@@ -96,6 +96,7 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 	}
 
 	opts := NewOptions(WithEmbeddedSpiceDBEndpoint)
+	opts.SkipLoggerSetupForTesting = true
 	opts.RestConfigFunc = func() (*rest.Config, http.RoundTripper, error) {
 		ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -184,7 +185,7 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 		return rules.NewResolveInputFromHttp(req)
 	})
 
-	c, err := opts.Complete(t.Context())
+	c, err := opts.Complete(testContext(t))
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -192,7 +193,7 @@ func runProxyRequest(t testing.TB, ctx context.Context, headers map[string][]str
 	require.NoError(t, err)
 
 	// Start the server in a separate context that won't be cancelled until we're done
-	serverCtx, serverCancel := context.WithCancel(t.Context())
+	serverCtx, serverCancel := context.WithCancel(testContext(t))
 	t.Cleanup(serverCancel)
 
 	serverReady := make(chan struct{})

@@ -12,9 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"k8s.io/apiserver/pkg/endpoints/request"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/clientcmd"
-	logsv1 "k8s.io/component-base/logs/api/v1"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/authzed/grpcutil"
@@ -24,34 +22,29 @@ import (
 )
 
 func TestKubeConfig(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-
 	opts := optionsForTesting(t, WithEmbeddedSpiceDBEndpoint)
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(t.Context())
+	c, err := opts.Complete(testContext(t))
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
-	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 	opts = optionsForTesting(t)
 	opts.BackendKubeconfigPath = uuid.NewString()
 
-	c, err = opts.Complete(t.Context())
+	c, err = opts.Complete(testContext(t))
 	require.ErrorContains(t, err, "couldn't load kubeconfig")
 	require.ErrorContains(t, err, opts.BackendKubeconfigPath)
 	require.Nil(t, c, "expected nil config on error")
 }
 
 func TestInClusterConfig(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-
 	opts := optionsForTesting(t, WithEmbeddedSpiceDBEndpoint)
 	opts.BackendKubeconfigPath = ""
 	opts.UseInClusterConfig = true
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(t.Context())
+	c, err := opts.Complete(testContext(t))
 	require.NoError(t, err)
 	require.NotNil(t, c)
 	require.NotNil(t, opts.RestConfigFunc, "missing kube client REST config")
@@ -64,7 +57,7 @@ func TestEmbeddedSpiceDB(t *testing.T) {
 	opts := optionsForTesting(t, WithEmbeddedSpiceDBEndpoint)
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(t.Context())
+	c, err := opts.Complete(testContext(t))
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -74,7 +67,7 @@ func TestEmbeddedSpiceDB(t *testing.T) {
 }
 
 func TestRemoteSpiceDB(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(testContext(t))
 	defer cancel()
 
 	srv, addr := newTCPSpiceDB(t, ctx)
@@ -90,7 +83,7 @@ func TestRemoteSpiceDB(t *testing.T) {
 	opts.SpiceDBOptions.SecureSpiceDBTokensBySpace = "foobar"
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(t.Context())
+	c, err := opts.Complete(testContext(t))
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -109,7 +102,7 @@ func TestRemoteSpiceDBCerts(t *testing.T) {
 	opts.SpiceDBOptions.SpicedbCAPath = "test"
 	require.Empty(t, opts.Validate())
 
-	_, err := opts.Complete(t.Context())
+	_, err := opts.Complete(testContext(t))
 	require.ErrorContains(t, err, "unable to load custom certificates")
 }
 
@@ -117,7 +110,7 @@ func TestRuleConfig(t *testing.T) {
 	opts := optionsForTesting(t, WithEmbeddedSpiceDBEndpoint)
 	require.Empty(t, opts.Validate())
 
-	c, err := opts.Complete(t.Context())
+	c, err := opts.Complete(testContext(t))
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -132,7 +125,6 @@ func TestRuleConfig(t *testing.T) {
 	require.Empty(t, rules[0].Checks)
 	require.Nil(t, rules[0].Update)
 
-	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 	errConfigBytes := []byte(`
 apiVersion: authzed.com/v1alpha1
 kind: ProxyRule
@@ -152,15 +144,17 @@ prefilter:
 	opts.RuleConfigFile = errConfigFile
 	require.Empty(t, opts.Validate())
 
-	_, err = opts.Complete(t.Context())
+	_, err = opts.Complete(testContext(t))
 	require.ErrorContains(t, err, "expected")
 }
 
 func optionsForTesting(t *testing.T, opts ...setOpt) *Options {
 	t.Helper()
 
-	require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
 	options := NewOptions(opts...)
+	// Without this option, you get data races as the different tests
+	// touch the k8s logger at the same time.
+	options.SkipLoggerSetupForTesting = true
 	options.SecureServing.BindPort = getFreePort(t, "127.0.0.1")
 	options.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
 	options.BackendKubeconfigPath = kubeConfigForTest(t)
@@ -216,9 +210,7 @@ relationships: |
 }
 
 func TestWithEmbeddedSpiceDBBootstrapIntegration(t *testing.T) {
-	defer require.NoError(t, logsv1.ResetForTest(utilfeature.DefaultFeatureGate))
-
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(testContext(t))
 	t.Cleanup(cancel)
 
 	// Create custom bootstrap content
