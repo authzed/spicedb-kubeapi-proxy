@@ -51,11 +51,10 @@ func NewServer(ctx context.Context, bootstrapFilePath string, bootstrapContent m
 		// tests do) fails with "duplicate metrics collector registration attempted". With
 		// Metrics: false the cache is built without registering anything.
 		server.WithStoredSchemaCacheConfig(server.CacheConfig{
-			Name:        "stored_schema",
-			Enabled:     true,
-			Metrics:     false,
-			NumCounters: 1_000,
-			MaxCost:     "32MiB",
+			Name:    "stored_schema",
+			Enabled: true,
+			Metrics: false,
+			MaxCost: "32MiB",
 		}),
 		server.WithEnableRelationshipExpiration(true),
 		server.WithDatastoreConfig(
