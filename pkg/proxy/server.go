@@ -151,7 +151,7 @@ func NewServer(ctx context.Context, c *CompletedConfig) (*Server, error) {
 	codecs := serializer.NewCodecFactory(scheme)
 	failHandler := genericapifilters.Unauthorized(codecs)
 
-	handler := authz.WithAuthorization(clusterProxy, failHandler, restMapper, c.config.PermissionsClient, c.config.WatchClient, workflowClient, s.Matcher, s.opts.InputExtractor)
+	handler := authz.WithAuthorization(withClientAbortRecovery(clusterProxy), failHandler, restMapper, c.config.PermissionsClient, c.config.WatchClient, workflowClient, s.Matcher, s.opts.InputExtractor)
 	handler = withAuthentication(handler, failHandler, s.opts.AuthenticationInfo.Authenticator)
 	handler = genericapifilters.WithRequestInfo(handler, requestInfoResolver)
 	handler = genericfilters.WithHTTPLogging(handler)
