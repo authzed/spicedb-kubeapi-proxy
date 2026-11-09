@@ -87,6 +87,14 @@ mage test:all
 
 ## Development environment
 
+The development environment requires [Docker](https://docs.docker.com/get-docker/) and
+[kustomizer](https://github.com/stefanprodan/kustomizer) to be installed:
+
+```bash
+brew install --cask docker
+brew install stefanprodan/tap/kustomizer
+```
+
 ```bash
 mage dev:up
 ```
