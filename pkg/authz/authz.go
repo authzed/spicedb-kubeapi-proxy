@@ -260,10 +260,10 @@ func createPostCheckHandler(handler, failed http.Handler, ctx context.Context, f
 			klog.FromContext(ctx).V(3).Info("input passed all post-authorization checks", "input", input)
 
 			// Only write the successful response if PostChecks passed
-			recorder.emitResponseToWriter(w)
+			recorder.emitResponseToWriter(req.Context(), w)
 		} else {
 			// Write the error response from upstream
-			recorder.emitResponseToWriter(w)
+			recorder.emitResponseToWriter(req.Context(), w)
 		}
 	})
 }
@@ -289,10 +289,10 @@ func createPostFilterHandler(handler, failed http.Handler, ctx context.Context, 
 			}
 
 			// Write the filtered response
-			recorder.emitResponseToWriter(w)
+			recorder.emitResponseToWriter(req.Context(), w)
 		} else {
 			// Write the error response from upstream
-			recorder.emitResponseToWriter(w)
+			recorder.emitResponseToWriter(req.Context(), w)
 		}
 	})
 }
@@ -333,8 +333,9 @@ func (r *responseRecorder) SetBody(body []byte) {
 	r.headers.Set("Content-Type", "application/json")
 }
 
-// emitResponseToWriter writes the captured response to the provided ResponseWriter
-func (r *responseRecorder) emitResponseToWriter(w http.ResponseWriter) {
+// emitResponseToWriter writes the captured response to the provided ResponseWriter.
+// ctx is the context of the request being responded to.
+func (r *responseRecorder) emitResponseToWriter(ctx context.Context, w http.ResponseWriter) {
 	// Copy headers to the target ResponseWriter
 	if r.headers != nil {
 		for key, values := range r.headers {
@@ -354,7 +355,15 @@ func (r *responseRecorder) emitResponseToWriter(w http.ResponseWriter) {
 	// Write body
 	if len(r.body) > 0 {
 		if _, err := w.Write(r.body); err != nil {
-			klog.Error(err, "failed to write response body", "status_code", statusCode, "body_length", len(r.body))
+			// If the request context is already done, the client went away (for
+			// example, it canceled the request) before the buffered response could
+			// be written. net/http treats a client going away mid-response as
+			// expected, so this is not reported as an error.
+			if ctx.Err() != nil {
+				klog.V(3).InfoS("client disconnected before buffered response was written", "status_code", statusCode, "body_length", len(r.body), "err", err)
+				return
+			}
+			klog.ErrorS(err, "failed to write response body", "status_code", statusCode, "body_length", len(r.body))
 		}
 	}
 }
